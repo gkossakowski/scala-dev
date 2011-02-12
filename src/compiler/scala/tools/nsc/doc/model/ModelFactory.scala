@@ -1,4 +1,4 @@
-/* NSC -- new Scala compiler -- Copyright 2007-2010 LAMP/EPFL */
+/* NSC -- new Scala compiler -- Copyright 2007-2011 LAMP/EPFL */
 
 package scala.tools.nsc
 package doc
@@ -26,16 +26,15 @@ class ModelFactory(val global: Global, val settings: doc.Settings) { thisFactory
   private var universe: Universe = null
   
   /**  */
-  def makeModel: Universe = {
+  def makeModel: Option[Universe] = {
     val universe = new Universe { thisUniverse =>
       thisFactory.universe = thisUniverse
       val settings = thisFactory.settings
-      val rootPackage =
-        makeRootPackage getOrElse { throw new Error("no documentable class found in compilation units") }
+      private val rootPackageMaybe = makeRootPackage
+      val rootPackage = rootPackageMaybe getOrElse null
     }
     modelFinished = true
-    thisFactory.universe = null
-    universe
+    if (universe.rootPackage != null) Some(universe) else None
   }
 
   /** */
@@ -132,6 +131,7 @@ class ModelFactory(val global: Global, val settings: doc.Settings) { thisFactory
       def resultTpe(tpe: Type): Type = tpe match { // similar to finalResultType, except that it leaves singleton types alone
         case PolyType(_, res) => resultTpe(res)
         case MethodType(_, res) => resultTpe(res)
+        case NullaryMethodType(res) => resultTpe(res)
         case _ => tpe
       }
       makeType(resultTpe(sym.tpe), inTemplate, sym)
@@ -418,8 +418,8 @@ class ModelFactory(val global: Global, val settings: doc.Settings) { thisFactory
           else None
         else 
           Some(new NonTemplateMemberImpl(bSym, inTpl) with Val {
-                override def isLazyVal = true
-              })
+            override def isLazyVal = true
+          })
       else if (bSym.isGetter && bSym.accessed.isMutable)
         Some(new NonTemplateMemberImpl(bSym, inTpl) with Val {
           override def isVar = true
@@ -577,17 +577,18 @@ class ModelFactory(val global: Global, val settings: doc.Settings) { thisFactory
           if (!defs.isEmpty) {
             nameBuffer append " {...}" // TODO: actually print the refinement
           }
+        /* Eval-by-name types */
+        case NullaryMethodType(result) =>
+          nameBuffer append '⇒'
+          appendType0(result)
         /* Polymorphic types */
-        case PolyType(tparams, result) if tparams nonEmpty =>
+        case PolyType(tparams, result) => assert(tparams nonEmpty)
 //          throw new Error("Polymorphic type '" + tpe + "' cannot be printed as a type")
           def typeParamsToString(tps: List[Symbol]): String = if(tps isEmpty) "" else
             tps.map{tparam =>
               tparam.varianceString + tparam.name + typeParamsToString(tparam.typeParams)
             }.mkString("[", ", ", "]")
           nameBuffer append typeParamsToString(tparams)
-          appendType0(result)
-        case PolyType(tparams, result) if (tparams.isEmpty) =>
-          nameBuffer append '⇒'
           appendType0(result)
         case tpen =>
           nameBuffer append tpen.toString

@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -303,7 +303,7 @@ trait BasicBlocks {
     /** Close the block */
     def close {
       assert(!closed || ignore)
-      assert(instructionList.length > 0, "Empty block.")
+      assert(instructionList.nonEmpty, "Empty block.")
       closed = true
       setFlag(DIRTYSUCCS)
       instructionList = instructionList.reverse

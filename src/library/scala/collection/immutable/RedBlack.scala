@@ -1,6 +1,6 @@
 /*                     __                                               *\
 **     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2005-2010, LAMP/EPFL             **
+**    / __/ __// _ | / /  / _ |    (c) 2005-2011, LAMP/EPFL             **
 **  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
 ** /____/\___/_/ |_/____/_/ | |                                         **
 **                          |/                                          **
@@ -98,7 +98,7 @@ abstract class RedBlack[A] extends Serializable {
       }
       def subl(t: Tree[B]) = t match {
         case BlackTree(x, xv, a, b) => RedTree(x, xv, a, b)
-        case _ => system.error("Defect: invariance violation; expected black, got "+t)
+        case _ => sys.error("Defect: invariance violation; expected black, got "+t)
       }
       def balLeft(x: A, xv: B, tl: Tree[B], tr: Tree[B]) = (tl, tr) match {
         case (RedTree(y, yv, a, b), c) => 
@@ -107,7 +107,7 @@ abstract class RedBlack[A] extends Serializable {
           balance(x, xv, bl, RedTree(y, yv, a, b))
         case (bl, RedTree(y, yv, BlackTree(z, zv, a, b), c)) => 
           RedTree(z, zv, BlackTree(x, xv, bl, a), balance(y, yv, b, subl(c)))
-        case _ => system.error("Defect: invariance violation at "+right)
+        case _ => sys.error("Defect: invariance violation at "+right)
       }
       def balRight(x: A, xv: B, tl: Tree[B], tr: Tree[B]) = (tl, tr) match {
         case (a, RedTree(y, yv, b, c)) =>
@@ -116,7 +116,7 @@ abstract class RedBlack[A] extends Serializable {
           balance(x, xv, RedTree(y, yv, a, b), bl)
         case (RedTree(y, yv, a, BlackTree(z, zv, b, c)), bl) =>
           RedTree(z, zv, balance(y, yv, subl(a), b), BlackTree(x, xv, c, bl))
-        case _ => system.error("Defect: invariance violation at "+left)
+        case _ => sys.error("Defect: invariance violation at "+left)
       }
       def delLeft = left match {
         case _: BlackTree[_] => balLeft(key, value, left.del(k), right)
@@ -199,8 +199,8 @@ abstract class RedBlack[A] extends Serializable {
       def unzip(zipper: List[NonEmpty[B]], leftMost: Boolean): List[NonEmpty[B]] = {
         val next = if (leftMost) zipper.head.left else zipper.head.right
         next match {
-          case node: NonEmpty[B] => unzip(node :: zipper, leftMost)
-          case Empty => zipper
+          case node: NonEmpty[_] => unzip(node :: zipper, leftMost)
+          case Empty             => zipper
         }
       }
       
@@ -211,20 +211,20 @@ abstract class RedBlack[A] extends Serializable {
                     leftZipper: List[NonEmpty[B]],
                     rightZipper: List[NonEmpty[B]],
                     smallerDepth: Int): (List[NonEmpty[B]], Boolean, Boolean, Int) = (left, right) match {
-        case (l: BlackTree[B], r: BlackTree[B]) =>
+        case (l @ BlackTree(_, _, _, _), r @ BlackTree(_, _, _, _)) =>
           unzipBoth(l.right, r.left, l :: leftZipper, r :: rightZipper, smallerDepth + 1)
-        case (l: RedTree[B], r: RedTree[B]) =>
+        case (l @ RedTree(_, _, _, _), r @ RedTree(_, _, _, _)) =>
           unzipBoth(l.right, r.left, l :: leftZipper, r :: rightZipper, smallerDepth)
-        case (_, r: RedTree[B]) =>
+        case (_, r @ RedTree(_, _, _, _)) =>
           unzipBoth(left, r.left, leftZipper, r :: rightZipper, smallerDepth)
-        case (l: RedTree[B], _) =>
+        case (l @ RedTree(_, _, _, _), _) =>
           unzipBoth(l.right, right, l :: leftZipper, rightZipper, smallerDepth)
         case (Empty, Empty) =>
           (Nil, true, false, smallerDepth)
-        case (Empty, r: BlackTree[B]) =>
+        case (Empty, r @ BlackTree(_, _, _, _)) =>
           val leftMost = true
           (unzip(r :: rightZipper, leftMost), false, leftMost, smallerDepth)
-        case (l: BlackTree[B], Empty) =>
+        case (l @ BlackTree(_, _, _, _), Empty) =>
           val leftMost = false
           (unzip(l :: leftZipper, leftMost), false, leftMost, smallerDepth)
       }
@@ -234,10 +234,10 @@ abstract class RedBlack[A] extends Serializable {
     private[this] def rebalance(newLeft: Tree[B], newRight: Tree[B]) = {
       // This is like drop(n-1), but only counting black nodes      
       def  findDepth(zipper: List[NonEmpty[B]], depth: Int): List[NonEmpty[B]] = zipper match {
-        case (_: BlackTree[B]) :: tail =>
+        case BlackTree(_, _, _, _) :: tail =>
           if (depth == 1) zipper else findDepth(tail, depth - 1)
         case _ :: tail => findDepth(tail, depth)
-        case Nil => system.error("Defect: unexpected empty zipper while computing range")
+        case Nil => sys.error("Defect: unexpected empty zipper while computing range")
       }
       
       // Blackening the smaller tree avoids balancing problems on union;

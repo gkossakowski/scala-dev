@@ -56,7 +56,7 @@ object REPL {
 
   def main(args: Array[String]) {
     process(args)
-    system.exit(if (reporter.hasErrors) 1 else 0)
+    sys.exit(if (reporter.hasErrors) 1 else 0)
   }
 
   def loop(action: (String) => Unit) {
@@ -83,6 +83,9 @@ object REPL {
     val reloadResult = new Response[Unit]
     val typeatResult = new Response[comp.Tree]
     val completeResult = new Response[List[comp.Member]]
+    val typedResult = new Response[comp.Tree]
+    val structureResult = new Response[comp.Tree]
+
     def makePos(file: String, off1: String, off2: String) = {
       val source = toSourceFile(file)
       comp.rangePos(source, off1.toInt, off1.toInt, off2.toInt)
@@ -95,11 +98,28 @@ object REPL {
       comp.askTypeCompletion(pos, completeResult)
       show(completeResult)
     }
+    def doTypedTree(file: String) {
+      comp.askType(toSourceFile(file), true, typedResult)
+      show(typedResult)
+    }
+    def doStructure(file: String) {
+      comp.askParsedEntered(toSourceFile(file), false, structureResult)
+      show(structureResult)
+    }
+    
     loop { line =>
       (line split " ").toList match {
         case "reload" :: args => 
           comp.askReload(args map toSourceFile, reloadResult)
           show(reloadResult)
+        case "reloadAndAskType" :: file :: millis :: Nil =>
+          comp.askReload(List(toSourceFile(file)), reloadResult)
+          Thread.sleep(millis.toInt)
+          println("ask type now")
+          comp.askType(toSourceFile(file), false, typedResult)
+          typedResult.get
+        case List("typed", file) =>
+          doTypedTree(file)
         case List("typeat", file, off1, off2) =>
           doTypeAt(makePos(file, off1, off2))
         case List("typeat", file, off1) =>
@@ -109,7 +129,10 @@ object REPL {
         case List("complete", file, off1) =>
           doComplete(makePos(file, off1, off1))
         case List("quit") =>
-          system.exit(1)
+          comp.askShutdown()
+          sys.exit(1)
+        case List("structure", file) =>
+          doStructure(file)
         case _ =>
           println("unrecongized command")
       }

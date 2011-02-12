@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author  Martin Odersky
  */
 // $Id$
@@ -226,11 +226,9 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
   def PhasesSetting(name: String, descr: String) = add(new PhasesSetting(name, descr))
   def StringSetting(name: String, arg: String, descr: String, default: String) = add(new StringSetting(name, arg, descr, default))
   def PathSetting(name: String, descr: String, default: String): PathSetting = {
-    val prepend = new StringSetting(name + "/p", "", "", "") with InternalSetting
-    val append = new StringSetting(name + "/a", "", "", "") with InternalSetting
+    val prepend = StringSetting(name + "/p", "", "", "").internalOnly()
+    val append = StringSetting(name + "/a", "", "", "").internalOnly()
 
-    add[StringSetting](prepend)
-    add[StringSetting](append)
     add(new PathSetting(name, descr, default, prepend, append))
   }
 
@@ -550,6 +548,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     }
     def unparse: List[String] =
       if (value == default) Nil else List(name + ":" + value)
+    override def tryToSetFromPropertyValue(s: String) = tryToSetColon(s::Nil)
 
     withHelpSyntax(name + ":<" + helpArg + ">")
   }

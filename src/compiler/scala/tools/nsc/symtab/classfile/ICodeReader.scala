@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author Iulian Dragos
  */
 
@@ -7,13 +7,10 @@ package scala.tools.nsc
 package symtab
 package classfile
 
-import java.io.IOException
-
-import scala.collection.mutable._
-import scala.tools.nsc._
-import scala.tools.nsc.backend.icode._
-import scala.tools.nsc.io._
-
+import scala.collection.{ mutable, immutable }
+import mutable.ListBuffer
+import backend.icode._
+import io.AbstractFile
 import ClassfileConstants._
 import Flags._
 
@@ -31,8 +28,8 @@ abstract class ICodeReader extends ClassfileParser {
   var staticCode:   IClass = null          // the ICode class static members
   var method: IMethod = _                  // the current IMethod
 
-  val nothingName = newTermName(ClassfileConstants.SCALA_NOTHING)
-  val nullName    = newTermName(ClassfileConstants.SCALA_NULL)
+  val nothingName = newTermName(SCALA_NOTHING)
+  val nullName    = newTermName(SCALA_NULL)
   var isScalaModule = false
 
   /** Read back bytecode for the given class symbol. It returns
@@ -363,12 +360,12 @@ abstract class ICodeReader extends ClassfileParser {
         case JVM.pop         => code.emit(DROP(INT))   // any 1-word type would do
         case JVM.pop2        => code.emit(DROP(LONG))  // any 2-word type would do
         case JVM.dup         => code.emit(DUP(ObjectReference)) // TODO: Is the kind inside DUP ever needed?
-        case JVM.dup_x1      => code.emit(DUP_X1)      // system.error("Unsupported JVM bytecode: dup_x1")
-        case JVM.dup_x2      => code.emit(DUP_X2)      // system.error("Unsupported JVM bytecode: dup_x2")
+        case JVM.dup_x1      => code.emit(DUP_X1)      // sys.error("Unsupported JVM bytecode: dup_x1")
+        case JVM.dup_x2      => code.emit(DUP_X2)      // sys.error("Unsupported JVM bytecode: dup_x2")
         case JVM.dup2        => code.emit(DUP(LONG))   // TODO: Is the kind inside DUP ever needed?
-        case JVM.dup2_x1     => code.emit(DUP2_X1)     // system.error("Unsupported JVM bytecode: dup2_x1")
-        case JVM.dup2_x2     => code.emit(DUP2_X2)     // system.error("Unsupported JVM bytecode: dup2_x2")
-        case JVM.swap        => system.error("Unsupported JVM bytecode: swap")
+        case JVM.dup2_x1     => code.emit(DUP2_X1)     // sys.error("Unsupported JVM bytecode: dup2_x1")
+        case JVM.dup2_x2     => code.emit(DUP2_X2)     // sys.error("Unsupported JVM bytecode: dup2_x2")
+        case JVM.swap        => sys.error("Unsupported JVM bytecode: swap")
 
         case JVM.iadd        => code.emit(CALL_PRIMITIVE(Arithmetic(ADD, INT)))
         case JVM.ladd        => code.emit(CALL_PRIMITIVE(Arithmetic(ADD, LONG)))
@@ -455,8 +452,8 @@ abstract class ICodeReader extends ClassfileParser {
         case JVM.if_acmpne   => code.emit(LCJUMP(parseJumpTarget, pc + size, NE, ObjectReference))
 
         case JVM.goto        => emit(LJUMP(parseJumpTarget))
-        case JVM.jsr         => system.error("Cannot handle jsr/ret")
-        case JVM.ret         => system.error("Cannot handle jsr/ret")
+        case JVM.jsr         => sys.error("Cannot handle jsr/ret")
+        case JVM.ret         => sys.error("Cannot handle jsr/ret")
         case JVM.tableswitch =>
           val padding = if ((pc + size) % 4 != 0) 4 - ((pc + size) % 4) else 0
           size += padding
@@ -581,14 +578,14 @@ abstract class ICodeReader extends ClassfileParser {
             case JVM.fstore => code.emit(STORE_LOCAL(code.getLocal(in.nextChar, FLOAT)));  size += 2
             case JVM.dstore => code.emit(STORE_LOCAL(code.getLocal(in.nextChar, DOUBLE))); size += 2
             case JVM.astore => code.emit(STORE_LOCAL(code.getLocal(in.nextChar, ObjectReference))); size += 2
-            case JVM.ret => system.error("Cannot handle jsr/ret")
+            case JVM.ret => sys.error("Cannot handle jsr/ret")
             case JVM.iinc =>
               size += 4
               val local = code.getLocal(in.nextChar, INT)
               code.emit(CONSTANT(Constant(in.nextChar)))
               code.emit(CALL_PRIMITIVE(Arithmetic(ADD, INT)))
               code.emit(STORE_LOCAL(local))
-            case _ => system.error("Invalid 'wide' operand")
+            case _ => sys.error("Invalid 'wide' operand")
           }
 
         case JVM.multianewarray =>
@@ -601,18 +598,20 @@ abstract class ICodeReader extends ClassfileParser {
         case JVM.ifnull    => code.emit(LCZJUMP(parseJumpTarget, pc + size, EQ, ObjectReference))
         case JVM.ifnonnull => code.emit(LCZJUMP(parseJumpTarget, pc + size, NE, ObjectReference))
         case JVM.goto_w    => code.emit(LJUMP(parseJumpTargetW))
-        case JVM.jsr_w     => system.error("Cannot handle jsr/ret")
+        case JVM.jsr_w     => sys.error("Cannot handle jsr/ret")
 
-//        case _ => system.error("Unknown bytecode")
+//        case _ => sys.error("Unknown bytecode")
       }
       pc += size
     }
 
     // add parameters
     var idx = if (method.isStatic) 0 else 1
-    for (t <- method.symbol.tpe.paramTypes; val kind = toTypeKind(t)) {
-      this.method.addParam(code.enterParam(idx, kind))
-      idx += (if (kind.isWideType) 2 else 1)
+    for (t <- method.symbol.tpe.paramTypes) {
+      val kind = toTypeKind(t)
+      this.method addParam code.enterParam(idx, kind)
+      val width = if (kind.isWideType) 2 else 1      
+      idx += width
     }
     
     pc = 0
@@ -665,8 +664,8 @@ abstract class ICodeReader extends ClassfileParser {
 
   class LinearCode {
     var instrs: ListBuffer[(Int, Instruction)] = new ListBuffer
-    var jmpTargets: Set[Int] = new HashSet[Int]
-    var locals: Map[Int, List[(Local, TypeKind)]] = new HashMap()
+    var jmpTargets: mutable.Set[Int] = new mutable.HashSet[Int]
+    var locals: mutable.Map[Int, List[(Local, TypeKind)]] = new mutable.HashMap()
 
     var containsDUPX = false
     var containsNEW  = false
@@ -685,15 +684,12 @@ abstract class ICodeReader extends ClassfileParser {
     def toBasicBlock: Code = {
       import opcodes._
       
-      val code = new Code(method.symbol.name.toString, method);
+      val code = new Code(method)
       method.setCode(code)
       var bb = code.startBlock
 
-      def makeBasicBlocks: Map[Int, BasicBlock] = {
-        val block: Map[Int, BasicBlock] = new HashMap
-        for (pc <- jmpTargets) block += (pc -> code.newBlock)
-        block
-      }
+      def makeBasicBlocks: mutable.Map[Int, BasicBlock] =
+        mutable.Map(jmpTargets.toSeq map (_ -> code.newBlock): _*)
 
       val blocks = makeBasicBlocks
       var otherBlock: BasicBlock = null
@@ -701,7 +697,7 @@ abstract class ICodeReader extends ClassfileParser {
       
       for ((pc, instr) <- instrs.iterator) {
 //        Console.println("> " + pc + ": " + instr);
-        if (jmpTargets contains pc) {
+        if (jmpTargets(pc)) {
           otherBlock = blocks(pc)
           if (!bb.closed && otherBlock != bb) {
             bb.emit(JUMP(otherBlock))
@@ -714,39 +710,33 @@ abstract class ICodeReader extends ClassfileParser {
         instr match {
           case LJUMP(target) => 
             otherBlock = blocks(target)
-            bb.emit(JUMP(otherBlock))
-            bb.close
+            bb.emitOnly(JUMP(otherBlock))
 
           case LCJUMP(success, failure, cond, kind) => 
             otherBlock = blocks(success)
             val failBlock = blocks(failure)
-            bb.emit(CJUMP(otherBlock, failBlock, cond, kind))
-            bb.close
+            bb.emitOnly(CJUMP(otherBlock, failBlock, cond, kind))
 
           case LCZJUMP(success, failure, cond, kind) => 
             otherBlock = blocks(success)
             val failBlock = blocks(failure)
-            bb.emit(CZJUMP(otherBlock, failBlock, cond, kind))
-            bb.close
+            bb.emitOnly(CZJUMP(otherBlock, failBlock, cond, kind))
 
           case LSWITCH(tags, targets) =>
-            bb.emit(SWITCH(tags, targets map blocks))
-            bb.close
+            bb.emitOnly(SWITCH(tags, targets map blocks))
    
           case RETURN(_) =>
-            bb.emit(instr)
-            bb.close
+            bb.emitOnly(instr)
 
           case THROW(clasz) =>
-            bb.emit(instr)
-            bb.close
+            bb.emitOnly(instr)
             
           case _ =>
             bb.emit(instr)
         }
       }
       
-      code
+      method.code
     }
     
     def resolveDups {
@@ -935,7 +925,7 @@ abstract class ICodeReader extends ClassfileParser {
     def resolveNEWs {
       import opcodes._
       
-      val rdef = new reachingDefinitions.ReachingDefinitionsAnalysis;
+      val rdef = new reachingDefinitions.ReachingDefinitionsAnalysis
       rdef.init(method)
       rdef.run
       
@@ -975,7 +965,7 @@ abstract class ICodeReader extends ClassfileParser {
         }
         kind match {
           case LONG | DOUBLE if (locals.isDefinedAt(idx + 1)) =>
-            global.globalError("Illegal index: " + idx + " overlaps " + locals(idx + 1))
+            global.globalError("Illegal index: " + idx + " overlaps " + locals(idx + 1) + "\nlocals: " + locals)
           case _ => ()
         }
       }
@@ -1054,7 +1044,7 @@ abstract class ICodeReader extends ClassfileParser {
     case class LSWITCH(tags: List[List[Int]], targets: List[Int]) extends LazyJump(targets.head) {
       override def toString(): String ="LSWITCH (tags: " + tags + ") targets: " + targets;
 
-      targets.tail.foreach(t => jmpTargets += t)
+      jmpTargets ++= targets.tail
     }
     
     /** Duplicate and exchange pseudo-instruction. Should be later 

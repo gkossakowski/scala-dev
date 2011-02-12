@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -18,6 +18,8 @@ abstract class TreeBuilder {
   import global._
 
   def freshName(): Name = freshName("x$")
+  def freshTermName(): TermName = freshTermName("x$")
+  
   def freshName(prefix: String): Name
   def freshTermName(prefix: String): TermName
   def freshTypeName(prefix: String): TypeName
@@ -184,7 +186,7 @@ abstract class TreeBuilder {
       if (treeInfo.isLeftAssoc(op)) {
         makeApply(atPos(opPos union left.pos) { Select(stripParens(left), op.encode) }, arguments)
       } else {
-        val x = freshName()
+        val x = freshTermName()
         Block(
           List(ValDef(Modifiers(SYNTHETIC), x, TypeTree(), stripParens(left))),
           Apply(atPos(opPos union right.pos) { Select(stripParens(right), op.encode) }, List(Ident(x))))
@@ -370,7 +372,7 @@ abstract class TreeBuilder {
       matchVarPattern(pat) match {
         case Some((name, tpt)) =>
           Function(
-            List(atPos(pat.pos) { ValDef(Modifiers(PARAM), name, tpt, EmptyTree) }), 
+            List(atPos(pat.pos) { ValDef(Modifiers(PARAM), name.toTermName, tpt, EmptyTree) }),
             body) setPos splitpos
         case None =>
           atPos(splitpos) {
@@ -487,7 +489,7 @@ abstract class TreeBuilder {
 
   /** Create visitor <x => x match cases> */
   def makeVisitor(cases: List[CaseDef], checkExhaustive: Boolean, prefix: String): Tree = {
-    val x = freshName(prefix)
+    val x = freshTermName(prefix)
     val id = Ident(x)
     val sel = if (checkExhaustive) id else makeUnchecked(id)
     Function(List(makeSyntheticParam(x)), Match(sel, cases))
@@ -505,17 +507,17 @@ abstract class TreeBuilder {
    */
   def makeCatchFromExpr(catchExpr: Tree): CaseDef = {
     val binder   = freshTermName("x")
-    val pat      = atPos(catchExpr.pos)(Bind(binder, Typed(Ident(nme.WILDCARD), Ident(tpnme.Throwable))))
+    val pat      = Bind(binder, Typed(Ident(nme.WILDCARD), Ident(tpnme.Throwable)))
     val catchDef = ValDef(NoMods, freshTermName("catchExpr"), TypeTree(), catchExpr)
     val catchFn  = Ident(catchDef.name)
-    val body     = Block(
+    val body     = atPos(catchExpr.pos.makeTransparent)(Block(
       List(catchDef),
       If(
         Apply(Select(catchFn, nme.isDefinedAt), List(Ident(binder))),
         Apply(Select(catchFn, nme.apply), List(Ident(binder))),
         Throw(Ident(binder))
       )
-    )
+    ))
     makeCaseDef(pat, EmptyTree, body)
   }
 
@@ -540,7 +542,7 @@ abstract class TreeBuilder {
   def makeSequencedMatch(selector: Tree, cases: List[CaseDef]): Tree = {
     require(cases.nonEmpty)
     
-    val selectorName = freshName()
+    val selectorName = freshTermName()
     val valdef = atPos(selector.pos)(ValDef(Modifiers(PRIVATE | LOCAL | SYNTHETIC), selectorName, TypeTree(), selector))
     val nselector = Ident(selectorName)
     
@@ -558,7 +560,7 @@ abstract class TreeBuilder {
   def makePatDef(mods: Modifiers, pat: Tree, rhs: Tree): List[Tree] = matchVarPattern(pat) match {
     case Some((name, tpt)) =>
       List(atPos(pat.pos union rhs.pos) {
-        ValDef(mods, name, tpt, rhs)
+        ValDef(mods, name.toTermName, tpt, rhs)
       })
 
     case None =>
@@ -584,10 +586,10 @@ abstract class TreeBuilder {
       vars match {
         case List((vname, tpt, pos)) =>
           List(atPos(pat.pos union pos union rhs.pos) {
-            ValDef(mods, vname, tpt, matchExpr)
+            ValDef(mods, vname.toTermName, tpt, matchExpr)
           })
         case _ => 
-          val tmp = freshName()
+          val tmp = freshTermName()
           val firstDef = 
             atPos(matchExpr.pos) {
               ValDef(Modifiers(PRIVATE | LOCAL | SYNTHETIC | (mods.flags & LAZY)), 
@@ -596,7 +598,7 @@ abstract class TreeBuilder {
           var cnt = 0
           val restDefs = for ((vname, tpt, pos) <- vars) yield atPos(pos) {
             cnt = cnt + 1
-            ValDef(mods, vname, tpt, Select(Ident(tmp), newTermName("_" + cnt)))
+            ValDef(mods, vname.toTermName, tpt, Select(Ident(tmp), newTermName("_" + cnt)))
           }
           firstDef :: restDefs
       }
@@ -611,7 +613,7 @@ abstract class TreeBuilder {
     if (contextBounds.isEmpty) vparamss
     else {
       val mods = Modifiers(if (owner.isTypeName) PARAMACCESSOR | LOCAL | PRIVATE else PARAM)
-      def makeEvidenceParam(tpt: Tree) = ValDef(mods | IMPLICIT, freshName(nme.EVIDENCE_PARAM_PREFIX), tpt, EmptyTree)
+      def makeEvidenceParam(tpt: Tree) = ValDef(mods | IMPLICIT, freshTermName(nme.EVIDENCE_PARAM_PREFIX), tpt, EmptyTree)
       vparamss ::: List(contextBounds map makeEvidenceParam)
   }
 

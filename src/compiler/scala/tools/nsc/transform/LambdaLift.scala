@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author
  */
 
@@ -484,7 +484,7 @@ abstract class LambdaLift extends InfoTransform {
     override def transformUnit(unit: CompilationUnit) {
       computeFreeVars
       atPhase(phase.next)(super.transformUnit(unit))
-      assert(liftedDefs.size == 0, liftedDefs.keys.toList)
+      assert(liftedDefs.isEmpty, liftedDefs.keys.toList)
     }
   } // class LambdaLifter
 

@@ -1,6 +1,6 @@
 /*                     __                                               *\
 **     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2010, LAMP/EPFL             **
+**    / __/ __// _ | / /  / _ |    (c) 2006-2011, LAMP/EPFL             **
 **  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
 ** /____/\___/_/ |_/____/_/ | |                                         **
 **                          |/                                          **
@@ -219,7 +219,9 @@ extends IndexedSeq[Int]
   override def toParIterable = par
   
   override def toParSeq = par
-
+  
+  override def toParSet[U >: Int] = par.toParSet[U]
+  
   override def equals(other: Any) = other match {
     case x: Range =>
       (x canEqual this) && (length == x.length) && (

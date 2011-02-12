@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -9,7 +9,7 @@ package backend
 package icode
 
 import scala.collection.{ mutable, immutable }
-import scala.collection.mutable.{ HashMap, ListBuffer, Buffer, HashSet }
+import scala.collection.mutable.{ ListBuffer, Buffer }
 import scala.tools.nsc.symtab._
 import scala.annotation.switch
 import PartialFunction._
@@ -26,10 +26,10 @@ abstract class GenICode extends SubComponent  {
   import icodes._
   import icodes.opcodes._
   import definitions.{
-    ArrayClass, ObjectClass, ThrowableClass, StringClass, NothingClass, NullClass, AnyRefClass,
+    ArrayClass, ObjectClass, ThrowableClass, StringClass, StringModule, NothingClass, NullClass, AnyRefClass,
     Object_equals, Object_isInstanceOf, Object_asInstanceOf, ScalaRunTimeModule,
     BoxedNumberClass, BoxedCharacterClass,
-    getMember, getPrimitiveCompanion
+    getMember
   }
   import scalaPrimitives.{
     isArrayOp, isComparisonOp, isLogicalOp,
@@ -691,10 +691,14 @@ abstract class GenICode extends SubComponent  {
                   ctx1.bb.emit(STORE_LOCAL(tmp))
                   true
                 }
+                
+                // duplicate finalizer (takes care of anchored labels) 
+                val f1 = duplicateFinalizer(Set.empty ++ ctx1.labels.keySet, ctx1, f)
+
                 // we have to run this without the same finalizer in
                 // the list, otherwise infinite recursion happens for
                 // finalizers that contain 'return'
-                ctx1 = genLoad(f, ctx1.removeFinalizer(f), UNIT)
+                ctx1 = genLoad(f1, ctx1.removeFinalizer(f), UNIT)
                 saved
             }
           }
@@ -1058,10 +1062,11 @@ abstract class GenICode extends SubComponent  {
           generatedType = UNIT
           genStat(tree, ctx)
 
-        case ArrayValue(tpt @ TypeTree(), elems) =>
+        case ArrayValue(tpt @ TypeTree(), _elems) =>
           var ctx1 = ctx
           val elmKind = toTypeKind(tpt.tpe)
           generatedType = ARRAY(elmKind)
+          val elems = _elems.toIndexedSeq
 
           ctx1.bb.emit(CONSTANT(new Constant(elems.length)), tree.pos)
           ctx1.bb.emit(CREATE_ARRAY(elmKind, 1))
@@ -1216,7 +1221,7 @@ abstract class GenICode extends SubComponent  {
       }
 
     private def genLoadModule(ctx: Context, sym: Symbol, pos: Position) {
-      ctx.bb.emit(LOAD_MODULE(getPrimitiveCompanion(sym) getOrElse sym), pos)
+      ctx.bb.emit(LOAD_MODULE(sym), pos)
     }
 
     def genConversion(from: TypeKind, to: TypeKind, ctx: Context, cast: Boolean) = {
@@ -1315,6 +1320,34 @@ abstract class GenICode extends SubComponent  {
         case _ => abort("Unknown coercion primitive: " + code)
       }
     }
+    
+    /** The Object => String overload.
+     */
+    private lazy val String_valueOf: Symbol = getMember(StringModule, "valueOf") filter (sym =>
+      sym.info.paramTypes match {
+        case List(pt) => pt.typeSymbol == ObjectClass
+        case _        => false
+      }
+    )
+    
+    // I wrote it this way before I realized all the primitive types are
+    // boxed at this point, so I'd have to unbox them.  Keeping it around in
+    // case we want to get more precise.
+    //
+    // private def valueOfForType(tp: Type): Symbol = {
+    //   val xs = getMember(StringModule, "valueOf") filter (sym =>
+    //     // We always exclude the Array[Char] overload because java throws an NPE if 
+    //     // you pass it a null.  It will instead find the Object one, which doesn't.
+    //     sym.info.paramTypes match {
+    //       case List(pt) => pt.typeSymbol != ArrayClass && (tp <:< pt)
+    //       case _        => false
+    //     }
+    //   )
+    //   xs.alternatives match {
+    //     case List(sym)  => sym
+    //     case _          => NoSymbol
+    //   }
+    // }
 
     /** Generate string concatenation.
      *
@@ -1323,22 +1356,25 @@ abstract class GenICode extends SubComponent  {
      *  @return     ...
      */
     def genStringConcat(tree: Tree, ctx: Context): Context = {
-      val Apply(Select(larg, _), rarg) = tree
-      var ctx1 = ctx
-
-      val concatenations = liftStringConcat(tree)
-      if (settings.debug.value)
-        log("Lifted string concatenations for " + tree + "\n to: " + concatenations);
-
-      ctx1.bb.emit(CALL_PRIMITIVE(StartConcat), tree.pos);
-      for (elem <- concatenations) {
-        val kind = toTypeKind(elem.tpe)
-        ctx1 = genLoad(elem, ctx1, kind)
-        ctx1.bb.emit(CALL_PRIMITIVE(StringConcat(kind)), elem.pos)
+      liftStringConcat(tree) match {
+        // Optimization for expressions of the form "" + x.  We can avoid the StringBuilder.
+        case List(Literal(Constant("")), arg) if !forMSIL =>
+          if (settings.debug.value) log("Rewriting \"\" + x as String.valueOf(x) for: " + arg)
+          val ctx1 = genLoad(arg, ctx, ObjectReference)
+          ctx1.bb.emit(CALL_METHOD(String_valueOf, Static(false)), arg.pos)
+          ctx1 
+        case concatenations =>
+          if (settings.debug.value) log("Lifted string concatenations for " + tree + "\n to: " + concatenations)
+          var ctx1 = ctx
+          ctx1.bb.emit(CALL_PRIMITIVE(StartConcat), tree.pos)
+          for (elem <- concatenations) {
+            val kind = toTypeKind(elem.tpe)
+            ctx1 = genLoad(elem, ctx1, kind)
+            ctx1.bb.emit(CALL_PRIMITIVE(StringConcat(kind)), elem.pos)
+          }
+          ctx1.bb.emit(CALL_PRIMITIVE(EndConcat), tree.pos)
+          ctx1        
       }
-      ctx1.bb.emit(CALL_PRIMITIVE(EndConcat), tree.pos)
-
-      ctx1
     }
     
     /** Generate the scala ## method.
@@ -1757,7 +1793,7 @@ abstract class GenICode extends SubComponent  {
      *  to delay it any more: they will be used at some point.
      */
     class DuplicateLabels(boundLabels: Set[Symbol]) extends Transformer {
-      val labels: mutable.Map[Symbol, Symbol] = new HashMap
+      val labels: mutable.Map[Symbol, Symbol] = new mutable.HashMap
       var method: Symbol = _
       var ctx: Context = _
       
@@ -1821,7 +1857,6 @@ abstract class GenICode extends SubComponent  {
      * in code generation
      */
     class Context {
-
       /** The current package. */
       var packg: Name = _
 
@@ -1835,7 +1870,7 @@ abstract class GenICode extends SubComponent  {
       var bb: BasicBlock = _
 
       /** Map from label symbols to label objects. */
-      var labels: HashMap[Symbol, Label] = new HashMap()
+      var labels = mutable.HashMap[Symbol, Label]()
 
       /** Current method definition. */
       var defdef: DefDef = _
@@ -1939,8 +1974,8 @@ abstract class GenICode extends SubComponent  {
        */
       def enterMethod(m: IMethod, d: DefDef): Context = {
         val ctx1 = new Context(this) setMethod(m)
-        ctx1.labels = new HashMap()
-        ctx1.method.code = new Code(m.symbol.simpleName.toString(), m)
+        ctx1.labels = new mutable.HashMap()
+        ctx1.method.code = new Code(m)
         ctx1.bb = ctx1.method.code.startBlock
         ctx1.defdef = d
         ctx1.scope = EmptyScope
@@ -1953,7 +1988,7 @@ abstract class GenICode extends SubComponent  {
         val block = method.code.newBlock
         handlers foreach (_ addCoveredBlock block)
         currentExceptionHandlers foreach (_ addBlock block)
-        block.varsInScope = new HashSet() ++= scope.varsInScope
+        block.varsInScope = new mutable.HashSet() ++= scope.varsInScope
         new Context(this) setBasicBlock block
       }
 
@@ -1962,7 +1997,7 @@ abstract class GenICode extends SubComponent  {
       }
 
       def exitScope = {
-        if (bb.size > 0) {
+        if (bb.nonEmpty) {
           scope.locals foreach { lv => bb.emit(SCOPE_EXIT(lv)) }
         }
         scope = scope.outer

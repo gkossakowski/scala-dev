@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author Martin Odersky
  */
 
@@ -450,7 +450,7 @@ abstract class ExplicitOuter extends InfoTransform
           if (sym.isClassConstructor) {
             rhs match {
               case Literal(_) =>
-                system.error("unexpected case") //todo: remove
+                sys.error("unexpected case") //todo: remove
               case _ =>
                 val clazz = sym.owner
                 val vparamss1 =
@@ -469,7 +469,7 @@ abstract class ExplicitOuter extends InfoTransform
           else atPos(tree.pos)(outerPath(outerValue, currentClass.outerClass, sym)) // (5)
 
         case Select(qual, name) =>
-          if (currentClass != sym.owner/* && currentClass != sym.moduleClass*/) // (3)
+          if (currentClass != sym.owner) // (3)
             sym.makeNotPrivate(sym.owner)
           val qsym = qual.tpe.widen.typeSymbol
           if (sym.isProtected && //(4)
@@ -511,7 +511,7 @@ abstract class ExplicitOuter extends InfoTransform
 
     /** The transformation method for whole compilation units */
     override def transformUnit(unit: CompilationUnit) {
-      atPhase(phase.next) { super.transformUnit(unit) }
+      atPhase(phase.next)(super.transformUnit(unit))
     }
   }
 
@@ -520,5 +520,9 @@ abstract class ExplicitOuter extends InfoTransform
 
   class Phase(prev: scala.tools.nsc.Phase) extends super.Phase(prev) {
     override val checkable = false
+    override def run {
+      super.run
+      Pattern.clear()    // clear the cache
+    }
   }
 }

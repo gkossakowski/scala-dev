@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author  Martin Odersky
  */
 
@@ -97,7 +97,7 @@ abstract class TreeInfo {
   }
 
   def mayBeVarGetter(sym: Symbol) = sym.info match {
-    case PolyType(Nil, _)      => sym.owner.isClass && !sym.isStable
+    case NullaryMethodType(_)  => sym.owner.isClass && !sym.isStable
     case mt @ MethodType(_, _) => mt.isImplicit && sym.owner.isClass && !sym.isStable
     case _                     => false
   }
@@ -175,10 +175,15 @@ abstract class TreeInfo {
 
   /** Is tpt of the form T* ? */
   def isRepeatedParamType(tpt: Tree) = tpt match {
-    case TypeTree()                                                        => definitions.isRepeatedParamType(tpt.tpe)
+    case TypeTree()                                                          => definitions.isRepeatedParamType(tpt.tpe)
     case AppliedTypeTree(Select(_, tpnme.REPEATED_PARAM_CLASS_NAME), _)      => true
     case AppliedTypeTree(Select(_, tpnme.JAVA_REPEATED_PARAM_CLASS_NAME), _) => true
-    case _                                                                 => false
+    case _                                                                   => false
+  }
+  /** The parameter ValDefs from a def of the form T*. */
+  def repeatedParams(tree: Tree): List[ValDef] = tree match {
+    case DefDef(_, _, _, vparamss, _, _)  => vparamss.flatten filter (vd => isRepeatedParamType(vd.tpt))
+    case _                                => Nil
   }
 
   /** Is tpt a by-name parameter type? */
@@ -196,7 +201,7 @@ abstract class TreeInfo {
   /** Is name a variable name? */
   def isVariableName(name: Name): Boolean = {
     val first = name(0)
-    ((first.isLower && first.isLetter) || first == '_') && !(reserved contains name)
+    ((first.isLower && first.isLetter) || first == '_') && !reserved(name)
   }
 
   /** Is tree a this node which belongs to `enclClass'? */

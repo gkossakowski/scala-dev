@@ -1,5 +1,5 @@
 /* NSC -- new Scala compiler
- * Copyright 2005-2010 LAMP/EPFL
+ * Copyright 2005-2011 LAMP/EPFL
  * @author Burak Emir
  */
 
@@ -30,8 +30,7 @@ import util.Chars.{ SU, LF }
  *  @author  Burak Emir
  *  @version 1.0
  */
-trait MarkupParsers 
-{
+trait MarkupParsers {
   self: Parsers =>
   
   case object MissingEndTagControl extends ControlThrowable {
@@ -48,7 +47,7 @@ trait MarkupParsers
 
   import global._
 
-  class MarkupParser(parser: UnitParser, final val preserveWS: Boolean) extends scala.xml.parsing.MarkupParserCommon {
+  class MarkupParser(parser: SourceFileParser, final val preserveWS: Boolean) extends scala.xml.parsing.MarkupParserCommon {
 
     import Tokens.{ EMPTY, LBRACE, RBRACE }
     
@@ -294,7 +293,7 @@ trait MarkupParsers
       while (ch != SU) {
         if (ch == '}') {
           if (charComingAfter(nextch) == '}') nextch
-          else errorBraces
+          else errorBraces()
         }
         
         buf append ch
@@ -318,16 +317,17 @@ trait MarkupParsers
       }
       finally parser.in resume Tokens.XMLSTART
       
-      EmptyTree
+      parser.errorTermTree
     }
       
     /** Use a lookahead parser to run speculative body, and return the first char afterward. */
     private def charComingAfter(body: => Unit): Char = {
-      input = input.lookaheadReader
-      body
-      val res = ch
-      input = parser.in
-      res
+      try {
+        input = input.lookaheadReader
+        body
+        ch
+      }
+      finally input = parser.in
     }
 
     /** xLiteral = element { element }

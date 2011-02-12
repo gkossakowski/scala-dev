@@ -15,6 +15,7 @@ import scala.tools.nsc.interpreter.{ Results => IR }
 import scala.tools.util.{ SignalManager, Signallable, Javap }
 import scala.annotation.tailrec
 import scala.util.control.Exception.{ ignoring }
+import scala.util.control.ControlThrowable
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.ops
 import util.{ ClassPath, Exceptional, stringFromWriter, stringFromStream }
@@ -392,6 +393,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
     """.trim.stripMargin
 
   private val crashRecovery: PartialFunction[Throwable, Unit] = {
+    case ex: ControlThrowable => throw ex
     case ex: Throwable =>
       if (settings.YrichExes.value) {
         val sources = implicitly[Sources]

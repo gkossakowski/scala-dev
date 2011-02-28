@@ -2319,7 +2319,7 @@ self =>
         var newmods = mods
         val nameOffset = in.offset
         val name = ident()
-        atPos(start, if (name == nme.ERROR) start else nameOffset) {
+        val result = atPos(start, if (name == nme.ERROR) start else nameOffset) {
           // contextBoundBuf is for context bounded type parameters of the form
           // [T : B] or [T : => B]; it contains the equivalent implicit parameter type,
           // i.e. (B[T] or T => B)
@@ -2341,6 +2341,8 @@ self =>
             }
           DefDef(newmods, name, tparams, vparamss, restype, rhs)
         }
+        signalParseProgress(result.pos)
+        result
       }
     }
 

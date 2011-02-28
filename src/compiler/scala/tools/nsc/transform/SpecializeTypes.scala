@@ -212,10 +212,15 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
     case _ => false
   }
   
+  private def str(tp: Type): AnyRef = tp match {
+    case TypeRef(pre, sym, args) => (str(pre), sym, args)
+    case _ => "nontpref sym: " + tp.typeSymbol + ", " + tp.getClass
+  }
+  
   // If we replace `isBoundedGeneric` with (tp <:< AnyRefClass.tpe), then pos/spec-List.scala fails - why?
   // Does this kind of check fail for similar reasons? Does `sym.isAbstractType` make a difference?
   private def subtypeOfAnyRef(tp: Type) = {
-    log(tp + " <:< AnyRef " + isBoundedGeneric(tp) + ", " + tp.typeSymbol.isAbstractType)
+    // log(tp + " <:< AnyRef? tp has symbol: " + tp.typeSymbol + ", " + tp.typeSymbol.ownerChain)
     !isValueClass(tp.typeSymbol) && isBoundedGeneric(tp)
   }
   
@@ -225,9 +230,10 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
         val pre1 = this(pre)
         // when searching for a specialized class, take care to map all
         // type parameters that are subtypes of AnyRef to AnyRef
-        val args1 = args map {
-          case x if subtypeOfAnyRef(x) => AnyRefClass.tpe // used to be: case x if x <:< AnyRefClass.tpe
-          case x => x
+        // log("Mapping " + args.map(_.typeSymbol) + ", from " + sym + " with params " + sym.typeParams + " with annots " + sym.typeParams.map(_.annotations))
+        val args1 = (args zip sym.typeParams) map {
+          case (x, orig) if isSpecializedOnAnyRef(orig) && subtypeOfAnyRef(x) => AnyRefClass.tpe // used to be: case x if x <:< AnyRefClass.tpe
+          case (x, _) => x
         }
         // log("!!! specializedType " + tp + ", " + pre1 + ", " + args1)
         specializedClass.get((sym, TypeEnv.fromSpecialization(sym, args1))) match {
@@ -439,10 +445,12 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
    */
   def produceTypeParameters(syms: List[Symbol], nowner: Symbol, env: TypeEnv) = {
     val cloned = for (s <- syms) yield if (!env.contains(s)) s.cloneSymbol(nowner) else env(s).typeSymbol
+    // log("producing type params: " + cloned.map(t => (t, t.tpe.bounds.hi)))
     for ((orig, cln) <- syms zip cloned) {
       cln.removeAnnotation(SpecializedClass)
       if (env.contains(orig)) cln.setInfo(TypeBounds(cln.info.bounds.lo, AnyRefClass.tpe))
     }
+    for (sym <- cloned) sym.setInfo(sym.info.substSym(syms, cloned))
     cloned
   }
   
@@ -500,7 +508,7 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
         val survivedParams = survivingParams(clazz.info.typeParams, env)
         oldClassTParams = survivedParams
         newClassTParams = produceTypeParameters(survivedParams, cls, env) map subst(env)
-        log("new tparams " + newClassTParams.zip(newClassTParams map {_.tpe}))
+        // log("new tparams " + newClassTParams.zip(newClassTParams map {s => (s.tpe, s.tpe.bounds.hi)}) + ", in env: " + env)
 
         def applyContext(tpe: Type) =
           subst(env, tpe).subst(survivedParams, newClassTParams map (_.tpe))
@@ -514,13 +522,15 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
          */
         def specializedParents(parents: List[Type]): List[Type] = {
           val res = new mutable.ListBuffer[Type]
+          // log(cls + ": seeking specialized parents of class with parents: " + parents.map(_.typeSymbol))
           for (p <- parents) {
+            // log(p.typeSymbol)
             val stp = atPhase(phase.next)(specializedType(p))
             if (stp != p)
               if (p.typeSymbol.isTrait) res += stp
               else if (currentRun.compiles(clazz))
                 reporter.warning(clazz.pos, p.typeSymbol + " must be a trait. Specialized version of "
-                  + clazz + " will inherit generic " + p)
+                  + clazz + " will inherit generic " + p) // TODO change to error
           }
           res.reverse.toList
         }
@@ -952,8 +962,10 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
       else 
         if (strict) throw UnifyError else env
     case (TypeRef(_, sym1, args1), TypeRef(_, sym2, args2)) =>
+      log("Unify - both type refs: " + tp1 + " and " + tp2 + " with args " + (args1, args2) + " - ")
+      if (strict && args1.length != args2.length) throw UnifyError
       val e = unify(args1, args2, env, strict)
-      log("Unify - both type refs: " + tp1 + " and " + tp2 + " with args " + (args1, args2) + " - " + e)
+      log("unified to: " + e)
       e
     case (TypeRef(_, sym1, _), _) if sym1.isTypeParameterOrSkolem =>
       env
@@ -962,6 +974,8 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
       log("Unify - method types: " + tp1 + " and " + tp2)
       unify(res1 :: (params1 map (_.tpe)), res2 :: (params2 map (_.tpe)), env, strict)
     case (PolyType(tparams1, res1), PolyType(tparams2, res2)) =>
+      if (strict && tparams1.length != tparams2.length) throw UnifyError
+      log("Unify - poly types: " + tp1 + " and " + tp2)
       unify(res1, res2, env, strict)
     case (PolyType(_, res), other) =>
       unify(res, other, env, strict)
@@ -976,12 +990,20 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
     case _ =>
       log("don't know how to unify %s [%s] with %s [%s]".format(tp1, tp1.getClass, tp2, tp2.getClass))
       env
-  }
+    }
   }
   
-  private def unify(tp1: List[Type], tp2: List[Type], env: TypeEnv, strict: Boolean): TypeEnv = 
+  private def unify(tp1: List[Type], tp2: List[Type], env: TypeEnv, strict: Boolean): TypeEnv =
     tp1.zip(tp2).foldLeft(env) { (env, args) =>
-      unify(args._1, args._2, env, strict)
+      if (!strict) unify(args._1, args._2, env, strict)
+      else {
+        val nenv = unify(args._1, args._2, emptyEnv, strict)
+        if (env.keySet.intersect(nenv.keySet) == Set()) env ++ nenv
+        else {
+          log("could not unify: u(" + args._1 + ", " + args._2 + ") yields " + nenv + ", env: " + env)
+          throw UnifyError
+        }
+      }
     }
   
   private def specializedTypes(tps: List[Symbol]) = tps.filter(_.hasAnnotation(SpecializedClass))
@@ -1038,6 +1060,8 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
     decl.setInfo(if (decl.isConstructor) tpe match {
       case MethodType(args, resTpe) => MethodType(args, decl.owner.tpe)
     } else tpe)
+    // log((decl, decl.tpe.bounds.hi))
+    // decl
   }
   
   /** Type transformation. It is applied to all symbols, compiled or loaded.
@@ -1241,8 +1265,9 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
         log("[specSym] checking for rerouting: %s with \n\tsym.tpe: %s, \n\ttree.tpe: %s \n\tenv: %s \n\tname: %s"
                 .format(tree, symbol.tpe, tree.tpe, env, specializedName(symbol, env)))
         if (!env.isEmpty) {  // a method?
-          val specMember = qual.tpe.member(specializedName(symbol, env)) suchThat (s => doesConform(symbol, tree.tpe, s.tpe, env))
-          log("[specSym] found: " + qual.tpe.member(specializedName(symbol, env)).tpe + ", instantiated as: " + tree.tpe)
+          val specCandidates = qual.tpe.member(specializedName(symbol, env))
+          val specMember = specCandidates suchThat (s => doesConform(symbol, tree.tpe, s.tpe, env))
+          log("[specSym] found: " + specCandidates.tpe + ", instantiated as: " + tree.tpe)
           log("[specSym] found specMember: " + specMember)
           if (specMember ne NoSymbol)
             if (TypeEnv.includes(typeEnv(specMember), env)) Some(specMember)
@@ -1494,7 +1519,12 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
       if (settings.debug.value) log("now typing: " + meth + " in " + symbol.owner.fullName)
       val d = new Duplicator
       try {
-      d.retyped(localTyper.context1.asInstanceOf[d.Context],
+        // log("duplicating tree: " + tree + "; " + symbol.owner)
+        // log("source: " + source + "; owner: " + source.owner)
+        // log("source encl class: " + source.enclClass)
+        // log("symbol encl class: " + symbol.enclClass)
+        // log(meth)
+        d.retyped(localTyper.context1.asInstanceOf[d.Context],
                 meth,
                 source.enclClass,
                 symbol.enclClass,

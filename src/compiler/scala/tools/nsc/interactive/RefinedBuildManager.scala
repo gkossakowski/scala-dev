@@ -12,8 +12,9 @@ import scala.util.control.Breaks._
 import scala.tools.nsc.symtab.Flags
 
 import dependencies._
-import util.FakePos
+import util.{FakePos, ClassPath}
 import io.AbstractFile
+import scala.tools.util.PathResolver
 
 /** A more defined build manager, based on change sets. For each
  *  updated source file, it computes the set of changes to its
@@ -32,8 +33,14 @@ class RefinedBuildManager(val settings: Settings) extends Changes with BuildMana
       super.computeInternalPhases
       phasesSet += dependencyAnalysis
     }
+    lazy val _classpath: ClassPath[_] = new NoSourcePathPathResolver(settings).result
+    override def classPath: ClassPath[_] = _classpath
     
     def newRun() = new Run()
+  }
+  
+  class NoSourcePathPathResolver(settings: Settings) extends PathResolver(settings) {
+    override def containers = Calculated.basis.dropRight(1).flatten.distinct
   }
 
   protected def newCompiler(settings: Settings) = new BuilderGlobal(settings) 

@@ -303,7 +303,17 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
   }
   
   private object javap extends Javap(intp.classLoader, new IMain.ReplStrippingWriter(intp)) {
-    override def tryClass(path: String): Array[Byte] = super.tryClass(intp pathToFlatName path)
+    override def tryClass(path: String): Array[Byte] = {
+      // Look for Foo first, then Foo$, but if Foo$ is given explicitly,
+      // we have to drop the $ to find object Foo, then tack it back onto
+      // the end of the flattened name.
+      def className  = intp pathToFlatName path
+      def moduleName = (intp pathToFlatName path.stripSuffix("$")) + "$"
+
+      val bytes = super.tryClass(className)
+      if (bytes.nonEmpty) bytes
+      else super.tryClass(moduleName)
+    }
   }
   
   private def javapCommand(line: String): Result = {
@@ -518,6 +528,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
       return "Already in power mode."
 
     power = new Power(this)
+    isReplPower = true
     power.unleash()
     power.banner
   }
@@ -773,7 +784,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
       // couple seconds saying "wow, it starts so fast!" and by the time
       // they type a command the compiler is ready to roll.
       intp.initialize()
-      if (sys.props contains PowerProperty) {
+      if (isReplPower) {
         plushln("Starting in power mode, one moment...\n")
         powerCmd()
       }

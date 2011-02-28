@@ -22,9 +22,11 @@ trait ScalaSettings extends AbsScalaSettings with StandardScalaSettings {
 
   /** Disable a setting */
   def disable(s: Setting) = allSettings -= s
-  
-  BooleanSetting("-J<flag>",  "Pass <flag> directly to runtime system")
-  BooleanSetting("-Dprop=value",  "Pass -Dprop=value directly to runtime system")
+
+  val jvmargs  = MapSetting("-J<flag>", "-J", "Pass <flag> directly to the runtime system.")
+  val defines  = MapSetting("-Dproperty=value", "-D", "Pass -Dproperty=value directly to the runtime system.")
+  val toolcp   = PathSetting("-toolcp", "Add to the runner classpath.", "")
+  val nobootcp = BooleanSetting("-nobootcp", "Do not use the boot classpath for the scala jars.")
 
   /**
    *  Standard settings
@@ -122,6 +124,7 @@ trait ScalaSettings extends AbsScalaSettings with StandardScalaSettings {
   val Xshowtrees    = BooleanSetting    ("-Yshow-trees", "(Requires -Xprint:) Print detailed ASTs.")
   val Yshowsyms     = BooleanSetting    ("-Yshow-syms", "Print the AST symbol hierarchy after each phase.")
   val skip          = PhasesSetting     ("-Yskip", "Skip")
+  val Ygenjavap     = StringSetting     ("-Ygen-javap", "dir", "Generate a parallel output directory of .javap files.", "")
   val Ynosqueeze    = BooleanSetting    ("-Yno-squeeze", "Disable creation of compact code in matching.")
   val Ystatistics   = BooleanSetting    ("-Ystatistics", "Print compiler statistics.") .
                                           withPostSetHook(set => util.Statistics.enabled = set.value)

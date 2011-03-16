@@ -1,0 +1,20 @@
+package scala.reflect
+
+trait SourceLocation {
+  def line: Int
+
+  def charOffset: Int = 0
+
+  def fileName: String = ""
+}
+
+object SourceLocation {
+  def apply(line: Int/*, fileName: String*/): SourceLocation =
+    new ConcreteSourceLocation(line/*, fileName*/)
+
+  private class ConcreteSourceLocation(override val line: Int/*,
+                                       override val fileName: String*/)
+    extends SourceLocation {
+  }
+  
+}

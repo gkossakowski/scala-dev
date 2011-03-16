@@ -1,5 +1,5 @@
 
-import reflect.SourceInfo
+import reflect.SourceContext
 
 object Test {
 
@@ -14,14 +14,14 @@ object Test {
   }
 */
 
-  def printInfo(m: SourceInfo) {
+  def printInfo(m: SourceContext) {
     println("line: "+m.line)
     println("binding: "+m.bindings(0)._1)
     println("method name: "+m.methodName)
   }
   
-  def inspect[T](x: T)(implicit m: SourceInfo): Int = {
-    def withManifest()(implicit mm: SourceInfo) {
+  def inspect[T](x: T)(implicit m: SourceContext): Int = {
+    def withManifest()(implicit mm: SourceContext) {
       printInfo(mm)
     }
     printInfo(m)

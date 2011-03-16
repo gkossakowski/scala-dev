@@ -848,7 +848,7 @@ trait Implicits {
         if (args contains EmptyTree) EmptyTree
         else typedPos(tree.pos.focus) {
           Apply(
-            Select(gen.mkAttributedRef(SourceInfoModule), constructor),
+            Select(gen.mkAttributedRef(SourceContextModule), constructor),
             args.toList
           )
         }
@@ -890,10 +890,11 @@ trait Implicits {
             (null, tree.pos.line) :: contextSourceInfoChain(context0.outer, context0.outer.enclClass, None)
         }
         
-        val methodName = (tree match {
-          case Apply(TypeApply(s, _), args) => s
-          case Apply(s@Select(_, _), args) => s
-        }).symbol.name
+        val methodName = tree match {
+          case Apply(TypeApply(s, _), args) => s.symbol.name
+          case Apply(s@Select(_, _), args) => s.symbol.name
+          case _ => ""
+        }
         
         //println("context source info chain:")
         //println(contextInfoChain)
@@ -1002,7 +1003,9 @@ trait Implicits {
           case SearchFailure if sym == OptManifestClass => wrapResult(gen.mkAttributedRef(NoManifest))
           case result                                   => result
         }
-      case TypeRef(_, sym, _) if sym == SourceInfoClass =>
+//      case TypeRef(_, sym, _) if sym == SourceLocationClass =>
+//        sourceLocation()
+      case TypeRef(_, sym, _) if sym == SourceContextClass =>
         sourceInfo()
       case tp@TypeRef(_, sym, _) if sym.isAbstractType =>
         implicitManifestOrOfExpectedType(tp.bounds.lo) // #3977: use tp (==pt.dealias), not pt (if pt is a type alias, pt.bounds.lo == pt)
@@ -1048,11 +1051,10 @@ trait Implicits {
         log("no implicits found for "+pt+" "+pt.typeSymbol.info.baseClasses+" "+implicitsOfExpectedType)
 
       val updatedRes = pt match {
-        case TypeRef(_, SourceInfoClass, _) =>
+        case TypeRef(_, SourceContextClass, _) =>
           new SearchResult(typedPos(tree.pos.focus) {
-            // todo: here we could pass more info about current invocation
-            // than just the line number
-            Apply(Select(result.tree, "update"), List(Literal(tree.pos.line)))
+            //Apply(Select(result.tree, "update"), List(Literal(tree.pos.line)))
+            sourceInfo().tree
           }, result.subst)
         case _ => result
       }

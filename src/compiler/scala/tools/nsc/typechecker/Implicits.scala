@@ -842,6 +842,70 @@ trait Implicits {
         implicitInfoss
     }
 
+    private def sourceInfo(): SearchResult = {
+      /** Creates a tree that calls the factory method called constructor in object reflect.SourceInfo */
+      def sourceInfoFactoryCall(constructor: String, args: Tree*): Tree =
+        if (args contains EmptyTree) EmptyTree
+        else typedPos(tree.pos.focus) {
+          Apply(
+            Select(gen.mkAttributedRef(SourceInfoModule), constructor),
+            args.toList
+          )
+        }
+      
+      def contextSourceInfoChain(ctx: Context,
+                                 stopAt: Context,
+                                 prevValDef: Option[String]): List[(String, Int)] = {
+        if (ctx == stopAt)
+          List()
+        else ctx.tree match {
+          case vd @ ValDef(_, name, _, _) if prevValDef.isEmpty || (!prevValDef.get.equals(name.toString)) =>
+            (name.toString, vd.pos.line) :: contextSourceInfoChain(ctx.outer, stopAt, Some(name.toString))
+          //case app @ Apply(fun, args) if fun.symbol.isMethod =>
+          //  (fun.symbol.nameString, fun.pos.line) :: contextSourceInfoChain(ctx.outer, stopAt)
+          case _ =>
+            contextSourceInfoChain(ctx.outer, stopAt, None)
+        }
+      }
+      
+      def sourceInfoTree(chain: List[(String, Int)]): Tree = chain match {
+        case (name, line) :: rest =>
+          val pairTree = gen.mkTuple(List(Literal(name), Literal(line)))
+          //gen.mkNewCons(pairTree, sourceInfoTree(rest))
+          Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), List(pairTree))
+        case List() =>
+          gen.mkNil
+      }
+      
+      def srcInfo()(implicit from: List[Symbol] = List(), to: List[Type] = List()): SearchResult = {
+        implicit def wrapResult(tree: Tree): SearchResult = 
+          if (tree == EmptyTree) SearchFailure else new SearchResult(tree, new TreeTypeSubstituter(from, to))
+        
+        val contextInfoChain = context0.tree match {
+          case vd @ ValDef(_, name, _, _) =>
+            //println("current context tree is ValDef "+name)
+            contextSourceInfoChain(context0, context0.enclClass, None)
+          case _ =>
+            //println("current context tree: "+context0.tree)
+            (null, tree.pos.line) :: contextSourceInfoChain(context0.outer, context0.outer.enclClass, None)
+        }
+        
+        val methodName = (tree match {
+          case Apply(TypeApply(s, _), args) => s
+          case Apply(s@Select(_, _), args) => s
+        }).symbol.name
+        
+        //println("context source info chain:")
+        //println(contextInfoChain)
+        //println("source info tree:")
+        //println(sourceInfoTree(contextInfoChain))
+        
+        sourceInfoFactoryCall("apply", Literal(methodName.toString), sourceInfoTree(contextInfoChain))
+      }
+
+      srcInfo()
+    }
+
     /** Creates a tree that calls the relevant factory method in object
       * reflect.Manifest for type 'tp'. An EmptyTree is returned if
       * no manifest is found. todo: make this instantiate take type params as well?
@@ -938,6 +1002,8 @@ trait Implicits {
           case SearchFailure if sym == OptManifestClass => wrapResult(gen.mkAttributedRef(NoManifest))
           case result                                   => result
         }
+      case TypeRef(_, sym, _) if sym == SourceInfoClass =>
+        sourceInfo()
       case tp@TypeRef(_, sym, _) if sym.isAbstractType =>
         implicitManifestOrOfExpectedType(tp.bounds.lo) // #3977: use tp (==pt.dealias), not pt (if pt is a type alias, pt.bounds.lo == pt)
       case _ =>
@@ -981,7 +1047,16 @@ trait Implicits {
       if (result == SearchFailure && settings.debug.value)
         log("no implicits found for "+pt+" "+pt.typeSymbol.info.baseClasses+" "+implicitsOfExpectedType)
 
-      result
+      val updatedRes = pt match {
+        case TypeRef(_, SourceInfoClass, _) =>
+          new SearchResult(typedPos(tree.pos.focus) {
+            // todo: here we could pass more info about current invocation
+            // than just the line number
+            Apply(Select(result.tree, "update"), List(Literal(tree.pos.line)))
+          }, result.subst)
+        case _ => result
+      }
+      updatedRes
     }
 
     def allImplicits: List[SearchResult] = {

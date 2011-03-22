@@ -907,6 +907,29 @@ trait Implicits {
       srcInfo()
     }
 
+    private def sourceLocation(): SearchResult = {
+      /** Creates a tree that calls the factory method called constructor in object reflect.SourceLocation */
+      def sourceLocationFactoryCall(constructor: String, args: Tree*): Tree =
+        if (args contains EmptyTree) EmptyTree
+        else typedPos(tree.pos.focus) {
+          Apply(
+            Select(gen.mkAttributedRef(SourceLocationModule), constructor),
+            args.toList
+          )
+        }
+      
+      def srcLocation()(implicit from: List[Symbol] = List(), to: List[Type] = List()): SearchResult = {
+        implicit def wrapResult(tree: Tree): SearchResult = 
+          if (tree == EmptyTree) SearchFailure else new SearchResult(tree, new TreeTypeSubstituter(from, to))
+
+        val position = tree.pos.focus
+        val fileName = position.source.file.absolute.path
+        sourceLocationFactoryCall("apply", Literal(position.line), Literal(position.point), Literal(fileName))
+      }
+
+      srcLocation()
+    }
+
     /** Creates a tree that calls the relevant factory method in object
       * reflect.Manifest for type 'tp'. An EmptyTree is returned if
       * no manifest is found. todo: make this instantiate take type params as well?
@@ -1003,8 +1026,8 @@ trait Implicits {
           case SearchFailure if sym == OptManifestClass => wrapResult(gen.mkAttributedRef(NoManifest))
           case result                                   => result
         }
-//      case TypeRef(_, sym, _) if sym == SourceLocationClass =>
-//        sourceLocation()
+      case TypeRef(_, sym, _) if sym == SourceLocationClass =>
+        sourceLocation()
       case TypeRef(_, sym, _) if sym == SourceContextClass =>
         sourceInfo()
       case tp@TypeRef(_, sym, _) if sym.isAbstractType =>
@@ -1055,6 +1078,11 @@ trait Implicits {
           new SearchResult(typedPos(tree.pos.focus) {
             //Apply(Select(result.tree, "update"), List(Literal(tree.pos.line)))
             sourceInfo().tree
+          }, result.subst)
+        case TypeRef(_, SourceLocationClass, _) =>
+          new SearchResult(typedPos(tree.pos.focus) {
+            //Apply(Select(result.tree, "update"), List(Literal(tree.pos.line)))
+            sourceLocation().tree
           }, result.subst)
         case _ => result
       }

@@ -9,12 +9,19 @@ trait SourceLocation {
 }
 
 object SourceLocation {
-  def apply(line: Int/*, fileName: String*/): SourceLocation =
-    new ConcreteSourceLocation(line/*, fileName*/)
+  def apply(line: Int, fileName: String): SourceLocation =
+    new ConcreteSourceLocation(line, fileName)
 
-  private class ConcreteSourceLocation(override val line: Int/*,
-                                       override val fileName: String*/)
+  def apply(line: Int, offset: Int, fileName: String): SourceLocation =
+    new ConcreteSourceLocation(line, offset, fileName)
+
+  private class ConcreteSourceLocation(override val line: Int,
+                                       override val charOffset: Int,
+                                       override val fileName: String)
     extends SourceLocation {
+    def this(line: Int, file: String) {
+      this(line, 0, file)
+    }
   }
   
 }

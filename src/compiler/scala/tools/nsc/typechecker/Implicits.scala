@@ -842,8 +842,41 @@ trait Implicits {
         implicitInfoss
     }
 
+    def contextSourceInfoChain(ctx: Context,
+                               stopAt: Context,
+                               prevValDef: Option[String]): List[(String, Int)] = {
+      if (ctx == stopAt)
+        List()
+      else ctx.tree match {
+        case vd @ ValDef(_, name, _, _) if prevValDef.isEmpty || (!prevValDef.get.equals(name.toString)) =>
+          (name.toString, vd.pos.line) :: contextSourceInfoChain(ctx.outer, stopAt, Some(name.toString))
+        //case app @ Apply(fun, args) if fun.symbol.isMethod =>
+        //  (fun.symbol.nameString, fun.pos.line) :: contextSourceInfoChain(ctx.outer, stopAt)
+        case _ =>
+          contextSourceInfoChain(ctx.outer, stopAt, None)
+      }
+    }
+
+    def contextInfoChain = context0.tree match {
+      case vd @ ValDef(_, name, _, _) =>
+        //println("current context tree is ValDef "+name)
+        contextSourceInfoChain(context0, context0.enclClass, None)
+      case _ =>
+        //println("current context tree: "+context0.tree)
+        (null, tree.pos.line) :: contextSourceInfoChain(context0.outer, context0.outer.enclClass, None)
+    }
+
+    def sourceInfoTree(chain: List[(String, Int)]): Tree = chain match {
+      case (name, line) :: rest =>
+        val pairTree = gen.mkTuple(List(Literal(name), Literal(line)))
+        //gen.mkNewCons(pairTree, sourceInfoTree(rest))
+        Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), List(pairTree))
+      case List() =>
+        gen.mkNil
+    }
+
     private def sourceInfo(): SearchResult = {
-      /** Creates a tree that calls the factory method called constructor in object reflect.SourceInfo */
+      /** Creates a tree that calls the factory method called constructor in object reflect.SourceContext */
       def sourceInfoFactoryCall(constructor: String, args: Tree*): Tree =
         if (args contains EmptyTree) EmptyTree
         else typedPos(tree.pos.focus) {
@@ -853,42 +886,9 @@ trait Implicits {
           )
         }
       
-      def contextSourceInfoChain(ctx: Context,
-                                 stopAt: Context,
-                                 prevValDef: Option[String]): List[(String, Int)] = {
-        if (ctx == stopAt)
-          List()
-        else ctx.tree match {
-          case vd @ ValDef(_, name, _, _) if prevValDef.isEmpty || (!prevValDef.get.equals(name.toString)) =>
-            (name.toString, vd.pos.line) :: contextSourceInfoChain(ctx.outer, stopAt, Some(name.toString))
-          //case app @ Apply(fun, args) if fun.symbol.isMethod =>
-          //  (fun.symbol.nameString, fun.pos.line) :: contextSourceInfoChain(ctx.outer, stopAt)
-          case _ =>
-            contextSourceInfoChain(ctx.outer, stopAt, None)
-        }
-      }
-      
-      def sourceInfoTree(chain: List[(String, Int)]): Tree = chain match {
-        case (name, line) :: rest =>
-          val pairTree = gen.mkTuple(List(Literal(name), Literal(line)))
-          //gen.mkNewCons(pairTree, sourceInfoTree(rest))
-          Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), List(pairTree))
-        case List() =>
-          gen.mkNil
-      }
-      
       def srcInfo()(implicit from: List[Symbol] = List(), to: List[Type] = List()): SearchResult = {
         implicit def wrapResult(tree: Tree): SearchResult = 
           if (tree == EmptyTree) SearchFailure else new SearchResult(tree, new TreeTypeSubstituter(from, to))
-        
-        val contextInfoChain = context0.tree match {
-          case vd @ ValDef(_, name, _, _) =>
-            //println("current context tree is ValDef "+name)
-            contextSourceInfoChain(context0, context0.enclClass, None)
-          case _ =>
-            //println("current context tree: "+context0.tree)
-            (null, tree.pos.line) :: contextSourceInfoChain(context0.outer, context0.outer.enclClass, None)
-        }
         
         val methodName = tree match {
           case Apply(TypeApply(s, _), args) => s.symbol.name
@@ -1028,8 +1028,6 @@ trait Implicits {
         }
       case TypeRef(_, sym, _) if sym == SourceLocationClass =>
         sourceLocation()
-      case TypeRef(_, sym, _) if sym == SourceContextClass =>
-        sourceInfo()
       case tp@TypeRef(_, sym, _) if sym.isAbstractType =>
         implicitManifestOrOfExpectedType(tp.bounds.lo) // #3977: use tp (==pt.dealias), not pt (if pt is a type alias, pt.bounds.lo == pt)
       case _ =>
@@ -1049,6 +1047,7 @@ trait Implicits {
       val succstart = startTimer(inscopeSucceedNanos)
       
       var result = searchImplicit(context.implicitss, true)
+      var updateSourceContext = true
 
       if (result == SearchFailure) {
         stopTimer(inscopeFailNanos, failstart)
@@ -1063,7 +1062,13 @@ trait Implicits {
         result = implicitManifestOrOfExpectedType(pt)
 
         if (result == SearchFailure) {
-          stopTimer(oftypeFailNanos, failstart)
+          pt.dealias match {
+            case TypeRef(_, SourceContextClass, _) =>
+              result = sourceInfo()
+              updateSourceContext = false
+            case _ =>
+              stopTimer(oftypeFailNanos, failstart)
+          }
         } else {
           stopTimer(oftypeSucceedNanos, succstart)
           incCounter(oftypeImplicitHits)
@@ -1073,15 +1078,19 @@ trait Implicits {
       if (result == SearchFailure && settings.debug.value)
         log("no implicits found for "+pt+" "+pt.typeSymbol.info.baseClasses+" "+implicitsOfExpectedType)
 
-      val updatedRes = pt match {
-        case TypeRef(_, SourceContextClass, _) =>
+      val methodName = tree match {
+        case Apply(TypeApply(s, _), args) => s.symbol.name
+        case Apply(s@Select(_, _), args) => s.symbol.name
+        case _ => ""
+      }
+
+      val updatedRes = pt.dealias match {
+        case TypeRef(_, SourceContextClass, _) if updateSourceContext =>
           new SearchResult(typedPos(tree.pos.focus) {
-            //Apply(Select(result.tree, "update"), List(Literal(tree.pos.line)))
-            sourceInfo().tree
+            Apply(Select(result.tree, "update"), List(Literal(methodName.toString), sourceInfoTree(contextInfoChain)))
           }, result.subst)
         case TypeRef(_, SourceLocationClass, _) =>
           new SearchResult(typedPos(tree.pos.focus) {
-            //Apply(Select(result.tree, "update"), List(Literal(tree.pos.line)))
             sourceLocation().tree
           }, result.subst)
         case _ => result

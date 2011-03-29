@@ -18,7 +18,7 @@ object SourceLocation {
   private class ConcreteSourceLocation(override val line: Int,
                                        override val charOffset: Int,
                                        override val fileName: String)
-    extends SourceLocation {
+  extends SourceLocation {
     def this(line: Int, file: String) {
       this(line, 0, file)
     }

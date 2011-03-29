@@ -8,6 +8,10 @@ trait SourceContext extends SourceLocation {
     else Some(bindings(0)._1)
 
   def methodName: String
+
+  def update(name: String, sourceInfo: List[(String, Int)]): SourceContext
+
+  def firstContext: List[(String, Int)]
 }
 
 object SourceContext {
@@ -15,9 +19,22 @@ object SourceContext {
     new ConcreteSourceContext(name, sourceInfo)
 
   private class ConcreteSourceContext(override val methodName: String,
-                                      override val bindings: List[(String, Int)])
-    extends SourceContext {
+                                      currBindings: List[(String, Int)])
+  extends SourceContext {
+    var contexts: List[List[(String, Int)]] =
+      List(currBindings)
+
     def line = bindings(0)._2
+
+    def bindings = contexts.head
+
+    def firstContext: List[(String, Int)] =
+      contexts.last
+
+    def update(name: String, sourceInfo: List[(String, Int)]): SourceContext = {
+      contexts ::= sourceInfo
+      this
+    }
   }
   
 }

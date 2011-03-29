@@ -1,0 +1,16 @@
+line: 37
+binding: x
+method name: inspect
+first context: List((x,37))
+line: 29
+binding: null
+method name: inspect
+first context: List((x,37))
+line: 40
+binding: null
+method name: inspect
+first context: List((null,40))
+line: 29
+binding: null
+method name: inspect
+first context: List((null,40))

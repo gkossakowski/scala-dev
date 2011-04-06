@@ -863,7 +863,11 @@ trait Implicits {
         contextSourceInfoChain(context0, context0.enclClass, None)
       case _ =>
         //println("current context tree: "+context0.tree)
-        (null, tree.pos.line) :: contextSourceInfoChain(context0.outer, context0.outer.enclClass, None)
+        val l = tree.pos match {
+          case NoPosition => 0
+          case _ => tree.pos.line
+        }
+        (null, l) :: contextSourceInfoChain(context0.outer, context0.outer.enclClass, None)
     }
 
     def sourceInfoTree(chain: List[(String, Int)]): Tree = chain match {

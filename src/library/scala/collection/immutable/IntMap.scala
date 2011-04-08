@@ -35,6 +35,11 @@ private[immutable] object IntMapUtils extends BitOperations.Int {
 import IntMapUtils._
 
 /** A companion object for integer maps.
+ * 
+ *  @define Coll  IntMap
+ *  @define mapCanBuildFromInfo
+ *    The standard `CanBuildFrom` instance for `$Coll` objects.
+ *    The created value is an instance of class `MapCanBuildFrom`.
  *  @since 2.7
  */
 object IntMap {
@@ -268,9 +273,6 @@ sealed abstract class IntMap[+T] extends Map[Int, T] with MapLike[Int, T, IntMap
                              else join(key, IntMap.Tip(key, value), key2, this);
     case IntMap.Nil => IntMap.Tip(key, value);
   }
-
-  @deprecated("use `updated' instead")
-  override def update[S >: T](key: Int, value: S): IntMap[S] = updated(key, value)
 
   /**
    * Updates the map, using the provided function to resolve conflicts if the key is already present.

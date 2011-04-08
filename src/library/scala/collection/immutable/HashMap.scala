@@ -33,7 +33,7 @@ import parallel.immutable.ParHashMap
  *  @define willNotTerminateInf
  */
 @SerialVersionUID(2L)
-class HashMap[A, +B] extends Map[A,B] with MapLike[A, B, HashMap[A, B]] with Parallelizable[ParHashMap[A, B]] with Serializable {
+class HashMap[A, +B] extends Map[A,B] with MapLike[A, B, HashMap[A, B]] with CustomParallelizable[(A, B), ParHashMap[A, B]] with Serializable {
 
   override def size: Int = 0
 
@@ -59,7 +59,7 @@ class HashMap[A, +B] extends Map[A,B] with MapLike[A, B, HashMap[A, B]] with Par
   def - (key: A): HashMap[A, B] =
     removed0(key, computeHash(key), 0)
 
-  protected def elemHashCode(key: A) = if (key == null) 0 else key.##
+  protected def elemHashCode(key: A) = key.##
 
   protected final def improve(hcode: Int) = {
     var h: Int = hcode + ~(hcode << 9)
@@ -87,12 +87,8 @@ class HashMap[A, +B] extends Map[A,B] with MapLike[A, B, HashMap[A, B]] with Par
   
   protected def merge0[B1 >: B](that: HashMap[A, B1], level: Int, merger: Merger[B1]): HashMap[A, B1] = that
   
-  def par = ParHashMap.fromTrie(this)
+  override def par = ParHashMap.fromTrie(this)
   
-  override def toParIterable = par
-    
-  private type C = (A, B)
-  override def toParMap[D, E](implicit ev: C <:< (D, E)) = par.asInstanceOf[ParHashMap[D, E]]
 }
 
 /** $factoryInfo

@@ -26,19 +26,13 @@ object Codegen {
     echo("Generating sources into " + out)
     
     if (anyvals || all) {
-      val av = new AnyVals {
-        override def timestampString =
-          if (stamp) super.timestampString
-          else ""
-      }
+      val av = new AnyVals { }
+
       av.make() foreach { case (name, code ) =>
         val file = out / (name + ".scala") toFile;
         echo("Writing: " + file)
         file writeAll code
       }
-    }
-    if (products || all) {
-      ()
     }
   }
 }

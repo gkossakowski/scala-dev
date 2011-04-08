@@ -5,7 +5,7 @@
 
 package scala.tools.nsc
 
-import java.io.{ BufferedOutputStream, FileOutputStream, PrintStream, File => JFile }
+import java.io.{ BufferedOutputStream, FileOutputStream, PrintStream }
 import scala.tools.nsc.reporters.{Reporter, ConsoleReporter}
 import scala.tools.nsc.util.FakePos //Position
 import scala.tools.util.SocketServer
@@ -22,21 +22,18 @@ import settings.FscSettings
 class StandardCompileServer extends SocketServer {
   lazy val compileSocket: CompileSocket = CompileSocket
 
+  private var compiler: Global = null
+  private def clearCompiler() = compiler = null
+
+  var reporter: ConsoleReporter = _
+  var shutdown = false
+  var verbose = false
+
   val versionMsg = "Fast Scala compiler " +
     Properties.versionString + " -- " +
     Properties.copyrightString
 
   val MaxCharge = 0.8
-
-  private var compiler: Global = null
-  var reporter: ConsoleReporter = _
-  var shutdown = false
-
-  private def exit(code: Int): Nothing = {
-    System.err.close()
-    System.out.close()
-    sys.exit(code)
-  }
 
   private val runtime = Runtime.getRuntime()
   import runtime.{ totalMemory, freeMemory, maxMemory }
@@ -53,9 +50,9 @@ class StandardCompileServer extends SocketServer {
   }
   
   def printMemoryStats() {
-    System.out.println("New session, total memory = %s, max memory = %s, free memory = %s".format(
-      totalMemory, maxMemory, freeMemory))
-    System.out.flush()
+    def mb(bytes: Long) = "%dMB".format(bytes / 1000000)
+    info("New session: total memory = %s, max memory = %s, free memory = %s".format(
+      mb(totalMemory), mb(maxMemory), mb(freeMemory)))
   }
   
   def isMemoryFullEnough() = {
@@ -63,7 +60,7 @@ class StandardCompileServer extends SocketServer {
     (totalMemory - freeMemory).toDouble / maxMemory.toDouble > MaxCharge
   }
 
-  protected def newOfflineCompilerCommand(arguments: List[String], settings: Settings) =
+  protected def newOfflineCompilerCommand(arguments: List[String], settings: FscSettings): OfflineCompilerCommand =
     new OfflineCompilerCommand(arguments, settings)
     
   /** Problematically, Settings are only considered equal if every setting
@@ -74,7 +71,7 @@ class StandardCompileServer extends SocketServer {
    *  and which do not interestingly influence compilation products.
    */
   def unequalSettings(s1: Settings, s2: Settings): Set[Settings#Setting] = {
-    val ignoreSettings = Set("-d", "-encoding", "-verbose")
+    val ignoreSettings = Set("-d", "-encoding", "-currentDir")
     def trim (s: Settings): Set[Settings#Setting] = (
       s.userSetSettings.toSet[Settings#Setting] filterNot (ss => ignoreSettings exists (ss respondsTo _))
     )
@@ -85,7 +82,6 @@ class StandardCompileServer extends SocketServer {
   }
 
   def session() {
-    printMemoryStats()
     val password        = compileSocket getPassword port
     val guessedPassword = in.readLine()
     val input           = in.readLine()
@@ -97,68 +93,80 @@ class StandardCompileServer extends SocketServer {
     if (input == null || password != guessedPassword)
       return
     
-    val args = input.split("\0", -1).toList
-    val settings = new FscSettings(fscError)
-    def logVerbose(msg: String) =
-      if (settings.verbose.value)
-        out println msg
+    val args        = input.split("\0", -1).toList
+    val newSettings = new FscSettings(fscError)
+    this.verbose    = newSettings.verbose.value
+    val command     = newOfflineCompilerCommand(args, newSettings)
+
+    info("Settings after normalizing paths: " + newSettings)
+    printMemoryStats()
     
-    val command = newOfflineCompilerCommand(args, settings)
-    if (settings.shutdown.value) {
+    // Update the idle timeout if given
+    if (!newSettings.idleMins.isDefault) {
+      val mins = newSettings.idleMins.value
+      if (mins == 0) echo("Disabling idle timeout on compile server.")
+      else echo("Setting idle timeout to " + mins + " minutes.")
+      
+      this.idleMinutes = mins
+    }
+    if (newSettings.shutdown.value) {
       shutdown = true
       return out.println("[Compile server exited]")
     }
-    if (settings.reset.value) {
-      compiler = null
-      return out.println("[Compile server was reset]")
+    if (newSettings.reset.value) {
+      clearCompiler()
+      out.println("[Compile server was reset]")
+      if (command.files.isEmpty)
+        return
     }
-    
-    reporter = new ConsoleReporter(command.settings, in, out) {
+
+    reporter = new ConsoleReporter(newSettings, in, out) {
       // disable prompts, so that compile server cannot block
       override def displayPrompt = ()
     }
     def isCompilerReusable: Boolean = {
       if (compiler == null) {
-        logVerbose("[Creating new instance for compile server.]")
-        logVerbose("[Compiler version: " + Properties.versionString + ".]")
+        info("[Creating new instance for compile server.]")
+        info("[Compiler version: " + Properties.versionString + ".]")
         return false
       }
-      val unequal = unequalSettings(command.settings, compiler.settings)
+      val unequal = unequalSettings(newSettings, compiler.settings)
       if (unequal.nonEmpty) {
-        logVerbose("[Replacing compiler with new instance because settings are unequal.]")
-        logVerbose("[Asymmetric settings: " + unequal.mkString(", ") + "]")
+        info("[Replacing compiler with new instance because settings are unequal.]")
+        info("[Asymmetric settings: " + unequal.mkString(", ") + "]")
       }
       unequal.isEmpty
     }
     
     if (command.shouldStopWithInfo)
-      reporter.info(null, command.getInfoMessage(newGlobal(command.settings, reporter)), true)
+      reporter.info(null, command.getInfoMessage(newGlobal(newSettings, reporter)), true)
     else if (command.files.isEmpty)
       reporter.info(null, command.usageMsg, true)
     else {
       if (isCompilerReusable) {
-        compiler.settings = command.settings
+        info("[Reusing existing Global instance.]")
+        compiler.settings = newSettings
         compiler.reporter = reporter
       }
       else {
-        compiler = newGlobal(command.settings, reporter)
+        compiler = newGlobal(newSettings, reporter)
       }
       val c = compiler
-      val run = new c.Run()
-      try run compile command.files
+      try new c.Run() compile command.files
       catch {
         case ex @ FatalError(msg) =>
           reporter.error(null, "fatal error: " + msg)
-          compiler = null
+          clearCompiler()
         case ex =>
+          warn("Compile server encountered fatal condition: " + ex)
           shutdown = true
           throw ex
       }
     }
     reporter.printSummary()
     if (isMemoryFullEnough) {
-      logVerbose("Nulling out compiler due to memory utilization.")
-      compiler = null
+      info("Nulling out compiler due to memory utilization.")
+      clearCompiler()
     }
   }
 }
@@ -166,12 +174,19 @@ class StandardCompileServer extends SocketServer {
 
 object CompileServer extends StandardCompileServer {
   /** A directory holding redirected output */
-  private val redirectDir = (compileSocket.tmpDir / "output-redirects").createDirectory()
+  private lazy val redirectDir = (compileSocket.tmpDir / "output-redirects").createDirectory()
 
   private def redirect(setter: PrintStream => Unit, filename: String): Unit =
     setter(new PrintStream((redirectDir / filename).createFile().bufferedOutput()))
   
   def main(args: Array[String]) {
+    val debug = args contains "-v"
+    
+    if (debug) {
+      echo("Starting CompileServer on port " + port)
+      echo("Redirect dir is " + redirectDir)
+    }
+
     redirect(System.setOut, "scala-compile-server-out.log")
     redirect(System.setErr, "scala-compile-server-err.log")
     System.err.println("...starting server on socket "+port+"...")
@@ -180,6 +195,6 @@ object CompileServer extends StandardCompileServer {
     run()
 
     compileSocket.deletePort(port)
-    exit(0)
+    sys.exit(0)
   }
 }

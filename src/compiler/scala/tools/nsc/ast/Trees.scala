@@ -20,7 +20,7 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
     def freshTermName(prefix: String): TermName
     def freshTypeName(prefix: String): TypeName
   }
-
+ 
   type CompilationUnit <: CompilationUnitTrait
   
   protected def flagsIntoString(flags: Long, privateWithin: String): String = flagsToString(flags, privateWithin)
@@ -265,7 +265,7 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
         if (vparamss1.isEmpty || !vparamss1.head.isEmpty && vparamss1.head.head.mods.isImplicit)
           vparamss1 = List() :: vparamss1;
         val superRef: Tree = atPos(superPos) {
-          Select(Super(tpnme.EMPTY, tpnme.EMPTY), nme.CONSTRUCTOR)
+          Select(Super(This(tpnme.EMPTY), tpnme.EMPTY), nme.CONSTRUCTOR)
         }
         val superCall = (superRef /: argss) (Apply)
         List(
@@ -298,7 +298,7 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
     (superRef /: argss) (Apply)
   }
   
-  def Super(sym: Symbol, mix: Name): Tree = Super(sym.name.toTypeName, mix.toTypeName) setSymbol sym
+  def Super(sym: Symbol, mix: TypeName): Tree = Super(This(sym), mix)
 
   def This(sym: Symbol): Tree = This(sym.name.toTypeName) setSymbol sym
 
@@ -326,7 +326,15 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
     private[Trees] var wasEmpty: Boolean = false
 
     def original: Tree = orig
-    def setOriginal(tree: Tree): this.type = { orig = tree; setPos(tree.pos); this }
+    def setOriginal(tree: Tree): this.type = { 
+      def followOriginal(t: Tree): Tree = t match {
+        case tt: TypeTree => followOriginal(tt.original)
+        case t => t
+      }
+        
+      orig = followOriginal(tree); setPos(tree.pos); 
+      this
+    }
 
     override def defineType(tp: Type): this.type = {
       wasEmpty = isEmpty
@@ -397,7 +405,7 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
     def TypeApply(tree: Tree, fun: Tree, args: List[Tree]): TypeApply
     def Apply(tree: Tree, fun: Tree, args: List[Tree]): Apply
     def ApplyDynamic(tree: Tree, qual: Tree, args: List[Tree]): ApplyDynamic
-    def Super(tree: Tree, qual: Name, mix: Name): Super
+    def Super(tree: Tree, qual: Tree, mix: TypeName): Super
     def This(tree: Tree, qual: Name): This
     def Select(tree: Tree, qualifier: Tree, selector: Name): Select
     def Ident(tree: Tree, name: Name): Ident
@@ -479,8 +487,8 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
       }).copyAttrs(tree)
     def ApplyDynamic(tree: Tree, qual: Tree, args: List[Tree]) =
       new ApplyDynamic(qual, args).copyAttrs(tree)
-    def Super(tree: Tree, qual: Name, mix: Name) =
-      new Super(qual.toTypeName, mix.toTypeName).copyAttrs(tree)
+    def Super(tree: Tree, qual: Tree, mix: TypeName) =
+      new Super(qual, mix).copyAttrs(tree)
     def This(tree: Tree, qual: Name) =
       new This(qual.toTypeName).copyAttrs(tree)
     def Select(tree: Tree, qualifier: Tree, selector: Name) =
@@ -665,7 +673,7 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
       if (qual0 == qual) && (args0 == args) => t
       case _ => treeCopy.ApplyDynamic(tree, qual, args)
     }
-    def Super(tree: Tree, qual: Name, mix: Name) = tree match {
+    def Super(tree: Tree, qual: Tree, mix: TypeName) = tree match {
       case t @ Super(qual0, mix0)
       if (qual0 == qual) && (mix0 == mix) => t
       case _ => treeCopy.Super(tree, qual, mix)
@@ -833,7 +841,7 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
       case ApplyDynamic(qual, args) =>
         treeCopy.ApplyDynamic(tree, transform(qual), transformTrees(args))
       case Super(qual, mix) =>
-        treeCopy.Super(tree, qual, mix)
+        treeCopy.Super(tree, transform(qual), mix)
       case This(qual) =>
         treeCopy.This(tree, qual)
       case Select(qualifier, selector) =>
@@ -910,9 +918,11 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
         traverseTrees(ts)
       case TypeTreeWithDeferredRefCheck() => // TODO: should we traverse the wrapped tree?
       // (and rewrap the result? how to update the deferred check? would need to store wrapped tree instead of returning it from check)
+      case Super(qual, _) => 
+        traverse(qual)  // !!! remove when Super is done
       case _ => super.traverse(tree)
     }
-    
+
     /** The abstract traverser is not aware of Tree.isTerm, so we override this one.
      */
     override def traverseStats(stats: List[Tree], exprOwner: Symbol) {
@@ -1102,10 +1112,15 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
   def resetLocalAttrs[A<:Tree](x:A): A = { new ResetLocalAttrsTraverser().traverse(x); x }
   
   /** A traverser which resets symbol and tpe fields of all nodes in a given tree
-   *  except for (1) TypeTree nodes, whose <code>.tpe</code> field is kept and
-   *  (2) if a <code>.symbol</code> field refers to a symbol which is defined
+   *  except for (1) TypeTree nodes, whose <code>.tpe</code> field is kept, and
+   *  (2) This(pkg) nodes, where pkg refers to a package symbol -- their attributes are kept, and
+   *  (3) if a <code>.symbol</code> field refers to a symbol which is defined
    *  outside the tree, it is also kept.
    *
+   *  (2) is necessary because some This(pkg) are generated where pkg is not
+   *  an enclosing package.n In that case, resetting the symbol would cause the
+   *  next type checking run to fail. See #3152.
+   *   
    *  (bq:) This traverser has mutable state and should be discarded after use
    */
   private class ResetAttrsTraverser extends Traverser {
@@ -1117,15 +1132,15 @@ trait Trees extends reflect.generic.Trees { self: SymbolTable =>
       tree match {
         case _: DefTree | Function(_, _) | Template(_, _, _) =>
           resetDef(tree)
-        case _ =>
-          if (tree.hasSymbol && isLocal(tree.symbol)) tree.symbol = NoSymbol
-      }
-      tree match {
+          tree.tpe = null
         case tpt: TypeTree =>
           if (tpt.wasEmpty) tree.tpe = null
+        case This(_) if tree.symbol != null && tree.symbol.isPackageClass =>
+          ;
         case EmptyTree =>
           ;
         case _ =>
+          if (tree.hasSymbol && isLocal(tree.symbol)) tree.symbol = NoSymbol
           tree.tpe = null
       }
       super.traverse(tree)

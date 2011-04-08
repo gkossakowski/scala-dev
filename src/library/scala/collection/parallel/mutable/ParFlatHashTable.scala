@@ -6,21 +6,16 @@
 **                          |/                                          **
 \*                                                                      */
 
-
 package scala.collection
 package parallel.mutable
 
-
-
-
 import collection.parallel.ParIterableIterator
-
-
-
 
 /** Parallel flat hash table.
  *  
- *  @tparam T        type of the elements in the table
+ *  @tparam T      type of the elements in the $coll.
+ *  @define coll   table
+ *  @define Coll   flat hash table
  *  
  *  @author Aleksandar Prokopec
  */
@@ -43,7 +38,7 @@ trait ParFlatHashTable[T] extends collection.mutable.FlatHashTable[T] {
       }
     }
     
-    private def checkbounds = if (idx >= itertable.length) {
+    private def checkbounds() = if (idx >= itertable.length) {
       throw new IndexOutOfBoundsException(idx.toString)
     }
     
@@ -51,7 +46,7 @@ trait ParFlatHashTable[T] extends collection.mutable.FlatHashTable[T] {
     
     def remaining = totalsize - traversed
     def hasNext = traversed < totalsize
-    def next = if (hasNext) {
+    def next() = if (hasNext) {
       val r = itertable(idx).asInstanceOf[T]
       traversed += 1
       idx += 1
@@ -108,7 +103,7 @@ trait ParFlatHashTable[T] extends collection.mutable.FlatHashTable[T] {
       count
     }
     
-    private def check = if (table.slice(idx, until).count(_ != null) != remaining) {
+    private def check() = if (table.slice(idx, until).count(_ != null) != remaining) {
       println("Invariant broken: " + debugInformation)
       assert(false)
     }

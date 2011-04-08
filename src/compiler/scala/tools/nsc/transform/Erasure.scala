@@ -190,8 +190,8 @@ abstract class Erasure extends AddInterfaces
             if (!parents.isEmpty) traverse(parents.head)
           case ClassInfoType(parents, _, _) =>
             parents foreach traverse
-	  case AnnotatedType(_, atp, _) =>
-	    traverse(atp)
+          case AnnotatedType(_, atp, _) =>
+            traverse(atp)
           case _ =>
             mapOver(tp)
         }
@@ -202,12 +202,19 @@ abstract class Erasure extends AddInterfaces
   private def needsJavaSig(tp: Type) = !settings.Ynogenericsig.value && NeedsSigCollector.collect(tp)
 
   // only refer to type params that will actually make it into the sig, this excludes:
-  // * higher-order type parameters (aka !sym.owner.isTypeParameterOrSkolem)
-  // * parameters of methods
-  private def isTypeParameterInSig(sym: Symbol) = (
-    sym.isTypeParameterOrSkolem &&
-    !sym.owner.isTypeParameterOrSkolem
+  // * higher-order type parameters
+  // * type parameters appearing in method parameters
+  // * type members not visible in an enclosing template
+  private def isTypeParameterInSig(sym: Symbol, initialSymbol: Symbol) = (
+    !sym.isHigherOrderTypeParameter &&
+    sym.isTypeParameterOrSkolem && (
+      (initialSymbol.enclClassChain.exists(sym isNestedIn _)) ||
+      traceSig("isMethod", (initialSymbol, initialSymbol.typeParams)) {
+        (initialSymbol.isMethod && initialSymbol.typeParams.contains(sym))
+      }
+    )
   )
+
   // Ensure every '.' in the generated signature immediately follows
   // a close angle bracket '>'.  Any which do not are replaced with '$'.
   // This arises due to multiply nested classes in the face of the
@@ -221,127 +228,194 @@ abstract class Erasure extends AddInterfaces
       case ch                 => last = ch ; ch
     }
   }
+  // for debugging signatures: traces logic given system property
+  private val traceProp = sys.BooleanProp keyExists "scalac.sigs.trace"
+  private val traceSig  = util.Tracer(traceProp)
+  
+  /** This object is only used for sanity testing when -check:genjvm is set.
+   *  In that case we make sure that the erasure of the `normalized' type
+   *  is the same as the erased type that's generated. Normalization means
+   *  unboxing some primitive types and further simplifications as they are done in jsig.
+   */
+  val prepareSigMap = new TypeMap {
+    def squashBoxed(tp: Type): Type = tp.normalize match {
+      case t @ RefinedType(parents, decls) =>
+        val parents1 = parents mapConserve squashBoxed
+        if (parents1 eq parents) tp
+        else RefinedType(parents1, decls)
+      case t @ ExistentialType(tparams, tpe) =>
+        val tpe1 = squashBoxed(tpe)
+        if (tpe1 eq tpe) t
+        else ExistentialType(tparams, tpe1)
+      case t =>  
+        if (boxedClass contains t.typeSymbol) ObjectClass.tpe
+        else tp
+    }
+    def apply(tp: Type): Type = tp.normalize match {
+      case tp1 @ TypeBounds(lo, hi) =>
+        val lo1 = squashBoxed(apply(lo))
+        val hi1 = squashBoxed(apply(hi))
+        if ((lo1 eq lo) && (hi1 eq hi)) tp1
+        else TypeBounds(lo1, hi1)
+      case tp1 @ TypeRef(pre, sym, args) =>
+        def argApply(tp: Type) = {
+          val tp1 = apply(tp)
+          if (tp1.typeSymbol == UnitClass) ObjectClass.tpe
+          else squashBoxed(tp1)
+        }
+        if (sym == ArrayClass && args.nonEmpty)
+          if (unboundedGenericArrayLevel(tp1) == 1) ObjectClass.tpe
+          else mapOver(tp1)
+        else if (sym == AnyClass || sym == AnyValClass || sym == SingletonClass) 
+          ObjectClass.tpe
+        else if (sym == UnitClass) 
+          BoxedUnitClass.tpe
+        else if (sym == NothingClass)
+          RuntimeNothingClass.tpe
+        else if (sym == NullClass)
+          RuntimeNullClass.tpe
+        else {
+          val pre1 = apply(pre)
+          val args1 = args mapConserve argApply
+          if ((pre1 eq pre) && (args1 eq args)) tp1
+          else TypeRef(pre1, sym, args1)
+        }
+      case tp1 @ MethodType(params, restpe) =>
+        val params1 = mapOver(params)
+        val restpe1 = if (restpe.normalize.typeSymbol == UnitClass) UnitClass.tpe else apply(restpe)
+        if ((params1 eq params) && (restpe1 eq restpe)) tp1
+        else MethodType(params1, restpe1)
+      case tp1 @ RefinedType(parents, decls) =>
+        val parents1 = parents mapConserve apply
+        if (parents1 eq parents) tp1
+        else RefinedType(parents1, decls)
+      case t @ ExistentialType(tparams, tpe) =>
+        val tpe1 = apply(tpe)
+        if (tpe1 eq tpe) t
+        else ExistentialType(tparams, tpe1)
+      case tp1: ClassInfoType =>
+        tp1
+      case tp1 =>
+        mapOver(tp1)
+    }
+  }
 
   /** The Java signature of type 'info', for symbol sym. The symbol is used to give the right return
    *  type for constructors.
    */
   def javaSig(sym0: Symbol, info: Type): Option[String] = atPhase(currentRun.erasurePhase) {
-    def jsig(tp: Type, mustBox: Boolean) = {
-      (boxedClass get tp.typeSymbol) match {
-        case Some(boxed) if mustBox   => jsig2(false, true, Nil, boxed.tpe)
-        case _                        => jsig2(false, mustBox, Nil, tp)
-      }
-    }
+    def boxedSig(tp: Type) = jsig(tp, primitiveOK = false)
+
     def hiBounds(bounds: TypeBounds): List[Type] = bounds.hi.normalize match {
       case RefinedType(parents, _) => parents map normalize
-      case tp                      => List(tp)
+      case tp                      => tp :: Nil
     }
-
-    def jsig2(toplevel: Boolean, mustBox: Boolean, tparams: List[Symbol], tp0: Type): String = {
+    
+    def jsig(tp0: Type, existentiallyBound: List[Symbol] = Nil, toplevel: Boolean = false, primitiveOK: Boolean = true): String = {
       val tp = tp0.dealias 
       tp match {
         case st: SubType =>
-          jsig2(toplevel, mustBox, tparams, st.supertype)
+          jsig(st.supertype, existentiallyBound, toplevel, primitiveOK)
         case ExistentialType(tparams, tpe) =>
-          jsig2(toplevel, true, tparams, tpe)
+          jsig(tpe, tparams, toplevel, primitiveOK)
         case TypeRef(pre, sym, args) =>
           def argSig(tp: Type) =
-            if (tparams contains tp.typeSymbol) {
+            if (existentiallyBound contains tp.typeSymbol) {
               val bounds = tp.typeSymbol.info.bounds
-              if (AnyRefClass.tpe <:< bounds.hi) {
-                if (bounds.lo <:< NullClass.tpe) "*"
-                else "-" + jsig(bounds.lo, true)
-              }
-              else "+" + jsig(bounds.hi, true)
-            }
-            else if (tp.typeSymbol == UnitClass) {
-              jsig(ObjectClass.tpe, true)
+              if (!(AnyRefClass.tpe <:< bounds.hi)) "+" + boxedSig(bounds.hi)
+              else if (!(bounds.lo <:< NullClass.tpe)) "-" + boxedSig(bounds.lo)
+              else "*"
             } else {
-              jsig(tp, true)
+              boxedSig(tp)
             }
-          def classSig = (
+          def classSig: String = 
             "L"+atPhase(currentRun.icodePhase)(sym.fullName + global.genJVM.moduleSuffix(sym)).replace('.', '/')
-          )
-          def classSigSuffix = "." + sym.name
+          def classSigSuffix: String = 
+            "."+sym.name
 
           // If args isEmpty, Array is being used as a higher-kinded type
           if (sym == ArrayClass && args.nonEmpty) {
-            if (unboundedGenericArrayLevel(tp) == 1) jsig(ObjectClass.tpe, true)
-            else ARRAY_TAG.toString+(args map (x => jsig(x, false))).mkString
+            if (unboundedGenericArrayLevel(tp) == 1) jsig(ObjectClass.tpe)
+            else ARRAY_TAG.toString+(args map (jsig(_))).mkString
           }
-          else if (isTypeParameterInSig(sym))
+          else if (isTypeParameterInSig(sym, sym0)) {
+            assert(!sym.isAliasType, "Unexpected alias type: " + sym)
             TVAR_TAG.toString+sym.name+";"
+          }
           else if (sym == AnyClass || sym == AnyValClass || sym == SingletonClass) 
-            jsig(ObjectClass.tpe, mustBox)
+            jsig(ObjectClass.tpe)
           else if (sym == UnitClass) 
-            jsig(BoxedUnitClass.tpe, mustBox)
+            jsig(BoxedUnitClass.tpe)
           else if (sym == NothingClass)
-            jsig(RuntimeNothingClass.tpe, mustBox)
+            jsig(RuntimeNothingClass.tpe)
           else if (sym == NullClass)
-            jsig(RuntimeNullClass.tpe, mustBox)
-          else if (isValueClass(sym))
-            abbrvTag(sym).toString
+            jsig(RuntimeNullClass.tpe)
+          else if (isValueClass(sym)) {
+            if (!primitiveOK) jsig(ObjectClass.tpe)
+            else if (sym == UnitClass) jsig(BoxedUnitClass.tpe)
+            else abbrvTag(sym).toString
+          }
           else if (sym.isClass) {
             val preRebound = pre.baseType(sym.owner) // #2585
-            dotCleanup(
-              (
-                if (needsJavaSig(preRebound)) {
-                  val s = jsig(preRebound, mustBox)
-                  if (s.charAt(0) == 'L') s.substring(0, s.length - 1) + classSigSuffix
+            traceSig("sym.isClass", (sym.ownerChain, preRebound, sym0.enclClassChain)) {
+              dotCleanup(
+                (
+                  if (needsJavaSig(preRebound)) {
+                    val s = jsig(preRebound, existentiallyBound)
+                    if (s.charAt(0) == 'L') s.substring(0, s.length - 1) + classSigSuffix
+                    else classSig
+                  }
                   else classSig
-                }
-                else classSig
-              ) + (
-                if (args.isEmpty) "" else
-                "<"+(args map argSig).mkString+">"
-              ) + (
-                ";"
+                ) + (
+                  if (args.isEmpty) "" else
+                  "<"+(args map argSig).mkString+">"
+                ) + (
+                  ";"
+                )
               )
-            )
+            }
           }
-          else jsig(erasure(tp), mustBox)
+          else jsig(erasure(tp), existentiallyBound, toplevel, primitiveOK)
         case PolyType(tparams, restpe) =>
           assert(tparams.nonEmpty)
           def boundSig(bounds: List[Type]) = {
             val (isTrait, isClass) = bounds partition (_.typeSymbol.isTrait)
             
             ":" + (
-              if (isClass.isEmpty) "" else jsig(isClass.head, true)
+              if (isClass.isEmpty) "" else boxedSig(isClass.head)
             ) + (
-              isTrait map (x => ":" + jsig(x, true)) mkString
+              isTrait map (x => ":" + boxedSig(x)) mkString
             )
           }
           def paramSig(tsym: Symbol) = tsym.name + boundSig(hiBounds(tsym.info.bounds))
           
           val paramString = if (toplevel) tparams map paramSig mkString ("<", "", ">") else ""
-          paramString + jsig(restpe, false)
+          traceSig("PolyType", (tparams, restpe))(paramString + jsig(restpe))
         case MethodType(params, restpe) =>
-          "("+(params map (_.tpe) map (x => jsig(x, false))).mkString+")"+
-          (if (restpe.typeSymbol == UnitClass || sym0.isConstructor) VOID_TAG.toString else jsig(restpe, false))
-        case RefinedType(parents, decls) if (!parents.isEmpty) =>
-          jsig(parents.head, mustBox)
+          "("+(params map (_.tpe) map (jsig(_))).mkString+")"+
+          (if (restpe.typeSymbol == UnitClass || sym0.isConstructor) VOID_TAG.toString else jsig(restpe))
+        case RefinedType(parent :: _, decls) =>
+          boxedSig(parent)
         case ClassInfoType(parents, _, _) =>
-          (parents map (x => jsig(x, true))).mkString
+          (parents map (boxedSig(_))).mkString
         case AnnotatedType(_, atp, _) =>
-          jsig(atp, mustBox)
+          jsig(atp, existentiallyBound, toplevel, primitiveOK)
         case BoundedWildcardType(bounds) =>
           println("something's wrong: "+sym0+":"+sym0.tpe+" has a bounded wildcard type")
-          jsig(bounds.hi, true)
+          jsig(bounds.hi, existentiallyBound, toplevel, primitiveOK)
         case _ =>
           val etp = erasure(tp)
           if (etp eq tp) throw new UnknownSig
-          else jsig(etp, mustBox)
+          else jsig(etp)
       }
     }
-    if (needsJavaSig(info)) {
-      try {
-        //println("Java sig of "+sym0+" is "+jsig2(true, List(), sym0.info))//DEBUG
-        Some(jsig2(true, false, Nil, info))
-      } catch {
-        case ex: UnknownSig => None
+    traceSig("javaSig", (sym0, info)) {
+      if (needsJavaSig(info)) {
+        try Some(jsig(info, toplevel = true))
+        catch { case ex: UnknownSig => None }
       }
+      else None
     }
-    else None
   }
 
   class UnknownSig extends Exception
@@ -895,15 +969,14 @@ abstract class Erasure extends AddInterfaces
               SelectFromArray(qual, name, erasure(qual.tpe)).copyAttrs(fn),
               args)
 
-        case Apply(fn @ Select(qual, _), Nil) if (fn.symbol == Any_## || fn.symbol == Object_##) =>
+        case Apply(fn @ Select(qual, _), Nil) if fn.symbol == Any_## || fn.symbol == Object_## =>
           // This is unattractive, but without it we crash here on ().## because after
           // erasure the ScalaRunTime.hash overload goes from Unit => Int to BoxedUnit => Int.
           // This must be because some earlier transformation is being skipped on ##, but so
-          // far I don't know what.  We also crash on null.## but unless we want to implement
-          // my good idea that null.## works (like null == "abc" works) we have to NPE.
+          // far I don't know what.  For null we now define null.## == 0.
           val arg = qual.tpe.typeSymbolDirect match {
-            case UnitClass  => BLOCK(qual, REF(BoxedUnit_UNIT))       // ({ expr; UNIT }).##
-            case NullClass  => Typed(qual, TypeTree(ObjectClass.tpe)) // (null: Object).##
+            case UnitClass  => BLOCK(qual, REF(BoxedUnit_UNIT))   // ({ expr; UNIT }).##
+            case NullClass  => LIT(0)                             // (null: Object).##
             case _          => qual
           }
           Apply(gen.mkAttributedRef(scalaRuntimeHash), List(arg))

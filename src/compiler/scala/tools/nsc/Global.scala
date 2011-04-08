@@ -155,6 +155,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
   def informProgress(msg: String)          = if (opt.verbose) inform("[" + msg + "]")
   def inform[T](msg: String, value: T): T  = returning(value)(x => inform(msg + x))
   def informTime(msg: String, start: Long) = informProgress(elapsedMessage(msg, start))
+  def informTime0(msg: String, start: Long) = if (System.getProperty("scalacTimings") != null) inform("[" + elapsedMessage(msg, start) + "]")
 
   def logError(msg: String, t: Throwable): Unit = ()
   def log(msg: => AnyRef): Unit = if (opt.logPhase) inform("[log " + phase + "] " + msg)
@@ -317,14 +318,18 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
     final def applyPhase(unit: CompilationUnit) {
       if (opt.echoFilenames)
         inform("[running phase " + name + " on " + unit + "]")
-          
+      
+      val startTime = currentTime
       val unit0 = currentRun.currentUnit
       try {
-        currentRun.currentUnit = unit
-        if (!cancelled(unit))
+        currentRun.currentUnit = unit       
+        if (!cancelled(unit)) {
+          currentRun.informUnitStarting(this, unit)
           reporter.withSource(unit.source) { apply(unit) }
+        }
         currentRun.advanceUnit
       } finally {
+        informTime0("phase " + name + " on " + unit, startTime)
         //assert(currentRun.currentUnit == unit)
         currentRun.currentUnit = unit0
       }
@@ -659,8 +664,21 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
     /** To be initialized from firstPhase. */
     private var terminalPhase: Phase = NoPhase
 
-    /** Whether compilation should stop at or skip the phase with given name. */
-    protected def stopPhase(name: String) = settings.stop contains name
+    // Calculate where to stop based on settings -Ystop-before or -Ystop-after.
+    // Slightly complicated logic due to wanting -Ystop-before:parser to fail rather
+    // than mysteriously running to completion.
+    private lazy val stopPhaseSetting = {
+      val result = phaseDescriptors sliding 2 collectFirst {
+        case xs if xs exists (settings.stopBefore contains _.phaseName) => if (settings.stopBefore contains xs.head.phaseName) xs.head else xs.last
+        case xs if settings.stopAfter contains xs.head.phaseName        => xs.last
+      }
+      if (result exists (_.phaseName == "parser"))
+        globalError("Cannot stop before parser phase.")
+      
+      result
+    }
+    // The phase to stop BEFORE running.
+    protected def stopPhase(name: String) = stopPhaseSetting exists (_.phaseName == name)
     protected def skipPhase(name: String) = settings.skip contains name
 
     /** As definitions.init requires phase != NoPhase, and calling phaseDescriptors.head
@@ -679,7 +697,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
 
       // Flush the cache in the terminal phase: the chain could have been built
       // before without being used. (This happens in the interpreter.)
-      terminal.reset 
+      terminal.reset
 
       // Each subcomponent supplies a phase, which are chained together.
       //   If -Ystop:phase is given, neither that phase nor any beyond it is added.
@@ -714,6 +732,12 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
      */
     def progress(current: Int, total: Int) {}
 
+    /**
+     * For subclasses to override. Called when `phase` is about to be run on `unit`.
+     * Variables are passed explicitly to indicate that `globalPhase` and `currentUnit` have been set.
+     */
+    def informUnitStarting(phase: Phase, unit: CompilationUnit) { }
+    
     /** take note that phase is completed
      *  (for progress reporting)
      */
@@ -784,8 +808,20 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
       _unitbufSize += 1 // counting as they're added so size is cheap
       compiledFiles += unit.source.file.path
     }
+    private def checkDeprecatedSettings(unit: CompilationUnit) {
+      // issue warnings for any usage of deprecated settings
+      settings.userSetSettings filter (_.isDeprecated) foreach { s =>
+        unit.deprecationWarning(NoPosition, s.name + " is deprecated: " + s.deprecationMessage.get)
+      }      
+    }
 
     /* An iterator returning all the units being compiled in this run */
+    /* !!! Note: changing this to unitbuf.toList.iterator breaks a bunch
+       of tests in tests/res.  This is bad, it means the resident compiler
+       relies on an iterator of a mutable data structure reflecting changes
+       made to the underlying structure (in whatever accidental way it is
+       currently depending upon.)
+     */
     def units: Iterator[CompilationUnit] = unitbuf.iterator
 
     /** A map from compiled top-level symbols to their source files */
@@ -853,18 +889,52 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
         }
       }
     }
+    
+    def reportCompileErrors() {
+      if (reporter.hasErrors) {
+        for ((sym, file) <- symSource.iterator) {
+          sym.reset(new loaders.SourcefileLoader(file))
+          if (sym.isTerm)
+            sym.moduleClass reset loaders.moduleClassLoader
+        }
+      }
+      else {
+        def warn(count: Int, what: String, option: Settings#BooleanSetting) = (
+          if (option.isDefault && count > 0)
+            warning("there were %d %s warnings; re-run with %s for details".format(count, what, option.name))
+        )
+        warn(deprecationWarnings, "deprecation", settings.deprecation)
+        warn(uncheckedWarnings, "unchecked", settings.unchecked)
+        // todo: migrationWarnings
+      }
+    }
 
     /** Compile list of source files */
     def compileSources(_sources: List[SourceFile]) {
-      val depSources = dependencyAnalysis.calculateFiles(_sources.distinct) // bug #1268, scalac confused by duplicated filenames
+      val depSources = dependencyAnalysis calculateFiles _sources.distinct
       val sources    = coreClassesFirst(depSources)
-      if (reporter.hasErrors) // there is a problem already, e.g. a plugin was passed a bad option
+      // there is a problem already, e.g. a plugin was passed a bad option
+      if (reporter.hasErrors)
         return
 
-      val startTime = currentTime
-      reporter.reset()
-      for (source <- sources) addUnit(new CompilationUnit(source))
+      // nothing to compile, but we should still report use of deprecated options
+      if (sources.isEmpty) {
+        checkDeprecatedSettings(new CompilationUnit(new BatchSourceFile("<no file>", "")))
+        reportCompileErrors()
+        return
+      }
 
+      val startTime = currentTime
+      reporter.reset();
+      {
+        val first :: rest = sources
+        val unit = new CompilationUnit(first)
+        addUnit(unit)
+        checkDeprecatedSettings(unit)
+        
+        for (source <- rest)
+          addUnit(new CompilationUnit(source))
+      }
       globalPhase = firstPhase
 
       if (opt.profileAll) {
@@ -886,7 +956,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
           profiler.advanceGeneration(globalPhase.name)
         
         // progress update
-        informTime(globalPhase.description, startTime)
+        informTime0(globalPhase.description, startTime)
         phaseTimings(globalPhase) = currentTime - startTime
 
         // write icode to *.icode files
@@ -933,25 +1003,9 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
       if (opt.noShow)
         showMembers()
 
-      if (reporter.hasErrors) {
-        for ((sym, file) <- symSource.iterator) {
-          sym.reset(new loaders.SourcefileLoader(file))
-          if (sym.isTerm)
-            sym.moduleClass reset loaders.moduleClassLoader
-        }
-      }
-      else {
-        def warn(count: Int, what: String, option: Settings#BooleanSetting) = (
-          if (option.isDefault && count > 0)
-            warning("there were %d %s warnings; re-run with %s for details".format(count, what, option.name))
-        )
-        warn(deprecationWarnings, "deprecation", settings.deprecation)
-        warn(uncheckedWarnings, "unchecked", settings.unchecked)
-        // todo: migrationWarnings
-      }
-
+      reportCompileErrors()
       symSource.keys foreach (x => resetPackageClass(x.owner))
-      informTime("total", startTime)
+      informTime0("total", startTime)
       
       // save heap snapshot if requested
       if (opt.profileMem) {
@@ -1040,7 +1094,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
     /**
      * Re-orders the source files to
      *  1. ScalaObject
-     *  2. LowPriorityImplicits / StandardEmbeddings (i.e. parents of Predef)
+     *  2. LowPriorityImplicits / EmbeddedControls (i.e. parents of Predef)
      *  3. the rest
      *
      * 1 is to avoid cyclic reference errors.
@@ -1063,13 +1117,15 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
      *
      */
     private def coreClassesFirst(files: List[SourceFile]) = {
+      val goLast = 4
       def rank(f: SourceFile) = {
-        if (f.file.container.name != "scala") 3
+        if (f.file.container.name != "scala") goLast
         else f.file.name match {
           case "ScalaObject.scala"            => 1
           case "LowPriorityImplicits.scala"   => 2
-          case "StandardEmbeddings.scala"     => 2
-          case _                              => 3
+          case "EmbeddedControls.scala"       => 2
+          case "Predef.scala"                 => 3 /* Predef.scala before Any.scala, etc. */
+          case _                              => goLast 
         }
       }
       files sortBy rank

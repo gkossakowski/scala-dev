@@ -160,7 +160,7 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
     var es = iterTable(idx).asInstanceOf[Entry]
     scan()
     def hasNext = es != null
-    def next = {
+    def next() = {
       val res = es
       es = es.next
       scan()
@@ -295,7 +295,7 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
     println(sizemap.toList)
   }
   
-  protected def sizeMapDisable = sizemap = null
+  protected def sizeMapDisable() = sizemap = null
   
   protected def isSizeMapDefined = sizemap ne null
   
@@ -363,7 +363,7 @@ private[collection] object HashTable {
     // so that:
     protected final def sizeMapBucketSize = 1 << sizeMapBucketBitSize
     
-    protected def elemHashCode(key: KeyType) = if (key == null) 0 else key.##
+    protected def elemHashCode(key: KeyType) = key.##
     
     protected final def improve(hcode: Int) = {
       /* Murmur hash

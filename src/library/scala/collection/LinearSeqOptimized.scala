@@ -6,11 +6,9 @@
 **                          |/                                          **
 \*                                                                      */
 
-
-
 package scala.collection
-import generic._
 
+import generic._
 import mutable.ListBuffer
 import immutable.List
 import scala.util.control.Breaks._
@@ -165,6 +163,15 @@ trait LinearSeqOptimized[+A, +Repr <: LinearSeqOptimized[A, Repr]] extends Linea
       these = these.tail
       count -= 1
     }
+    // !!! This line should actually be something like:
+    //   newBuilder ++= these result
+    // since we are in collection.*, not immutable.*.
+    // However making that change will pessimize all the
+    // immutable linear seqs (like list) which surely expect
+    // drop to share.
+    //
+    // Upshot: MutableList is broken and passes part of the
+    // original list as the result of drop.
     these
   }
 
@@ -183,15 +190,23 @@ trait LinearSeqOptimized[+A, +Repr <: LinearSeqOptimized[A, Repr]] extends Linea
 
   override /*IterableLike*/ 
   def slice(from: Int, until: Int): Repr = {
-    val b = newBuilder 
-    var i = from
-    var these = this drop from
-    while (i < until && !these.isEmpty) {
+    var these: Repr = repr
+    var count = from max 0
+    if (until <= count)
+      return newBuilder.result
+
+    val b = newBuilder
+    var sliceElems = until - count
+    while (these.nonEmpty && count > 0) {
+      these = these.tail
+      count -= 1
+    }
+    while (these.nonEmpty && sliceElems > 0) {
+      sliceElems -= 1
       b += these.head
       these = these.tail
-      i += 1
     }
-    b.result
+    b.result    
   }
 
   override /*IterableLike*/ 

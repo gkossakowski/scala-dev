@@ -164,7 +164,7 @@ trait AdaptiveWorkStealingTasks extends Tasks {
     def compute = if (body.shouldSplitFurther) internal else body.tryLeaf(None)
     
     def internal = {
-      var last = spawnSubtasks
+      var last = spawnSubtasks()
       
       last.body.tryLeaf(None)
       body.result = last.body.result
@@ -187,7 +187,7 @@ trait AdaptiveWorkStealingTasks extends Tasks {
       }
     }
     
-    def spawnSubtasks = {
+    def spawnSubtasks() = {
       var last: TaskImpl[R, Tp] = null
       var head: TaskImpl[R, Tp] = this
       do {
@@ -203,7 +203,7 @@ trait AdaptiveWorkStealingTasks extends Tasks {
       head
     }
     
-    def printChain = {
+    def printChain() = {
       var curr = this
       var chain = "chain: "
       while (curr != null) {
@@ -244,7 +244,10 @@ trait ThreadPoolTasks extends Tasks {
       // utb: future.get()
       executor.synchronized {
         val coresize = executor.getCorePoolSize
-        if (coresize < totaltasks) executor.setCorePoolSize(coresize + 1)
+        if (coresize < totaltasks) {
+          executor.setCorePoolSize(coresize + 1)
+          //assert(executor.getCorePoolSize == (coresize + 1))
+        }
       }
       if (!completed) this.wait
     }
@@ -276,7 +279,9 @@ trait ThreadPoolTasks extends Tasks {
     }
     override def release = synchronized {
       completed = true
-      decrTasks
+      executor.synchronized {
+        decrTasks
+      }
       this.notifyAll
     }
   }
@@ -329,6 +334,8 @@ object ThreadPoolTasks {
   
   val numCores = Runtime.getRuntime.availableProcessors
   
+  val tcount = new atomic.AtomicLong(0L)
+  
   val defaultThreadPool = new ThreadPoolExecutor(
     numCores,
     Int.MaxValue,
@@ -337,6 +344,7 @@ object ThreadPoolTasks {
     new ThreadFactory {
       def newThread(r: Runnable) = {
         val t = new Thread(r)
+        t.setName("pc-thread-" + tcount.incrementAndGet)
         t.setDaemon(true)
         t
       }
@@ -344,6 +352,70 @@ object ThreadPoolTasks {
     new ThreadPoolExecutor.CallerRunsPolicy
   )
 }
+
+
+/** An implementation of tasks objects based on the Java thread pooling API and synchronization using futures. */
+trait FutureThreadPoolTasks extends Tasks {
+  import java.util.concurrent._
+  
+  trait TaskImpl[R, +Tp] extends Runnable with super.TaskImpl[R, Tp] {
+    @volatile var future: Future[_] = null
+    
+    def start = {
+      executor.synchronized {
+        future = executor.submit(this)
+      }
+    }
+    def sync = future.get
+    def tryCancel = false
+    def run = {
+      compute
+    }
+  }
+  
+  protected def newTaskImpl[R, Tp](b: Task[R, Tp]): TaskImpl[R, Tp]
+  
+  var environment: AnyRef = FutureThreadPoolTasks.defaultThreadPool
+  def executor = environment.asInstanceOf[ThreadPoolExecutor]
+  
+  def execute[R, Tp](task: Task[R, Tp]): () => R = {
+    val t = newTaskImpl(task)
+    
+    // debuglog("-----------> Executing without wait: " + task)
+    t.start
+    
+    () => {
+      t.sync
+      t.body.forwardThrowable
+      t.body.result
+    }
+  }
+  
+  def executeAndWaitResult[R, Tp](task: Task[R, Tp]): R = {
+    val t = newTaskImpl(task)
+    
+    // debuglog("-----------> Executing with wait: " + task)
+    t.start
+    
+    t.sync
+    t.body.forwardThrowable
+    t.body.result
+  }
+  
+  def parallelismLevel = FutureThreadPoolTasks.numCores
+  
+}
+
+object FutureThreadPoolTasks {
+  import java.util.concurrent._
+  
+  val numCores = Runtime.getRuntime.availableProcessors
+  
+  val tcount = new atomic.AtomicLong(0L)
+  
+  val defaultThreadPool = Executors.newCachedThreadPool()
+}
+
 
 
 /**
@@ -424,7 +496,7 @@ trait ForkJoinTasks extends Tasks with HavingForkJoinPool {
 
 
 object ForkJoinTasks {
-  val defaultForkJoinPool: ForkJoinPool = scala.parallel.forkjoinpool
+  val defaultForkJoinPool: ForkJoinPool = new ForkJoinPool() // scala.parallel.forkjoinpool
   // defaultForkJoinPool.setParallelism(Runtime.getRuntime.availableProcessors)
   // defaultForkJoinPool.setMaximumPoolSize(Runtime.getRuntime.availableProcessors)
 }

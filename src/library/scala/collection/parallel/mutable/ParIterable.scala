@@ -32,9 +32,14 @@ trait ParIterable[T] extends collection.mutable.Iterable[T]
                         with GenericParTemplate[T, ParIterable]
                         with ParIterableLike[T, ParIterable[T], Iterable[T]] {
   override def companion: GenericCompanion[ParIterable] with GenericParCompanion[ParIterable] = ParIterable
+  
+  // if `mutable.ParIterableLike` is introduced, please move these 4 methods there
+  override def toIterable: ParIterable[T] = this
+  
+  override def toSeq: ParSeq[T] = toParCollection[T, ParSeq[T]](() => ParSeq.newCombiner[T])
 }
 
-/** $factoryinfo
+/** $factoryInfo
  */
 object ParIterable extends ParFactory[ParIterable] {
   implicit def canBuildFrom[T]: CanCombineFrom[Coll, T, ParIterable[T]] =

@@ -12,7 +12,7 @@ package io
 
 import java.io.{ 
   FileInputStream, FileOutputStream, BufferedReader, BufferedWriter, InputStreamReader, OutputStreamWriter, 
-  BufferedInputStream, BufferedOutputStream, IOException, PrintStream, PrintWriter, File => JFile, Closeable => JCloseable }
+  BufferedInputStream, BufferedOutputStream, IOException, PrintStream, PrintWriter, Closeable => JCloseable }
 import java.nio.channels.{ Channel, FileChannel }
 import scala.io.Codec
 
@@ -136,6 +136,10 @@ class File(jfile: JFile)(implicit constructorCodec: Codec) extends Path(jfile) w
     try strings foreach (out println _)
     finally out close
   }
+  
+  def safeSlurp(): Option[String] =
+    try Some(slurp())
+    catch { case _: IOException => None }
 
   def copyTo(destPath: Path, preserveFileDate: Boolean = false): Boolean = {
     val CHUNK = 1024 * 1024 * 16  // 16 MB

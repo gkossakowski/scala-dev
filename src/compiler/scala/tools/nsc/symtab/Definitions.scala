@@ -550,10 +550,10 @@ trait Definitions extends reflect.generic.StandardDefinitions {
     var Object_synchronized: Symbol = _
     lazy val Object_isInstanceOf = newPolyMethod(
       ObjectClass, "$isInstanceOf",
-      tparam => MethodType(List(), booltype)) setFlag FINAL
+      tparam => MethodType(List(), booltype)) setFlag (FINAL | SYNTHETIC)
     lazy val Object_asInstanceOf = newPolyMethod(
       ObjectClass, "$asInstanceOf",
-      tparam => MethodType(List(), tparam.typeConstructor)) setFlag FINAL
+      tparam => MethodType(List(), tparam.typeConstructor)) setFlag (FINAL | SYNTHETIC)
 
     def Object_getClass  = getMember(ObjectClass, nme.getClass_)
     def Object_clone     = getMember(ObjectClass, nme.clone_)
@@ -624,6 +624,10 @@ trait Definitions extends reflect.generic.StandardDefinitions {
         case NoSymbol => throw new FatalError(owner + " does not have a member " + name)
         case result   => result
       }
+    }
+    def packageExists(packageName: String): Boolean = {
+      try getModuleOrClass(newTermName(packageName)).isPackage
+      catch { case _: MissingRequirementError => false }
     }
     
     /** If you're looking for a class, pass a type name.
@@ -725,6 +729,7 @@ trait Definitions extends reflect.generic.StandardDefinitions {
 
     /** Is symbol a value class? */
     def isValueClass(sym: Symbol) = scalaValueClassesSet(sym)
+    def isNonUnitValueClass(sym: Symbol) = (sym != UnitClass) && isValueClass(sym)
       
     /** Is symbol a boxed value class, e.g. java.lang.Integer? */
     def isBoxedValueClass(sym: Symbol) = boxedValueClassesSet(sym)
@@ -751,7 +756,8 @@ trait Definitions extends reflect.generic.StandardDefinitions {
         case _ => tp
       }
       def flatNameString(sym: Symbol, separator: Char): String =
-        if (sym.owner.isPackageClass) sym.fullName('.') + (if (sym.isModuleClass) "$" else "")
+        if (sym == NoSymbol) ""   // be more resistant to error conditions, e.g. neg/t3222.scala
+        else if (sym.owner.isPackageClass) sym.fullName('.') + (if (sym.isModuleClass) "$" else "")
         else flatNameString(sym.owner, separator) + "$" + sym.simpleName;
       def signature1(etp: Type): String = {
         if (etp.typeSymbol == ArrayClass) "[" + signature1(erasure(etp.normalize.typeArgs.head))
@@ -853,48 +859,6 @@ trait Definitions extends reflect.generic.StandardDefinitions {
         setParents(sym, anyvalparam)
       }
 
-      if (forMSIL) {
-        val intType = IntClass.typeConstructor
-        val intParam = List(intType)
-        val longType = LongClass.typeConstructor
-        val charType = CharClass.typeConstructor
-        val unitType = UnitClass.typeConstructor
-        val stringType = StringClass.typeConstructor
-        val stringParam = List(stringType)
-
-        // additional methods of Object
-        newMethod(ObjectClass, "clone", List(), AnyRefClass.typeConstructor)
-        // wait in Java returns void, on .NET Wait returns boolean. by putting
-        //  `booltype` the compiler adds a `drop` after calling wait.
-        newMethod(ObjectClass, "wait", List(), booltype)
-        newMethod(ObjectClass, "wait", List(longType), booltype)
-        newMethod(ObjectClass, "notify", List(), unitType)
-        newMethod(ObjectClass, "notifyAll", List(), unitType)
-
-        // additional methods of String
-        newMethod(StringClass, "length", List(), intType)
-        newMethod(StringClass, "compareTo", stringParam, intType)
-        newMethod(StringClass, "charAt", intParam, charType)
-        newMethod(StringClass, "concat", stringParam, stringType)
-        newMethod(StringClass, "indexOf", intParam, intType)
-        newMethod(StringClass, "indexOf", List(intType, intType), intType)
-        newMethod(StringClass, "indexOf", stringParam, intType)
-        newMethod(StringClass, "indexOf", List(stringType, intType), intType)
-        newMethod(StringClass, "lastIndexOf", intParam, intType)
-        newMethod(StringClass, "lastIndexOf", List(intType, intType), intType)
-        newMethod(StringClass, "lastIndexOf", stringParam, intType)
-        newMethod(StringClass, "lastIndexOf", List(stringType, intType), intType)
-        newMethod(StringClass, "toLowerCase", List(), stringType)
-        newMethod(StringClass, "toUpperCase", List(), stringType)
-        newMethod(StringClass, "startsWith", stringParam, booltype)
-        newMethod(StringClass, "endsWith", stringParam, booltype)
-        newMethod(StringClass, "substring", intParam, stringType)
-        newMethod(StringClass, "substring", List(intType, intType), stringType)
-        newMethod(StringClass, "trim", List(), stringType)
-        newMethod(StringClass, "intern", List(), stringType)
-        newMethod(StringClass, "replace", List(charType, charType), stringType)
-        newMethod(StringClass, "toCharArray", List(), arrayType(charType))
-      }
       isInitialized = true
     } //init
 

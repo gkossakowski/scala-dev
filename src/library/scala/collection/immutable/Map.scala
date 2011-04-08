@@ -33,7 +33,10 @@ trait Map[A, +B] extends Iterable[(A, B)]
   override def toMap[T, U](implicit ev: (A, B) <:< (T, U)): immutable.Map[T, U] =
     self.asInstanceOf[immutable.Map[T, U]]
 
+  override def seq: Map[A, B] = this
+
   /** The same map with a given default function.
+   *  Note: `get`, `contains`, `iterator`, `keys`, etc are not affected by `withDefault`.
    *  
    *  Invoking transformer methods (e.g. `map`) will not preserve the default value.
    *

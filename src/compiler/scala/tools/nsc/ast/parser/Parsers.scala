@@ -376,7 +376,7 @@ self =>
         Nil,
         List(Nil),
         TypeTree(),
-        Block(List(Apply(Select(Super(tpnme.EMPTY, tpnme.EMPTY), nme.CONSTRUCTOR), Nil)), Literal(Constant(())))
+        Block(List(Apply(Select(Super(This(tpnme.EMPTY), tpnme.EMPTY), nme.CONSTRUCTOR), Nil)), Literal(Constant(())))
       )
 
       // def main
@@ -977,7 +977,10 @@ self =>
     def selector(t: Tree): Tree = {
       val point = in.offset
       //assert(t.pos.isDefined, t)
-      Select(t, ident(false)) setPos r2p(t.pos.startOrPoint, point, in.lastOffset)
+      if (t != EmptyTree)
+        Select(t, ident(false)) setPos r2p(t.pos.startOrPoint, point, in.lastOffset)
+      else
+        errorTermTree // has already been reported
     }
 
     /** Path       ::= StableId
@@ -995,7 +998,7 @@ self =>
         }
       } else if (in.token == SUPER) {
         in.nextToken()
-        t = atPos(start) { Super(tpnme.EMPTY, mixinQualifierOpt()) }
+        t = atPos(start) { Super(This(tpnme.EMPTY), mixinQualifierOpt()) }
         accept(DOT)
         t = selector(t)
         if (in.token == DOT) t = selectors(t, typeOK, in.skipToken())
@@ -1015,7 +1018,7 @@ self =>
               t = selectors(t, typeOK, accept(DOT))
           } else if (in.token == SUPER) {
             in.nextToken()
-            t = atPos(start) { Super(name.toTypeName, mixinQualifierOpt()) }
+            t = atPos(start) { Super(This(name.toTypeName), mixinQualifierOpt()) }
             accept(DOT)
             t = selector(t)
             if (in.token == DOT) t = selectors(t, typeOK, in.skipToken())
@@ -1431,7 +1434,7 @@ self =>
       val t =
         if (isLiteral) atPos(in.offset)(literal(false))
         else in.token match {
-          case XMLSTART => 
+          case XMLSTART =>
             xmlLiteral()
           case IDENTIFIER | BACKQUOTED_IDENT | THIS | SUPER =>
             path(true, false)
@@ -2317,7 +2320,7 @@ self =>
         var newmods = mods
         val nameOffset = in.offset
         val name = ident()
-        atPos(start, if (name == nme.ERROR) start else nameOffset) {
+        val result = atPos(start, if (name == nme.ERROR) start else nameOffset) {
           // contextBoundBuf is for context bounded type parameters of the form
           // [T : B] or [T : => B]; it contains the equivalent implicit parameter type,
           // i.e. (B[T] or T => B)
@@ -2339,6 +2342,8 @@ self =>
             }
           DefDef(newmods, name, tparams, vparamss, restype, rhs)
         }
+        signalParseProgress(result.pos)
+        result
       }
     }
 

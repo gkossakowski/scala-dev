@@ -11,7 +11,7 @@ package scala.runtime
 import scala.reflect.ClassManifest
 import scala.collection.{ Seq, IndexedSeq, TraversableView }
 import scala.collection.mutable.WrappedArray
-import scala.collection.immutable.{ NumericRange, List, Stream, Nil, :: }
+import scala.collection.immutable.{ StringLike, NumericRange, List, Stream, Nil, :: }
 import scala.collection.generic.{ Sorted }
 import scala.xml.{ Node, MetaData }
 import scala.util.control.ControlThrowable
@@ -167,7 +167,7 @@ object ScalaRunTime {
     var i = 0
     while (i < arr) {
       val elem = x.productElement(i)
-      h = extendHash(h, if (elem == null) 0 else elem.##, c, k)
+      h = extendHash(h, elem.##, c, k)
       c = nextMagicA(c)
       k = nextMagicB(k)
       i += 1
@@ -195,7 +195,8 @@ object ScalaRunTime {
   // must not call ## themselves.
  
   @inline def hash(x: Any): Int =
-    if (x.isInstanceOf[java.lang.Number]) BoxesRunTime.hashFromNumber(x.asInstanceOf[java.lang.Number])
+    if (x == null) 0
+    else if (x.isInstanceOf[java.lang.Number]) BoxesRunTime.hashFromNumber(x.asInstanceOf[java.lang.Number])
     else x.hashCode
   
   @inline def hash(dv: Double): Int = {
@@ -251,9 +252,8 @@ object ScalaRunTime {
    * called on null and (b) depending on the apparent type of an
    * array, toString may or may not print it in a human-readable form.
    *
-   * @param arg the value to stringify 
-   * @return a string representation of <code>arg</code>
-   *
+   * @param   arg   the value to stringify 
+   * @return        a string representation of arg.
    */  
   def stringOf(arg: Any): String = stringOf(arg, scala.Int.MaxValue)
   def stringOf(arg: Any, maxElements: Int): String = {    
@@ -271,8 +271,8 @@ object ScalaRunTime {
       case _: Range | _: NumericRange[_] => true
       // Sorted collections to the wrong thing (for us) on iteration - ticket #3493
       case _: Sorted[_, _]  => true
-      // StringBuilder(a, b, c) is not so attractive
-      case _: StringBuilder => true
+      // StringBuilder(a, b, c) and similar not so attractive
+      case _: StringLike[_] => true
       // Don't want to evaluate any elements in a view
       case _: TraversableView[_, _] => true
       // Don't want to a) traverse infinity or b) be overly helpful with peoples' custom
@@ -287,14 +287,18 @@ object ScalaRunTime {
       case (k, v)   => inner(k) + " -> " + inner(v)
       case _        => inner(arg)
     }
-    // The recursively applied attempt to prettify Array printing
+    // The recursively applied attempt to prettify Array printing.
+    // Note that iterator is used if possible and foreach is used as a
+    // last resort, because the parallel collections "foreach" in a
+    // random order even on sequences.
     def inner(arg: Any): String = arg match {
       case null                         => "null"
       case ""                           => "\"\""
       case x: String                    => if (x.head.isWhitespace || x.last.isWhitespace) "\"" + x + "\"" else x
-      case x if useOwnToString(x)       => x.toString
+      case x if useOwnToString(x)       => x toString
       case x: AnyRef if isArray(x)      => WrappedArray make x take maxElements map inner mkString ("Array(", ", ", ")")
-      case x: collection.Map[_, _]      => x take maxElements map mapInner mkString (x.stringPrefix + "(", ", ", ")")
+      case x: collection.Map[_, _]      => x.iterator take maxElements map mapInner mkString (x.stringPrefix + "(", ", ", ")")
+      case x: Iterable[_]               => x.iterator take maxElements map inner mkString (x.stringPrefix + "(", ", ", ")")
       case x: Traversable[_]            => x take maxElements map inner mkString (x.stringPrefix + "(", ", ", ")")
       case x: Product1[_] if isTuple(x) => "(" + inner(x._1) + ",)" // that special trailing comma
       case x: Product if isTuple(x)     => x.productIterator map inner mkString ("(", ",", ")")
@@ -303,13 +307,16 @@ object ScalaRunTime {
 
     // The try/catch is defense against iterables which aren't actually designed
     // to be iterated, such as some scala.tools.nsc.io.AbstractFile derived classes.
-    val s = 
-      try inner(arg)
-      catch { 
-        case _: StackOverflowError | _: UnsupportedOperationException => arg.toString
-      }
-        
+    try inner(arg)
+    catch { 
+      case _: StackOverflowError | _: UnsupportedOperationException | _: AssertionError => "" + arg
+    }
+  }
+  /** stringOf formatted for use in a repl result. */
+  def replStringOf(arg: Any, maxElements: Int): String = {
+    val s  = stringOf(arg, maxElements)
     val nl = if (s contains "\n") "\n" else ""
-    nl + s + "\n"    
+    
+    nl + s + "\n"
   }
 }

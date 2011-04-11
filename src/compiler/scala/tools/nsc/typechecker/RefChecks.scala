@@ -352,7 +352,7 @@ abstract class RefChecks extends InfoTransform {
           } else if ((member hasFlag (OVERRIDE | ABSOVERRIDE)) && 
                      !(member.owner.thisType.baseClasses exists (_ isSubClass other.owner)) && 
                      !member.isDeferred && !other.isDeferred && 
-                     intersectionIsEmpty(member.allOverriddenSymbols, other.allOverriddenSymbols)) {
+                     intersectionIsEmpty(member.extendedOverriddenSymbols, other.extendedOverriddenSymbols)) {
             overrideError("cannot override a concrete member without a third member that's overridden by both "+
                           "(this rule is designed to prevent ``accidental overrides'')")
           } else if (other.isStable && !member.isStable) { // (1.4)
@@ -550,6 +550,13 @@ abstract class RefChecks extends InfoTransform {
 
         if (abstractErrors.nonEmpty)
           unit.error(clazz.pos, abstractErrorMessage)
+      } else if (clazz.isTrait) {
+        // prevent abstract methods in interfaces that override final members in Object; see #4431
+        for (decl <- clazz.info.decls.iterator) {
+          val overridden = decl.overriddenSymbol(ObjectClass)
+          if (overridden.isFinal)
+            unit.error(decl.pos, "trait cannot redefine final method from class AnyRef")
+        }
       }
 
       /** Returns whether there is a symbol declared in class `inclazz`
@@ -688,7 +695,7 @@ abstract class RefChecks extends InfoTransform {
                 !(tvar.isTypeParameterOrSkolem && sym.isTypeParameterOrSkolem &&
                   tvar.owner == sym.owner)) state = -state;
             else if (!sym.owner.isClass || 
-                     sym.isTerm && ((sym.isPrivateLocal || sym.isProtectedLocal) && !(escapedPrivateLocals contains sym))) {
+                     sym.isTerm && ((sym.isPrivateLocal || sym.isProtectedLocal || sym.isSuperAccessor /* super accessors are implicitly local #4345*/) && !(escapedPrivateLocals contains sym))) {
               // return AnyVariance if `sym` is local to a term
               // or is private[this] or protected[this]
               state = AnyVariance

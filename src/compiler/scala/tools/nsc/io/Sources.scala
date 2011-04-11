@@ -4,7 +4,6 @@ package io
 import util.ClassPath
 import java.util.concurrent.{ Future, ConcurrentHashMap, ExecutionException }
 import java.util.zip.ZipException
-import Path.{ isJarOrZip, locateJarByName }
 import collection.JavaConverters._
 import Properties.{ envOrElse, propOrElse }
 
@@ -20,7 +19,7 @@ class Sources(val path: String) {
   private val partitioned = ClassPath toPaths expandedPath partition (_.isDirectory)
 
   val dirs   = partitioned._1 map (_.toDirectory)
-  val jars   = partitioned._2 filter isJarOrZip map (_.toFile)
+  val jars   = partitioned._2 filter Jar.isJarOrZip map (_.toFile)
   val (isDone, force) = {
     val f1  = spawn(calculateDirs())
     val f2  = spawn(calculateJars())    
@@ -39,7 +38,7 @@ class Sources(val path: String) {
     dirs foreach { d => dbg(d) ; catchZip(addSources(d.deepFiles map (x => Fileish(x)))) }
 
   private def calculateJars() = 
-    jars foreach { j => dbg(j) ; catchZip(addSources(new SourceJar(j).iterator)) }
+    jars foreach { j => dbg(j) ; catchZip(addSources(new Jar(j).fileishIterator)) }
   
   private def addSources(fs: TraversableOnce[Fileish]) =
     fs foreach { f => if (f.isSourceFile) add(f.name, f) }
@@ -62,27 +61,13 @@ trait LowPrioritySourcesImplicits {
   implicit def fallbackSources: Sources = defaultSources
 }
 
-
 object Sources extends LowPrioritySourcesImplicits {
-  // Examples of what libraryJar might be, each of which we'd like to find
-  // the source files automatically:
-  //
-  // /scala/trunk/build/pack/lib/scala-library.jar
-  // /scala/trunk/build/quick/classes/library
-  // /scala/inst/scala-2.9.0.r24213-b20110206233447/lib/scala-library.jar
-  private def libraryJar = Path.locateJarByClass(classOf[ScalaObject]) map (_.toAbsolute.path)
-  private def autoSourcePaths: List[String] = libraryJar.toList flatMap { lib =>
-    val markers = List("build/pack/lib", "build/quick/classes", "scala-library.jar")
-    markers filter (lib contains _) flatMap { m =>
-      val dir = Path(lib take lib.indexOf(m)) / "src"
-      
-      if (dir.exists) ClassPath.expandDir(dir.path)
-      else Nil
-    }
-  }
+  private def libraryInits      = ClassPath.scalaLibrary.toList flatMap (_.toAbsolute.parents)
+  private def librarySourceDir  = libraryInits map (_ / "src") find (_.isDirectory)
+  private def expandedSourceDir = librarySourceDir.toList flatMap (ClassPath expandDir _.path)
   
-  val sourcePathEnv   = envOrElse("SOURCEPATH", "")
-  val defaultSources  = apply(autoSourcePaths :+ sourcePathEnv: _*)
+  val sourcePathProp = sys.props.traceSourcePath.value
+  val defaultSources = apply(expandedSourceDir :+ sourcePathProp: _*)
     
   def apply(paths: String*): Sources = new Sources(ClassPath.join(paths: _*))
 }

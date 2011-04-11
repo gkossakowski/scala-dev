@@ -8,7 +8,7 @@ package symtab
 
 import scala.collection.{ mutable, immutable }
 import scala.ref.WeakReference
-import scala.collection.mutable.ListBuffer
+import mutable.ListBuffer
 import ast.TreeGen
 import util.{ Position, NoPosition }
 import util.Statistics._
@@ -3269,11 +3269,13 @@ A type's typeSymbol should never be inspected directly.
         if (expanded contains sym) AnyRefClass.tpe
         else try {
           expanded += sym
-          val eparams = typeParamsToExistentials(sym, sym.typeParams)
-          existentialAbstraction(eparams, typeRef(pre, sym, eparams map (_.tpe)))
+          val eparams = mapOver(typeParamsToExistentials(sym, sym.typeParams))
+          existentialAbstraction(eparams, typeRef(apply(pre), sym, eparams map (_.tpe))) 
         } finally {
           expanded -= sym
         }
+      case ExistentialType(_, _) => // stop to avoid infinite expansions
+        tp
       case _ =>
         mapOver(tp)
     }
@@ -3394,7 +3396,8 @@ A type's typeSymbol should never be inspected directly.
                 else instParam(ps.tail, as.tail);
               val symclazz = sym.owner
               if (symclazz == clazz && !pre.isInstanceOf[TypeVar] && (pre.widen.typeSymbol isNonBottomSubClass symclazz)) {
-                pre.baseType(symclazz) match {
+                // have to deconst because it may be a Class[T].
+                pre.baseType(symclazz).deconst match {
                   case TypeRef(_, basesym, baseargs) =>
                     //Console.println("instantiating " + sym + " from " + basesym + " with " + basesym.typeParams + " and " + baseargs+", pre = "+pre+", symclazz = "+symclazz);//DEBUG
                     if (sameLength(basesym.typeParams, baseargs)) {
@@ -4555,7 +4558,7 @@ A type's typeSymbol should never be inspected directly.
             val pre1 = tr1.pre
             val pre2 = tr2.pre
             (((if (sym1 == sym2) phase.erasedTypes || pre1 <:< pre2
-               else (sym1.name == sym2.name && 
+               else (sym1.name == sym2.name && !sym1.isModuleClass && !sym2.isModuleClass &&
                      (isUnifiable(pre1, pre2) || isSameSpecializedSkolem(sym1, sym2, pre1, pre2)))) &&
                     isSubArgs(tr1.args, tr2.args, sym1.typeParams))
              ||
@@ -5615,6 +5618,7 @@ A type's typeSymbol should never be inspected directly.
     val errors = new ListBuffer[(Type, Symbol, List[(Symbol, Symbol)], List[(Symbol, Symbol)], List[(Symbol, Symbol)])]
     (tparams zip targs).foreach{ case (tparam, targ) if (targ.isHigherKinded || !tparam.typeParams.isEmpty) => 
       // @M must use the typeParams of the type targ, not the typeParams of the symbol of targ!!
+      targ.typeSymbolDirect.info // force symbol load for #4205
       val tparamsHO =  targ.typeParams
 
       val (arityMismatches, varianceMismatches, stricterBounds) = 

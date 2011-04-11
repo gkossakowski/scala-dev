@@ -59,6 +59,7 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
 // annotations
 
     private var rawannots: List[AnnotationInfoBase] = Nil
+    def rawAnnotations = rawannots
 
     /* Used in namer to check whether annotations were already assigned or not */
     def hasAssignedAnnotations = rawannots.nonEmpty
@@ -355,6 +356,7 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
     final def isErroneous = isError || isInitialized && tpe.isErroneous
     override final def isTrait: Boolean = isClass && hasFlag(TRAIT | notDEFERRED)     // A virtual class becomes a trait (part of DEVIRTUALIZE)
     final def isTypeParameterOrSkolem = isType && hasFlag(PARAM)
+    final def isHigherOrderTypeParameter = owner.isTypeParameterOrSkolem
     final def isTypeSkolem            = isSkolem && hasFlag(PARAM)
     // a type symbol bound by an existential type, for instance the T in
     // List[T] forSome { type T }
@@ -607,6 +609,11 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
     }
 
     def ownerChain: List[Symbol] = this :: owner.ownerChain
+    def enclClassChain: List[Symbol] = {
+      if (this eq NoSymbol) Nil
+      else if (isClass && !isPackageClass) this :: owner.enclClassChain
+      else owner.enclClassChain
+    }
 
     def ownersIterator: Iterator[Symbol] = new Iterator[Symbol] {
       private var current = Symbol.this
@@ -851,12 +858,9 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
      * We can't do this on class loading because it would result in infinite cycles.
      */    
     final def cookJavaRawInfo() {
-      // println("cookJavaRawInfo: "+(rawname, triedCooking))
       if (hasFlag(TRIEDCOOKING)) return else setFlag(TRIEDCOOKING) // only try once...
       val oldInfo = info
       doCookJavaRawInfo()
-      if ((info ne oldInfo) && settings.verbose.value)
-        println("cooking "+this+": "+oldInfo+" --> "+info) // DEBUG
     }
 
     protected def doCookJavaRawInfo(): Unit
@@ -1306,7 +1310,7 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
      *  class Foo  .  companionModule -->  object Foo
      */
     final def companionModule: Symbol =
-      if (isClass && !isAnonOrRefinementClass) companionModule0
+      if (isClass && !isRefinementClass) companionModule0
       else NoSymbol
 
     /** For a module: its linked class
@@ -1397,7 +1401,16 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
     final def overridingSymbol(ofclazz: Symbol): Symbol =
       if (isClassConstructor) NoSymbol else matchingSymbol(ofclazz, ofclazz.thisType)
 
+    /** Returns all symbols overriden by this symbol
+     */
     final def allOverriddenSymbols: List[Symbol] =
+      if (!owner.isClass) Nil
+      else owner.ancestors map overriddenSymbol filter (_ != NoSymbol)
+    
+    /** Returns all symbols overridden by this symbol, plus all matching symbols
+     *  defined in parents of the selftype
+     */
+    final def extendedOverriddenSymbols: List[Symbol] =
       if (!owner.isClass) Nil
       else owner.thisSym.ancestors map overriddenSymbol filter (_ != NoSymbol)
 
@@ -1642,15 +1655,17 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
       if (variance == 1) "+"
       else if (variance == -1) "-"
       else ""
+    
+    def defaultFlagMask =
+      if (settings.debug.value) -1L
+      else if (owner.isRefinementClass) ExplicitFlags & ~OVERRIDE
+      else ExplicitFlags
+    
+    def defaultFlagString = hasFlagsToString(defaultFlagMask)
 
     /** String representation of symbol's definition */
     def defString: String = {
-      val mask =
-        if (settings.debug.value) -1L
-        else if (owner.isRefinementClass) ExplicitFlags & ~OVERRIDE
-        else ExplicitFlags
-
-      compose(List(hasFlagsToString(mask), keyString, varianceString + nameString + 
+      compose(List(defaultFlagString, keyString, varianceString + nameString + 
                    (if (hasRawInfo) infoString(rawInfo) else "<_>")))
     }
 

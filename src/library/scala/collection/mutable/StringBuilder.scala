@@ -24,17 +24,17 @@ import immutable.StringLike
  */
 @SerialVersionUID(0 - 8525408645367278351L)
 final class StringBuilder(private val underlying: JavaStringBuilder)
-      extends Builder[Char, StringBuilder]
-         with java.lang.CharSequence
+      extends java.lang.CharSequence
          with IndexedSeq[Char] 
          with StringLike[StringBuilder]
+         with Builder[Char, String]
          with Serializable {
            
   override protected[this] def thisCollection: StringBuilder = this
   override protected[this] def toCollection(repr: StringBuilder): StringBuilder = repr
 
   /** Creates a string builder buffer as builder for this class */
-  override protected[this] def newBuilder = new StringBuilder
+  override protected[this] def newBuilder = new GrowingBuilder(new StringBuilder)
   
   /** Constructs a string builder initialized with String initValue
    *  and with additional Char capacity initCapacity.
@@ -432,14 +432,26 @@ final class StringBuilder(private val underlying: JavaStringBuilder)
 
   /** Returns a new String representing the data in this sequence.
    *
+   *  @note    because toString is inherited from AnyRef and used for
+   *           many purposes, it is better practice to call mkString
+   *           to obtain a StringBuilder result.
    *  @return  the current contents of this sequence as a String
    */
   override def toString = underlying.toString
+  
+  /** Returns a new String representing the data in this sequence.
+   *
+   *  @return  the current contents of this sequence as a String
+   */
   override def mkString = toString
 
-  def result(): StringBuilder = this
+  /** Returns the result of this Builder (a String)
+   *
+   *  @return  the string assembled by this StringBuilder
+   */
+  def result(): String = toString
 }
 
 object StringBuilder {
-  def newBuilder = new StringBuilder mapResult (_.toString)
+  def newBuilder = new StringBuilder
 }

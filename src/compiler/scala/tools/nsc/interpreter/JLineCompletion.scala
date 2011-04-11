@@ -102,7 +102,9 @@ class JLineCompletion(val intp: IMain) extends Completion with CompletionOutput 
     def excludeStartsWith: List[String] = List("<") // <byname>, <repeated>, etc.
     def excludeNames: List[String] = (anyref.methodNames filterNot anyRefMethodsToShow) :+ "_root_"
     
-    def methodSignatureString(sym: Symbol) = afterTyper(new MethodSymbolOutput(sym).methodString())
+    def methodSignatureString(sym: Symbol) = {
+      IMain stripString afterTyper(new MethodSymbolOutput(sym).methodString())
+    }
 
     def exclude(name: String): Boolean = (
       (name contains "$") ||
@@ -156,16 +158,20 @@ class JLineCompletion(val intp: IMain) extends Completion with CompletionOutput 
     override def follow(id: String) = {
       if (completions(0) contains id) {
         intp typeOfExpression id map { tpe =>
-          intp runtimeClassAndTypeOfTerm id match {
+          def default = TypeMemberCompletion(tpe)
+
+          // only rebinding vals in power mode for now.
+          if (!isReplPower) default
+          else intp runtimeClassAndTypeOfTerm id match {
             case Some((clazz, runtimeType)) =>
               val sym = intp.symbolOfTerm(id)
               if (sym.isStable) {
                 val param = new NamedParam.Untyped(id, intp valueOfTerm id getOrElse null)
                 TypeMemberCompletion(tpe, runtimeType, param)
               }
-              else TypeMemberCompletion(tpe)
+              else default
             case _        =>
-              TypeMemberCompletion(tpe)
+              default
           }
         }
       }
@@ -197,7 +203,13 @@ class JLineCompletion(val intp: IMain) extends Completion with CompletionOutput 
   }
 
   // top level packages
-  object rootClass extends TypeMemberCompletion(RootClass.tpe) { }
+  object rootClass extends TypeMemberCompletion(RootClass.tpe) {
+    override def completions(verbosity: Int) = super.completions(verbosity) :+ "_root_"
+    override def follow(id: String) = id match {
+      case "_root_" => Some(this)
+      case _        => super.follow(id)
+    }    
+  }
   // members of Predef
   object predef extends TypeMemberCompletion(PredefModule.tpe) {
     override def excludeEndsWith    = super.excludeEndsWith ++ List("Wrapper", "ArrayOps")

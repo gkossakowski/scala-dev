@@ -75,8 +75,10 @@ trait AbsSettings {
      */
     def withAbbreviation(name: String): this.type
     def withHelpSyntax(help: String): this.type
+    def withDeprecationMessage(msg: String): this.type
 
     def helpSyntax: String = name
+    def deprecationMessage: Option[String] = None
     def abbreviations: List[String] = Nil
     def dependencies: List[(Setting, String)] = Nil
     def respondsTo(label: String) = (name == label) || (abbreviations contains label)
@@ -86,6 +88,14 @@ trait AbsSettings {
     def isInternalOnly = internalSetting
     def internalOnly(): this.type = {
       internalSetting = true
+      this
+    }
+    
+    /** If the appearance of the setting should halt argument processing. */
+    private var isTerminatorSetting = false
+    def shouldStopProcessing = isTerminatorSetting
+    def stopProcessing(): this.type = {
+      isTerminatorSetting = true
       this
     }
 
@@ -106,22 +116,19 @@ trait AbsSettings {
     protected[nsc] def tryToSetColon(args: List[String]): Option[ResultOfTryToSet] =
       errorAndValue("'%s' does not accept multiple arguments" format name, None)
 
-    /** Commands which take properties in form -Dfoo=bar or -Dfoo
-     */
-    protected[nsc] def tryToSetProperty(args: List[String]): Option[ResultOfTryToSet] =
-      errorAndValue("'%s' does not accept property style arguments" format name, None)
-
     /** Attempt to set from a properties file style property value.
+     *  Currently used by Eclipse SDT only.
      */
     def tryToSetFromPropertyValue(s: String): Unit = tryToSet(s :: Nil)
 
     /** These categorizations are so the help output shows -X and -P among
      *  the standard options and -Y among the advanced options.
      */
-    def isAdvanced  = name match { case "-Y" => true ; case "-X" => false ; case _  => name startsWith "-X" }
-    def isPrivate   = name match { case "-Y" => false ; case _  => name startsWith "-Y" }
-    def isStandard  = !isAdvanced && !isPrivate
-    def isForDebug  = isPrivate && (name contains ("-debug")) // by convention, i.e. -Ytyper-debug
+    def isAdvanced   = name match { case "-Y" => true ; case "-X" => false ; case _  => name startsWith "-X" }
+    def isPrivate    = name match { case "-Y" => false ; case _  => name startsWith "-Y" }
+    def isStandard   = !isAdvanced && !isPrivate
+    def isForDebug   = name endsWith "-debug" // by convention, i.e. -Ytyper-debug
+    def isDeprecated = deprecationMessage.isDefined
 
     def compare(that: Setting): Int = name compare that.name
 

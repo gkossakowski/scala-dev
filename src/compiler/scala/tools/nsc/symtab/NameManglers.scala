@@ -22,18 +22,31 @@ trait NameManglers {
 
     def flattenedName(segments: Name*): NameType = compactedString(segments mkString "$")
 
-    private final val MaxFileNameLength = 255
-    private final val MaxNameLength = MaxFileNameLength - 6 // leave space for ".class"    
-    
-    /** "COMPACTIFY" */
+    /**
+     * COMPACTIFY
+     *
+     * The hashed name has the form (prefix + marker + md5 + marker + suffix), where
+     *   - prefix/suffix.length = MaxNameLength / 4
+     *   - md5.length = 32
+     *
+     * We obtain the formula:
+     *
+     *   FileNameLength = 2*(MaxNameLength / 4) + 2.marker.length + 32 + 6
+     *
+     * (+6 for ".class"). MaxNameLength can therefore be computed as follows:
+     */
+    private final val marker = "$$$$"
+    private final val MaxNameLength = math.min(
+      settings.maxClassfileName.value - 6,
+      2 * (settings.maxClassfileName.value - 6 - 2*marker.length - 32)
+    )
     private lazy val md5 = MessageDigest.getInstance("MD5")
     private def toMD5(s: String, edge: Int) = {
       val prefix = s take edge
       val suffix = s takeRight edge
-      val marker = "$$$$"
 
       val cs = s.toArray
-      val bytes = Codec fromUTF8 cs
+      val bytes = Codec toUTF8 cs
       md5 update bytes
       val md5chars = md5.digest() map (b => (b & 0xFF).toHexString) mkString
 
@@ -63,6 +76,7 @@ trait NameManglers {
   
     def isConstructorName(name: Name)       = name == CONSTRUCTOR || name == MIXIN_CONSTRUCTOR    
     def isExceptionResultName(name: Name)   = name startsWith EXCEPTION_RESULT_PREFIX
+    /** !!! Foo$class$1 is an implClassName, I think.  */
     def isImplClassName(name: Name)         = name endsWith IMPL_CLASS_SUFFIX
     def isLocalDummyName(name: Name)        = name startsWith LOCALDUMMY_PREFIX
     def isLocalName(name: Name)             = name endsWith LOCAL_SUFFIX_STRING

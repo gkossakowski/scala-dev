@@ -6,11 +6,7 @@
 **                          |/                                          **
 \*                                                                      */
 
-
 package scala.collection.parallel.mutable
-
-
-
 
 import collection.generic._
 import collection.mutable.HashSet
@@ -19,18 +15,15 @@ import collection.parallel.Combiner
 import collection.parallel.EnvironmentPassingCombiner
 import collection.mutable.UnrolledBuffer
 
-
-
-
 /** A parallel hash set.
  *  
  *  `ParHashSet` is a parallel set which internally keeps elements within a hash table.
  *  It uses linear probing to resolve collisions.
  *  
- *  @tparam T        type of the elements in the parallel hash map
+ *  @tparam T        type of the elements in the $coll.
  *  
- *  @define Coll ParHashMap
- *  @define coll parallel hash map
+ *  @define Coll ParHashSet
+ *  @define coll parallel hash set
  *  
  *  @author Aleksandar Prokopec
  */
@@ -57,7 +50,9 @@ extends ParSet[T]
   
   override def size = tableSize
   
-  def seq = new HashSet(hashTableContents)
+  override def clear() = clearTable()
+  
+  override def seq = new HashSet(hashTableContents)
   
   def +=(elem: T) = {
     addEntry(elem)
@@ -315,7 +310,6 @@ self: EnvironmentPassingCombiner[T, ParHashSet[T]] =>
   
 }
 
-
 private[parallel] object ParHashSetCombiner {
   private[mutable] val discriminantbits = 5
   private[mutable] val numblocks = 1 << discriminantbits
@@ -324,17 +318,4 @@ private[parallel] object ParHashSetCombiner {
   
   def apply[T] = new ParHashSetCombiner[T](FlatHashTable.defaultLoadFactor) with EnvironmentPassingCombiner[T, ParHashSet[T]]
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 

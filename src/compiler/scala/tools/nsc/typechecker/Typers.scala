@@ -1007,16 +1007,14 @@ trait Typers extends Modes {
     }
     
     private def validateNoCaseAncestor(clazz: Symbol) = {
-      // XXX I think this should issue a sharper warning of some kind like
-      // "change your code now!" as there are material bugs (which are very unlikely 
-      // to be fixed) associated with case class inheritance.
       if (!phase.erasedTypes) {
-        for (ancestor <- clazz.ancestors find (_.isCase))
+        for (ancestor <- clazz.ancestors find (_.isCase)) {
           unit.deprecationWarning(clazz.pos, ( 
-            "case class `%s' has case class ancestor `%s'.  This has been deprecated " +
-            "for unduly complicating both usage and implementation.  You should instead " + 
-            "use extractors for pattern matching on non-leaf nodes." ).format(clazz, ancestor)
-          )
+            "case class `%s' has case ancestor `%s'.  Case-to-case inheritance has potentially "+
+            "dangerous bugs which are unlikely to be fixed.  You are strongly encouraged to "+
+            "instead use extractors to pattern match on non-leaf nodes."
+          ).format(clazz, ancestor))
+        }
       }
     }
 
@@ -1253,10 +1251,10 @@ trait Typers extends Modes {
           c.initialize
       val clazz = mdef.symbol.moduleClass
       val maybeAddSerializable = (l: List[Tree]) =>
-        if(linkedClass == NoSymbol || !linkedClass.isSerializable || clazz.isSerializable) l
+        if (linkedClass == NoSymbol || !linkedClass.isSerializable || clazz.isSerializable) l
         else {
           clazz.makeSerializable()
-          l ::: List(TypeTree(SerializableClass.tpe))
+          l :+ TypeTree(SerializableClass.tpe)
         }
       val typedMods = removeAnnotations(mdef.mods)
       assert(clazz != NoSymbol)
@@ -1264,11 +1262,6 @@ trait Typers extends Modes {
         .typedTemplate(mdef.impl, maybeAddSerializable(parentTypes(mdef.impl)))
       val impl2 = typerAddSyntheticMethods(impl1, clazz, context)
 
-      if (mdef.name == nme.PACKAGEkw) 
-        for (m <- mdef.symbol.info.members)
-          if (m.isCaseClass)
-            context.error(if (m.pos.isDefined) m.pos else mdef.pos,
-                          "implementation restriction: "+mdef.symbol+" cannot contain case "+m)
       treeCopy.ModuleDef(mdef, typedMods, mdef.name, impl2) setType NoType
     }
     
@@ -1432,7 +1425,7 @@ trait Typers extends Modes {
           val tpt1 = 
             checkNoEscaping.privates(
               clazz.thisSym, 
-              treeCopy.TypeTree(tpt) setType vd.symbol.tpe)
+              treeCopy.TypeTree(tpt).setOriginal(tpt) setType vd.symbol.tpe)
           treeCopy.ValDef(vd, mods, name, tpt1, EmptyTree) setType NoType
       }
 // was: 
@@ -1654,7 +1647,8 @@ trait Typers extends Modes {
       namer.enterSyms(trees)
       typedStats(trees, NoSymbol)
       useCase.defined = context.scope.toList filterNot (useCase.aliases contains _)
-//      println("defined use cases: "+(useCase.defined map (sym => sym+":"+sym.tpe)))
+      if (settings.debug.value)
+        useCase.defined foreach (sym => println("defined use cases: %s:%s".format(sym, sym.tpe)))
     }
 
     /**
@@ -2530,13 +2524,22 @@ trait Typers extends Modes {
       /** Calling constfold right here is necessary because some trees (negated
        *  floats and literals in particular) are not yet folded.
        */
-      def tryConst(tr: Tree, pt: Type) = typed(constfold(tr), EXPRmode, pt) match {
-        // null cannot be used as constant value for classfile annotations
-        case l @ Literal(c) if !(l.isErroneous || c.value == null) =>
-          Some(LiteralAnnotArg(c))
-        case _ =>
-          error(tr.pos, "annotation argument needs to be a constant; found: "+tr)
-          None
+      def tryConst(tr: Tree, pt: Type): Option[LiteralAnnotArg] = {
+        val const: Constant = typed(constfold(tr), EXPRmode, pt) match {
+          case l @ Literal(c) if !l.isErroneous => c
+          case tree => tree.tpe match {
+            case ConstantType(c)  => c
+            case tpe              => null
+          }
+        }
+        def fail(msg: String) = { error(tr.pos, msg) ; None }
+
+        if (const == null)
+          fail("annotation argument needs to be a constant; found: " + tr)
+        else if (const.value == null)
+          fail("annotation argument cannot be null")
+        else
+          Some(LiteralAnnotArg(const))
       }
 
       /** Converts an untyped tree to a ClassfileAnnotArg. If the conversion fails,
@@ -2582,7 +2585,7 @@ trait Typers extends Modes {
       def trees2ConstArg(trees: List[Tree], pt: Type): Option[ArrayAnnotArg] = {
         val args = trees.map(tree2ConstArg(_, pt))
         if (args.exists(_.isEmpty)) None
-        else Some(ArrayAnnotArg(args.map(_.get).toArray))
+        else Some(ArrayAnnotArg(args.flatten.toArray))
       }
 
       // begin typedAnnotation
@@ -3613,41 +3616,54 @@ trait Typers extends Modes {
       def qualifyingClassSym(qual: Name): Symbol =
         if (tree.symbol != NoSymbol) tree.symbol else qualifyingClass(tree, qual, false)
 
-      def typedSuper(qual: Name, mix: Name) = {
-        val clazz = qualifyingClassSym(qual)
-        if (clazz == NoSymbol) setError(tree)
-        else {
-          def findMixinSuper(site: Type): Type = {
-            val ps = site.parents filter (_.typeSymbol.name == mix)
-            if (ps.isEmpty) {
-              if (settings.debug.value)
-                Console.println(site.parents map (_.typeSymbol.name))//debug
-              if (phase.erasedTypes && context.enclClass.owner.isImplClass) {
-                // the reference to super class got lost during erasure
-                restrictionError(tree.pos, unit, "traits may not select fields or methods from to super[C] where C is a class")
-              } else {
-                error(tree.pos, mix+" does not name a parent class of "+clazz)
-              }
-              ErrorType
-            } else if (!ps.tail.isEmpty) {
-              error(tree.pos, "ambiguous parent class qualifier")
-              ErrorType
-            } else {
-              ps.head
-            }
-          }
-          val owntype =
-            if (mix.isEmpty) {
-              if ((mode & SUPERCONSTRmode) != 0) 
-                if (clazz.info.parents.isEmpty) AnyRefClass.tpe // can happen due to cyclic references ==> #1036
-                else clazz.info.parents.head
-              else intersectionType(clazz.info.parents)
-            } else {
-              findMixinSuper(clazz.info)
-            }
-          tree setSymbol clazz setType SuperType(clazz.thisType, owntype)
+      def typedSuper(qual: Tree, mix: TypeName) = {
+        val qual1 = typed(qual)
+        
+        val clazz = qual1 match {
+          case This(_) => qual1.symbol
+          case _ => qual1.tpe.typeSymbol
         }
-      }
+        //println(clazz+"/"+qual1.tpe.typeSymbol+"/"+qual1)
+
+        def findMixinSuper(site: Type): Type = {
+          var ps = site.parents filter (_.typeSymbol.name == mix)
+          if (ps.isEmpty)
+            ps = site.parents filter (_.typeSymbol.toInterface.name == mix)
+          if (ps.isEmpty) {
+            if (settings.debug.value)
+              Console.println(site.parents map (_.typeSymbol.name))//debug
+            if (phase.erasedTypes && context.enclClass.owner.isImplClass) {
+              // println(qual1)
+              // println(clazz)
+              // println(site)
+              // println(site.parents)
+              // println(mix)
+              // the reference to super class got lost during erasure
+              restrictionError(tree.pos, unit, "traits may not select fields or methods from super[C] where C is a class")
+            } else {
+              error(tree.pos, mix+" does not name a parent class of "+clazz)
+            }
+            ErrorType
+          } else if (!ps.tail.isEmpty) {
+            error(tree.pos, "ambiguous parent class qualifier")
+            ErrorType
+          } else {
+            ps.head
+          }
+        }
+        
+        val owntype =
+          if (mix.isEmpty) {
+            if ((mode & SUPERCONSTRmode) != 0) 
+              if (clazz.info.parents.isEmpty) AnyRefClass.tpe // can happen due to cyclic references ==> #1036
+              else clazz.info.parents.head
+            else intersectionType(clazz.info.parents)
+          } else {
+            findMixinSuper(clazz.tpe)
+          }
+
+          treeCopy.Super(tree, qual1, mix) setType SuperType(clazz.thisType, owntype)
+        }
 
       def typedThis(qual: Name) = {
         val clazz = qualifyingClassSym(qual)
@@ -3724,7 +3740,7 @@ trait Typers extends Modes {
 
           // try to expand according to Dynamic rules.
 
-          if (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass) {
+          if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass)) {
             var dynInvoke = Apply(Select(qual, nme.applyDynamic), List(Literal(Constant(name.decode))))
             context.tree match {
               case Apply(tree1, args) if tree1 eq tree => 
@@ -3850,11 +3866,11 @@ trait Typers extends Modes {
             }
             else {
               cx = cx.enclClass
-              defSym = pre.member(name) filter (
-                sym => qualifies(sym) && context.isAccessible(sym, pre, false))
+              val foundSym = pre.member(name) filter qualifies
+              defSym = foundSym filter (context.isAccessible(_, pre, false))
               if (defSym == NoSymbol) {
-                if (inaccessibleSym eq NoSymbol) {
-                  inaccessibleSym = pre.member(name) filter qualifies
+                if ((foundSym ne NoSymbol) && (inaccessibleSym eq NoSymbol)) {
+                  inaccessibleSym = foundSym
                   inaccessibleExplanation = analyzer.lastAccessCheckDetails
                 }
                 cx = cx.outer
@@ -3932,7 +3948,7 @@ trait Typers extends Modes {
                 log(context.imports)//debug
               }
               if (inaccessibleSym eq NoSymbol) {
-                error(tree.pos, "not found: "+decodeWithNamespace(name))
+                error(tree.pos, "not found: "+decodeWithKind(name, context.owner))
               }
               else accessError(
                 tree, inaccessibleSym, context.enclClass.owner.thisType, 
@@ -4498,7 +4514,11 @@ trait Typers extends Modes {
       val result = typed(tree, forTypeMode(mode) | FUNmode, WildcardType)
 
       val restpe = result.tpe.normalize // normalize to get rid of type aliases for the following check (#1241)
-      if (!phase.erasedTypes && restpe.isInstanceOf[TypeRef] && !restpe.prefix.isStable) {
+      if (!phase.erasedTypes && restpe.isInstanceOf[TypeRef] && !restpe.prefix.isStable && !context.unit.isJava) {
+        // The isJava exception if OK only because the only type constructors scalac gets 
+        // to see are those in the signatures. These do not need a unique object as a prefix. 
+        // The situation is different for new's and super's, but scalac does not look deep 
+        // enough to see those. See #3938
         error(tree.pos, restpe.prefix+" is not a legal prefix for a constructor")
       }
 

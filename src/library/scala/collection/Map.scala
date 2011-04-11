@@ -13,7 +13,7 @@ import generic._
 /** 
  *  A map from keys of type `A` to values of type `B`.
  *  
- *  $mapnote
+ *  $mapNote
  *  
  *  '''Note:''' If you do not have specific implementations for `add` and `-` in mind,
  *        you might consider inheriting from `DefaultMap` instead.
@@ -28,6 +28,8 @@ import generic._
  */
 trait Map[A, +B] extends Iterable[(A, B)] with MapLike[A, B, Map[A, B]] {
   def empty: Map[A, B] = Map.empty
+  
+  override def seq: Map[A, B] = this
 }
 
 /** $factoryInfo

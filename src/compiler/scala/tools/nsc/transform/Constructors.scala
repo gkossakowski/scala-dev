@@ -70,7 +70,6 @@ abstract class Constructors extends Transform with ast.TreeDSL {
         }
       }
 
-      var thisRefSeen: Boolean = false
       var usesSpecializedField: Boolean = false
 
       // A transformer for expressions that go into the constructor
@@ -80,29 +79,23 @@ abstract class Constructors extends Transform with ast.TreeDSL {
           sym.owner == clazz &&
           !(sym.isGetter && sym.accessed.isVariable) &&
           !sym.isSetter
+        private def possiblySpecialized(s: Symbol) = specializeTypes.specializedTypeVars(s).nonEmpty
         override def transform(tree: Tree): Tree = tree match {
           case Apply(Select(This(_), _), List()) =>
             // references to parameter accessor methods of own class become references to parameters
             // outer accessors become references to $outer parameter 
-            if (isParamRef(tree.symbol))
+            if (isParamRef(tree.symbol) && !possiblySpecialized(tree.symbol))
               gen.mkAttributedIdent(parameter(tree.symbol.accessed)) setPos tree.pos
             else if (tree.symbol.outerSource == clazz && !clazz.isImplClass)
               gen.mkAttributedIdent(parameterNamed(nme.OUTER)) setPos tree.pos
             else 
               super.transform(tree)
-          case Select(This(_), _) if (isParamRef(tree.symbol)) => 
+          case Select(This(_), _) if (isParamRef(tree.symbol) && !possiblySpecialized(tree.symbol)) => 
             // references to parameter accessor field of own class become references to parameters
             gen.mkAttributedIdent(parameter(tree.symbol)) setPos tree.pos
           case Select(_, _) =>
-            thisRefSeen = true
             if (specializeTypes.specializedTypeVars(tree.symbol).nonEmpty)
               usesSpecializedField = true
-            super.transform(tree)
-          case This(_) =>
-            thisRefSeen = true
-            super.transform(tree)
-          case Super(_, _) =>
-            thisRefSeen = true
             super.transform(tree)
           case _ =>
             super.transform(tree)
@@ -116,16 +109,8 @@ abstract class Constructors extends Transform with ast.TreeDSL {
 
       // Should tree be moved in front of super constructor call?
       def canBeMoved(tree: Tree) = tree match {
-        //todo: eliminate thisRefSeen
-        case ValDef(mods, _, _, _) => 
-          if (settings.Xwarninit.value)
-            if (!(mods hasFlag PRESUPER | PARAMACCESSOR) && !thisRefSeen &&
-                { val g = tree.symbol.getter(tree.symbol.owner);
-                 g != NoSymbol && !g.allOverriddenSymbols.isEmpty 
-               })
-              unit.warning(tree.pos, "the semantics of this definition has changed;\nthe initialization is no longer be executed before the superclass is called")
-          (mods hasFlag PRESUPER | PARAMACCESSOR)// || !thisRefSeen && (!settings.future.value && !settings.checkInit.value)
-        case _ => false
+        case ValDef(mods, _, _, _) => (mods hasFlag PRESUPER | PARAMACCESSOR)
+        case _                     => false
       }
 
       // Create an assignment to class field `to' with rhs `from'
@@ -409,6 +394,67 @@ abstract class Constructors extends Transform with ast.TreeDSL {
         case _ => false
       }
 */
+      
+      /** Create a getter or a setter and enter into `clazz` scope
+       */
+      def addAccessor(sym: Symbol, name: TermName, flags: Long) = {
+        val m = clazz.newMethod(sym.pos, name)
+          .setFlag(flags & ~LOCAL & ~PRIVATE)
+        m.privateWithin = clazz
+        clazz.info.decls.enter(m)
+        m
+      }
+      
+      def addGetter(sym: Symbol): Symbol = {
+        val getr = addAccessor(
+          sym, nme.getterName(sym.name), getterFlags(sym.flags))
+        getr setInfo MethodType(List(), sym.tpe)
+        defBuf += localTyper.typed {
+          //util.trace("adding getter def for "+getr) {
+          atPos(sym.pos) {
+            DefDef(getr, Select(This(clazz), sym))
+          }//}
+        }
+        getr
+      }
+      
+      def addSetter(sym: Symbol): Symbol = {
+        sym setFlag MUTABLE
+        val setr = addAccessor(
+          sym, nme.getterToSetter(nme.getterName(sym.name)), setterFlags(sym.flags)) 
+        setr setInfo MethodType(setr.newSyntheticValueParams(List(sym.tpe)), UnitClass.tpe)
+        defBuf += localTyper.typed {
+          //util.trace("adding setter def for "+setr) {
+          atPos(sym.pos) {
+            DefDef(setr, paramss => 
+              Assign(Select(This(clazz), sym), Ident(paramss.head.head)))
+          }//}
+        }
+        setr
+      }
+      
+      def ensureAccessor(sym: Symbol)(acc: => Symbol) = 
+        if (sym.owner == clazz && !sym.isMethod && sym.isPrivate) { // there's an access to a naked field of the enclosing class
+          var getr = acc
+          getr makeNotPrivate clazz
+          getr
+        } else {
+          if (sym.owner == clazz) sym makeNotPrivate clazz
+          NoSymbol
+        }
+      
+      def ensureGetter(sym: Symbol): Symbol = ensureAccessor(sym) {
+        val getr = sym.getter(clazz)
+        if (getr != NoSymbol) getr else addGetter(sym)
+      }
+      
+      def ensureSetter(sym: Symbol): Symbol = ensureAccessor(sym) {
+        var setr = sym.setter(clazz, hasExpandedName = false)
+        if (setr == NoSymbol) setr = sym.setter(clazz, hasExpandedName = true)
+        if (setr == NoSymbol) setr = addSetter(sym)
+        setr
+      }
+      
       def delayedInitClosure(stats: List[Tree]) = 
         localTyper.typed {
           atPos(impl.pos) { 
@@ -444,16 +490,31 @@ abstract class Constructors extends Transform with ast.TreeDSL {
                     }
                   }
                 case _ =>
-                  tree match {
-                    case Select(qual, _) =>
-                      val sym = tree.symbol
-                      sym makeNotPrivate sym.owner 
-                    case Assign(lhs @ Select(_, _), _) =>
-                      lhs.symbol setFlag MUTABLE
-                    case _ => 
-                      changeOwner.changeOwner(tree)
-                  }
-                  super.transform(tree)
+                  super.transform {
+                    tree match {
+                      case Select(qual, _) => 
+                        val getter = ensureGetter(tree.symbol)
+                        if (getter != NoSymbol)
+                          applyMethodTyper.typed {
+                            atPos(tree.pos) {
+                              Apply(Select(qual, getter), List())
+                            }
+                          }
+                        else tree
+                      case Assign(lhs @ Select(qual, _), rhs) =>
+                        val setter = ensureSetter(lhs.symbol)
+                        if (setter != NoSymbol)
+                          applyMethodTyper.typed {
+                            atPos(tree.pos) {
+                              Apply(Select(qual, setter), List(rhs))
+                            }
+                          }
+                        else tree
+                      case _ => 
+                        changeOwner.changeOwner(tree)
+                        tree
+                    }
+                  } 
               }
             }
 

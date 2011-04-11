@@ -8,7 +8,6 @@ package doc
 package html
 
 import model._
-
 import java.io.{ File => JFile }
 import io.{ Streamable, Directory }
 import scala.collection._
@@ -17,7 +16,6 @@ import scala.collection._
   * @author David Bernard
   * @author Gilles Dubochet */
 class HtmlFactory(val universe: doc.Universe, index: doc.Index) {
-
   /** The character encoding to be used for generated Scaladoc sites. This value is currently always UTF-8. */
   def encoding: String = "UTF-8"
 
@@ -50,6 +48,8 @@ class HtmlFactory(val universe: doc.Universe, index: doc.Index) {
     copyResource("lib/index.css")
     copyResource("lib/ref-index.css")
     copyResource("lib/template.css")
+    copyResource("lib/arrow-down.png")
+    copyResource("lib/arrow-right.png")    
     copyResource("lib/class.png")
     copyResource("lib/class_big.png")
     copyResource("lib/object.png")
@@ -64,20 +64,24 @@ class HtmlFactory(val universe: doc.Universe, index: doc.Index) {
 
     new page.Index(universe, index) writeFor this
 
-    val written = mutable.HashSet.empty[DocTemplateEntity]
-
-    def writeTemplate(tpl: DocTemplateEntity): Unit =
-      if (!(written contains tpl)) {
-        new page.Template(tpl) writeFor this
-        written += tpl
-        tpl.templates map (writeTemplate(_))
-      }
-
-    writeTemplate(universe.rootPackage)
+    writeTemplates(page => page.writeFor(this))
     
     for(letter <- index.firstLetterIndex) {
       new html.page.ReferenceIndex(letter._1, index, universe) writeFor this
     }
   }
-  
+
+  def writeTemplates(writeForThis: HtmlPage => Unit): Unit = {
+    val written = mutable.HashSet.empty[DocTemplateEntity]
+
+    def writeTemplate(tpl: DocTemplateEntity): Unit =
+      if (!(written contains tpl)) {
+        writeForThis(new page.Template(tpl))
+        written += tpl
+        tpl.templates map (writeTemplate(_))
+      }
+
+    writeTemplate(universe.rootPackage)
+  }
+
 }

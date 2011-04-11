@@ -12,24 +12,27 @@ package scala.collection
 package immutable
 
 import generic._
+import parallel.immutable.ParSet
 
 /** A generic trait for immutable sets.
- *  
- *  $setnote
- *  
+ *  $setNote
+ *  $setTags
+ *
+ *  @since 1.0
  *  @author Matthias Zenger
  *  @author Martin Odersky
- *  @version 2.8
- *  @since   1
  *  @define Coll immutable.Set
  *  @define coll immutable set
  */
 trait Set[A] extends Iterable[A] 
                 with scala.collection.Set[A] 
                 with GenericSetTemplate[A, Set]
-                with SetLike[A, Set[A]] { 
+                with SetLike[A, Set[A]] 
+                with Parallelizable[A, ParSet[A]] { 
   override def companion: GenericCompanion[Set] = Set
   override def toSet[B >: A]: Set[B] = this.asInstanceOf[Set[B]]
+  protected override def parCombiner = ParSet.newCombiner[A] // if `immutable.SetLike` gets introduced, please move this there!
+  override def seq: Set[A] = this
 }
 
 /** $factoryInfo

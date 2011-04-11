@@ -23,7 +23,6 @@ import scala.collection.parallel.ParSeqLike
 import scala.collection.parallel.CHECK_RATE
 import scala.collection.mutable.ArraySeq
 import scala.collection.mutable.Builder
-import scala.collection.Sequentializable
 
 
 
@@ -72,7 +71,7 @@ self =>
   
   def length = arrayseq.length
   
-  def seq = arrayseq
+  override def seq = arrayseq
   
   type SCPI = SignalContextPassingIterator[ParArrayIterator]
   
@@ -683,7 +682,7 @@ self =>
 }
 
 
-/** $factoryinfo
+/** $factoryInfo
  *  @define Coll mutable.ParArray
  *  @define coll parallel array
  */

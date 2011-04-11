@@ -48,12 +48,16 @@ trait ConsoleReaderHelper extends ConsoleReader {
     printColumns(items: List[String])
     
   def printColumns(items: List[String]): Unit = {
+    if (items forall (_ == ""))
+      return
+
     val longest    = items map (_.length) max
     var linesLeft  = if (isPaginationEnabled()) height - 1 else Int.MaxValue
     val columnSize = longest + marginSize
     val padded     = items map ("%-" + columnSize + "s" format _)
+    val groupSize  = 1 max (width / columnSize)   // make sure it doesn't divide to 0
     
-    padded grouped (width / columnSize) foreach { xs =>
+    padded grouped groupSize foreach { xs =>
       println(xs.mkString)
       linesLeft -= 1
       if (linesLeft <= 0) {

@@ -23,9 +23,6 @@ trait Names extends reflect.generic.Names {
   private final val HASH_MASK  = 0x7FFF
   private final val NAME_SIZE  = 0x20000
 
-  private final val MaxFileNameLength = 255
-  private final val MaxClassNameLength = MaxFileNameLength - 6 // leave space for ".class"
-
   final val nameDebug = false
 
   /** memory to store all names sequentially
@@ -78,26 +75,6 @@ trait Names extends reflect.generic.Names {
     else nc = nc + len
   }
 
-  private lazy val md5 = MessageDigest.getInstance("MD5")
-
-  /** "COMPACTIFY" */
-  private def toMD5(s: String, edge: Int) = {
-    val prefix = s take edge
-    val suffix = s takeRight edge
-    val marker = "$$$$"
-    
-    val cs = s.toArray
-    val bytes = Codec fromUTF8 cs
-    md5 update bytes
-    val md5chars = md5.digest() map (b => (b & 0xFF).toHexString) mkString
-    
-    prefix + marker + md5chars + marker + suffix
-  }
-
-  def compactify(s: String): String =
-    if (s.length <= MaxClassNameLength) s 
-    else toMD5(s, MaxClassNameLength / 4)
-
   /** Create a term name from the characters in cs[offset..offset+len-1].
    */
   def newTermName(cs: Array[Char], offset: Int, len: Int): TermName = {
@@ -120,7 +97,7 @@ trait Names extends reflect.generic.Names {
   /** Create a term name from the UTF8 encoded bytes in bs[offset..offset+len-1].
    */
   def newTermName(bs: Array[Byte], offset: Int, len: Int): TermName =
-    newTermName(Codec toUTF8 bs.slice(offset, offset + len) mkString)
+    newTermName(Codec fromUTF8 bs.slice(offset, offset + len) mkString)
 
   /** Create a type name from the characters in cs[offset..offset+len-1].
    */
@@ -193,7 +170,7 @@ trait Names extends reflect.generic.Names {
      *  (i.e. maximally 3*length bytes).
      */
     final def copyUTF8(bs: Array[Byte], offset: Int): Int = {
-      val bytes = Codec fromUTF8 chrs.slice(index, index + len)
+      val bytes = Codec toUTF8 chrs.slice(index, index + len)
       compat.Platform.arraycopy(bytes, 0, bs, offset, bytes.length)
       offset + bytes.length
     }

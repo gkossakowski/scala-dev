@@ -12,6 +12,8 @@ trait SourceContext extends SourceLocation {
   def update(name: String, sourceInfo: List[(String, Int)]): SourceContext
 
   def firstContext: List[(String, Int)]
+
+  def allContexts: List[List[(String, Int)]]
 }
 
 object SourceContext {
@@ -35,6 +37,8 @@ object SourceContext {
       contexts ::= sourceInfo
       this
     }
+
+    def allContexts = contexts
   }
   
 }

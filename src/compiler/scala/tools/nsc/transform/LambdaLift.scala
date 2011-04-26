@@ -403,7 +403,7 @@ abstract class LambdaLift extends InfoTransform {
           if (sym.isLocal) liftDef(tree1) else tree1
         case DefDef(_, _, _, _, _, _) =>
           val tree1 = addFreeParams(tree, sym)
-          if (sym.isLocal) liftDef(tree1) else tree1
+          if (sym.isLocal) liftDef(tree1) else tree1 
         case ValDef(mods, name, tpt, rhs) =>
           if (sym.isCapturedVariable) {
             val tpt1 = TypeTree(sym.tpe) setPos tpt.pos

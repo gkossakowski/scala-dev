@@ -408,7 +408,8 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
     def isStrictFP          = hasAnnotation(ScalaStrictFPAttr) || (enclClass hasAnnotation ScalaStrictFPAttr)
     def isSerializable      = info.baseClasses.exists(p => p == SerializableClass || p == JavaSerializableClass) || hasAnnotation(SerializableAttr) // last part can be removed, @serializable annotation is deprecated
     def isDeprecated        = hasAnnotation(DeprecatedAttr)
-    def deprecationMessage  = getAnnotation(DeprecatedAttr) flatMap { _.stringArg(0) }
+    def deprecationMessage  = getAnnotation(DeprecatedAttr) flatMap (_ stringArg 0)
+    def deprecationVersion  = getAnnotation(DeprecatedAttr) flatMap (_ stringArg 1)
     // !!! when annotation arguments are not literal strings, but any sort of 
     // assembly of strings, there is a fair chance they will turn up here not as
     // Literal(const) but some arbitrary AST.  However nothing in the compiler
@@ -1578,10 +1579,6 @@ trait Symbols extends reflect.generic.Symbols { self: SymbolTable =>
      */
     def nameString: String = decodedName + idString
 
-    /** The name of the symbol before decoding, e.g. `$eq$eq` instead of `==`.
-     */
-    def encodedName: String = name.toString
-    
     /** If settings.uniqid is set, the symbol's id, else "" */
     final def idString: String =
       if (settings.uniqid.value) "#"+id // +" in "+owner.name+"#"+owner.id // DEBUG

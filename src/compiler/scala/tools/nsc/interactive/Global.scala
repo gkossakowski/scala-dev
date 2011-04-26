@@ -173,7 +173,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   def isOutOfDate: Boolean = outOfDate
     
   def demandNewCompilerRun() = {
-    if (outOfDate) throw FreshRunReq // cancel background compile
+    if (outOfDate) throw new FreshRunReq // cancel background compile
     else outOfDate = true            // proceed normally and enable new background compile
   }
 
@@ -277,7 +277,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
    *  @param pos   The position of the tree if polling while typechecking, NoPosition otherwise
    *  
    */
-  protected[interactive] def pollForWork(pos: Position) {
+  private[interactive] def pollForWork(pos: Position) {
     if (!interruptsEnabled) return
     if (pos == NoPosition || nodesSeen % yieldPeriod == 0)
       Thread.`yield`()
@@ -316,7 +316,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
       }
     
       logreplay("exception thrown", scheduler.pollThrowable()) match {
-        case Some(ex @ FreshRunReq) => 
+        case Some(ex: FreshRunReq) => 
           newTyperRun()
           minRunId = currentRunId
           demandNewCompilerRun()
@@ -386,7 +386,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   private var threadId = 0
 
   /** The current presentation compiler runner */
-  @volatile protected[interactive] var compileRunner = newRunnerThread()
+  @volatile private[interactive] var compileRunner = newRunnerThread()
 
   /** Create a new presentation compiler runner.
    */
@@ -537,11 +537,13 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
     } catch {
       case CancelException =>
         debugLog("cancelled")
-/* Commented out. Typing should always cancel requests 
-      case ex @ FreshRunReq =>
-        scheduler.postWorkItem(() => respondGradually(response)(op))
+      case ex: FreshRunReq =>
+        if (debugIDE) {
+          println("FreshRunReq thrown during response")
+          ex.printStackTrace()
+        }
+        response raise ex
         throw ex
-*/
       case ex =>
         if (debugIDE) {
           println("exception thrown during response: "+ex)
@@ -553,7 +555,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
     }
   }
 
-  protected def reloadSource(source: SourceFile) {
+  private def reloadSource(source: SourceFile) {
     val unit = new RichCompilationUnit(source)
     unitOfFile(source.file) = unit
     reset(unit)
@@ -561,7 +563,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   }
 
   /** Make sure a set of compilation units is loaded and parsed */
-  protected def reloadSources(sources: List[SourceFile]) {
+  private def reloadSources(sources: List[SourceFile]) {
     newTyperRun()
     minRunId = currentRunId
     sources foreach reloadSource
@@ -569,15 +571,31 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   }
 
   /** Make sure a set of compilation units is loaded and parsed */
-  protected def reload(sources: List[SourceFile], response: Response[Unit]) {
+  private[interactive] def reload(sources: List[SourceFile], response: Response[Unit]) {
     informIDE("reload: " + sources)
     lastWasReload = true
     respond(response)(reloadSources(sources))
     demandNewCompilerRun()
   }
 
+  private[interactive] def filesDeleted(sources: List[SourceFile], response: Response[Unit]) {
+    informIDE("files deleted: " + sources)
+    val deletedFiles = sources.map(_.file).toSet
+    val deletedSyms = currentTopLevelSyms filter {sym => deletedFiles contains sym.sourceFile}
+    for (d <- deletedSyms) {
+      d.owner.info.decls unlink d
+      deletedTopLevelSyms += d
+      currentTopLevelSyms -= d
+    }
+    sources foreach (removeUnitOf(_))
+    minRunId = currentRunId
+    respond(response) ()
+    demandNewCompilerRun()
+  }
+
+
   /** A fully attributed tree located at position `pos` */
-  protected def typedTreeAt(pos: Position): Tree = getUnit(pos.source) match {
+  private def typedTreeAt(pos: Position): Tree = getUnit(pos.source) match {
     case None =>
       reloadSources(List(pos.source))
       val result = typedTreeAt(pos)
@@ -612,7 +630,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   }
 
   /** A fully attributed tree corresponding to the entire compilation unit  */
-  protected def typedTree(source: SourceFile, forceReload: Boolean): Tree = {
+  private def typedTree(source: SourceFile, forceReload: Boolean): Tree = {
     informIDE("typedTree " + source + " forceReload: " + forceReload)
     val unit = getOrCreateUnitOf(source)
     if (forceReload) reset(unit)
@@ -622,18 +640,18 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   }
 
   /** Set sync var `response` to a fully attributed tree located at position `pos`  */
-  protected def getTypedTreeAt(pos: Position, response: Response[Tree]) {
+  private[interactive] def getTypedTreeAt(pos: Position, response: Response[Tree]) {
     respond(response)(typedTreeAt(pos))
   }
 
   /** Set sync var `response` to a fully attributed tree corresponding to the
    *  entire compilation unit  */
-  protected def getTypedTree(source: SourceFile, forceReload: Boolean, response: Response[Tree]) {
+  private[interactive] def getTypedTree(source: SourceFile, forceReload: Boolean, response: Response[Tree]) {
     respond(response)(typedTree(source, forceReload))
   }
 
   /** Implements CompilerControl.askLinkPos */
-  protected def getLinkPos(sym: Symbol, source: SourceFile, response: Response[Position]) {
+  private[interactive] def getLinkPos(sym: Symbol, source: SourceFile, response: Response[Position]) {
     informIDE("getLinkPos "+sym+" "+source)
     respond(response) {
       val preExisting = unitOfFile isDefinedAt source.file
@@ -696,7 +714,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
 
   import analyzer.{SearchResult, ImplicitSearch}
 
-  protected def getScopeCompletion(pos: Position, response: Response[List[Member]]) {
+  private[interactive] def getScopeCompletion(pos: Position, response: Response[List[Member]]) {
     informIDE("getScopeCompletion" + pos)
     respond(response) { scopeMembers(pos) }
   }
@@ -737,7 +755,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   }
   
   /** Return all members visible without prefix in context enclosing `pos`. */
-  protected def scopeMembers(pos: Position): List[ScopeMember] = {
+  private def scopeMembers(pos: Position): List[ScopeMember] = {
     typedTreeAt(pos) // to make sure context is entered
     val context = doLocateContext(pos)
     val locals = new Members[ScopeMember]
@@ -770,13 +788,13 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
     result
   }
 
-  protected def getTypeCompletion(pos: Position, response: Response[List[Member]]) {
+  private[interactive] def getTypeCompletion(pos: Position, response: Response[List[Member]]) {
     informIDE("getTypeCompletion " + pos)
     respondGradually(response) { typeMembers(pos) }
     //if (debugIDE) typeMembers(pos)
   }
 
-  protected def typeMembers(pos: Position): Stream[List[TypeMember]] = {
+  private def typeMembers(pos: Position): Stream[List[TypeMember]] = {
     var tree = typedTreeAt(pos)
 
     // if tree consists of just x. or x.fo where fo is not yet a full member name
@@ -846,7 +864,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   }
   
   /** Implements CompilerControl.askLoadedTyped */
-  protected def waitLoadedTyped(source: SourceFile, response: Response[Tree], onSameThread: Boolean = true) {
+  private[interactive] def waitLoadedTyped(source: SourceFile, response: Response[Tree], onSameThread: Boolean = true) {
     getUnit(source) match {
       case Some(unit) =>
         if (unit.isUpToDate) {
@@ -867,7 +885,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
   }
   
   /** Implements CompilerControl.askParsedEntered */
-  protected def getParsedEntered(source: SourceFile, keepLoaded: Boolean, response: Response[Tree], onSameThread: Boolean = true) {
+  private[interactive] def getParsedEntered(source: SourceFile, keepLoaded: Boolean, response: Response[Tree], onSameThread: Boolean = true) {
     getUnit(source) match {
       case Some(unit) =>
         getParsedEnteredNow(source, response)

@@ -232,15 +232,7 @@ trait Infer {
     }
 
     def explainTypes(tp1: Type, tp2: Type) = 
-      withDisambiguation(tp1, tp2)(global.explainTypes(tp1, tp2))
-
-    def accessError(tree: Tree, sym: Symbol, pre: Type, explanation: String): Tree = {
-      val realsym = underlying(sym)
-      
-      errorTree(tree, realsym + realsym.locationString + " cannot be accessed in " +
-                (if (sym.isClassConstructor) context.enclClass.owner else pre.widen) +
-                explanation)
-    }
+      withDisambiguation(List(), tp1, tp2)(global.explainTypes(tp1, tp2))
 
     /* -- Tests & Checks---------------------------------------------------- */
 
@@ -258,8 +250,11 @@ trait Infer {
         if (context.unit != null)
           context.unit.depends += sym.toplevelClass 
 
-        val sym1 = sym filter (alt => context.isAccessible(alt, pre, site.isInstanceOf[Super]))
+        var sym1 = sym filter (alt => context.isAccessible(alt, pre, site.isInstanceOf[Super]))
         // Console.println("check acc " + (sym, sym1) + ":" + (sym.tpe, sym1.tpe) + " from " + pre);//DEBUG
+        
+        if (sym1 == NoSymbol && sym.isJavaDefined && context.unit.isJava) // don't try to second guess Java; see #4402
+          sym1 = sym
 
         if (sym1 == NoSymbol) {
           if (settings.debug.value) {
@@ -267,7 +262,7 @@ trait Infer {
             Console.println(tree)
             Console.println("" + pre + " " + sym.owner + " " + context.owner + " " + context.outer.enclClass.owner + " " + sym.owner.thisType + (pre =:= sym.owner.thisType))
           }
-          accessError(tree, sym, pre,
+          new AccessError(tree, sym, pre,
             if (settings.check.isDefault) {
               analyzer.lastAccessCheckDetails
             } else {
@@ -295,10 +290,10 @@ trait Infer {
               if (settings.debug.value) ex.printStackTrace
               val sym2 = underlying(sym1)
               val itype = pre.memberType(sym2)
-              accessError(tree, sym, pre,
+              new AccessError(tree, sym, pre,
                           "\n because its instance type "+itype+
                           (if ("malformed type: "+itype.toString==ex.msg) " is malformed" 
-                           else " contains a "+ex.msg))
+                           else " contains a "+ex.msg)).emit()
               ErrorType
           }
           if (pre.isInstanceOf[SuperType])
@@ -1512,7 +1507,7 @@ trait Infer {
           secondTry = true
         }
         def improves(sym1: Symbol, sym2: Symbol): Boolean =
-          sym2 == NoSymbol || 
+          sym2 == NoSymbol || sym2.hasAnnotation(BridgeClass) ||
           { val tp1 = pre.memberType(sym1)
             val tp2 = pre.memberType(sym2)
             (tp2 == ErrorType ||
@@ -1602,7 +1597,7 @@ trait Infer {
 
           def improves(sym1: Symbol, sym2: Symbol) =
 //            util.trace("improve "+sym1+sym1.locationString+" on "+sym2+sym2.locationString)(
-            sym2 == NoSymbol || sym2.isError ||
+            sym2 == NoSymbol || sym2.isError || sym2.hasAnnotation(BridgeClass) ||
             isStrictlyMoreSpecific(followApply(pre.memberType(sym1)),
                                    followApply(pre.memberType(sym2)), sym1, sym2)
 
@@ -1697,6 +1692,21 @@ trait Infer {
       }
       // Side effects tree with symbol and type
       tree setSymbol resSym setType resTpe
+    }
+
+    case class AccessError(tree: Tree, sym: Symbol, pre: Type, explanation: String) extends Tree {
+      override def pos = tree.pos
+      override def hasSymbol = tree.hasSymbol
+      override def symbol = tree.symbol
+      override def symbol_=(x: Symbol) = tree.symbol = x
+      setError(this)
+      
+      def emit(): Tree = {
+        val realsym = underlying(sym)
+        errorTree(tree, realsym + realsym.locationString + " cannot be accessed in " +
+            (if (sym.isClassConstructor) context.enclClass.owner else pre.widen) +
+            explanation)
+      }
     }
   }
 }

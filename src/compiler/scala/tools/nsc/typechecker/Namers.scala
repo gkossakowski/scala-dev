@@ -454,6 +454,8 @@ trait Namers { self: Analyzer =>
             finishWith(tparams)
           case DefDef(mods, name, tparams, _, _, _) =>
             tree.symbol = enterNewMethod(tree, name, mods.flags, mods, tree.pos)
+            if (mods.annotations.exists(ann => isAnn(ann, "bridge")))
+              tree.symbol setFlag BRIDGE
             finishWith(tparams)
           case TypeDef(mods, name, tparams, _) =>
             var flags: Long = mods.flags
@@ -496,14 +498,15 @@ trait Namers { self: Analyzer =>
     def enterAccessorMethod(tree: Tree, name: Name, flags: Long, mods: Modifiers): TermSymbol = 
       enterNewMethod(tree, name, flags, mods, tree.pos.focus)
 
+    def isAnn(ann: Tree, demand: String) = ann match {
+      case Apply(Select(New(Ident(name)), _), _) =>
+        name.toString == demand
+      case Apply(Select(New(Select(pre, name)), _), _) =>
+        name.toString == demand
+      case _ => false
+    }
+
     private def addBeanGetterSetter(vd: ValDef, getter: Symbol) {
-      def isAnn(ann: Tree, demand: String) = ann match {
-        case Apply(Select(New(Ident(name)), _), _) =>
-          name.toString == demand
-        case Apply(Select(New(Select(pre, name)), _), _) =>
-          name.toString == demand
-        case _ => false
-      }
       val ValDef(mods, name, tpt, _) = vd
       val hasBP = mods.annotations.exists(isAnn(_, "BeanProperty"))
       val hasBoolBP = mods.annotations.exists(isAnn(_, "BooleanBeanProperty"))
@@ -557,7 +560,7 @@ trait Namers { self: Analyzer =>
           }
         case _ =>
       }
-      sym.setInfo(tp)
+      sym.setInfo(if (sym.isJavaDefined) RestrictJavaArraysMap(tp) else tp)
       if ((sym.isAliasType || sym.isAbstractType) && !sym.isParameter && 
           !typer.checkNonCyclic(tree.pos, tp))
         sym.setInfo(ErrorType) // this early test is there to avoid infinite baseTypes when
@@ -1122,13 +1125,9 @@ trait Namers { self: Analyzer =>
      * @param namer is the namer of the module class (the comp. obj)
      */
     def addApplyUnapply(cdef: ClassDef, namer: Namer) {
-      if (!(cdef.symbol hasFlag ABSTRACT)) {
-        val applyMethod = caseModuleApplyMeth(cdef)
-        if (applyMethod.vparamss.size > 2)
-          context.error(cdef.symbol.pos, "case classes limited by implementation: maximum of 2 constructor parameter lists.")
-                  
-        namer.enterSyntheticSym(applyMethod)
-      }
+      if (!cdef.symbol.hasAbstractFlag)
+        namer.enterSyntheticSym(caseModuleApplyMeth(cdef))
+        
       namer.enterSyntheticSym(caseModuleUnapplyMeth(cdef))
     }
 
@@ -1276,6 +1275,20 @@ trait Namers { self: Analyzer =>
           new DeSkolemizeMap(tparams) mapOver result
         case _ => 
           result
+      }
+    }
+
+    /** Convert Java generic array type T[] to (T with Object)[]
+     *  (this is necessary because such arrays have a representation which is incompatible
+     *   with arrays of primitive types.)
+     */
+    private object RestrictJavaArraysMap extends TypeMap {
+      def apply(tp: Type): Type = tp match {
+        case TypeRef(pre, ArrayClass, List(elemtp)) 
+        if elemtp.typeSymbol.isAbstractType && !(elemtp <:< definitions.ObjectClass.tpe) => 
+          TypeRef(pre, ArrayClass, List(intersectionType(List(elemtp, definitions.ObjectClass.tpe))))
+        case _ =>
+          mapOver(tp)
       }
     }
 

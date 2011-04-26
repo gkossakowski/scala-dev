@@ -991,6 +991,7 @@ abstract class GenICode extends SubComponent  {
         case Select(qualifier, selector) =>
           val sym = tree.symbol
           generatedType = toTypeKind(sym.info)
+          val hostClass = qualifier.tpe.typeSymbol.orElse(sym.owner)
 
           if (sym.isModule) {
             if (settings.debug.value)
@@ -999,11 +1000,11 @@ abstract class GenICode extends SubComponent  {
             genLoadModule(ctx, sym, tree.pos)
             ctx
           } else if (sym.isStaticMember) {
-            ctx.bb.emit(LOAD_FIELD(sym, true), tree.pos)
+            ctx.bb.emit(LOAD_FIELD(sym, true)  setHostClass hostClass, tree.pos)
             ctx
           } else {
             val ctx1 = genLoadQualifier(tree, ctx)
-            ctx1.bb.emit(LOAD_FIELD(sym, false), tree.pos)
+            ctx1.bb.emit(LOAD_FIELD(sym, false) setHostClass hostClass, tree.pos)
             ctx1
           }
 
@@ -1141,10 +1142,14 @@ abstract class GenICode extends SubComponent  {
               log("Dropped an " + from);
 
           case _ =>
-          if (settings.debug.value)
-            assert(from != UNIT, "Can't convert from UNIT to " + to + " at: " + pos)
-            assert(!from.isReferenceType && !to.isReferenceType, "type error: can't convert from " + from + " to " + to +" in unit "+this.unit)
-            ctx.bb.emit(CALL_PRIMITIVE(Conversion(from, to)), pos);
+            if (settings.debug.value) {
+              assert(from != UNIT,
+                  "Can't convert from UNIT to " + to + " at: " + pos)
+            }
+            assert(!from.isReferenceType && !to.isReferenceType,
+              "type error: can't convert from " + from + " to " + to +" in unit " + unit.source)
+              
+            ctx.bb.emit(CALL_PRIMITIVE(Conversion(from, to)), pos)
         }
       } else if (from == NothingReference) {
         ctx.bb.emit(THROW(ThrowableClass))

@@ -3489,6 +3489,10 @@ trait Typers extends Modes {
                 if (fun1.symbol == EmbeddedControls_ifThenElse) {
                   removeFunUndets()
                   val List(cond, t, e) = args
+                  //TR FIXME
+                  // fail ---> new EmbeddedControls { def __ifThenElse[T](cond: Option[Boolean], thenp: Option[T], elsep: Option[T]): Option[T] = thenp; if (7 < 8) println("yo") }
+                  //println("-- calling typedIf with:")
+                  //println(cond.tpe + "//" + cond.getClass.getName + "//" + cond)
                   typedIf(cond, t, e)
                 } else if (fun1.symbol == EmbeddedControls_newVar) {
                   removeFunUndets()

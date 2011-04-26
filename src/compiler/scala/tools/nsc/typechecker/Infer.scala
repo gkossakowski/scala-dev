@@ -1024,9 +1024,10 @@ trait Infer {
           //val bounds = instantiatedBounds(pre, owner, tparams, targs)//DEBUG
           //println("bounds = "+bounds+", targs = "+targs+", targclasses = "+(targs map (_.getClass))+", parents = "+(targs map (_.parents)))
           //println(List.map2(bounds, targs)((bound, targ) => bound containsType targ))
+          val ownerString = if (tparams.nonEmpty) tparams.head.owner.toString else "<tparams=Nil>"
           error(pos, 
                 prefix + "type arguments " + targs.mkString("[", ",", "]") + 
-                " do not conform to " + tparams.head.owner + "'s type parameter bounds " + 
+                " do not conform to " + ownerString + "'s type parameter bounds " + 
                 (tparams map (_.defString)).mkString("[", ",", "]"))
           if (settings.explaintypes.value) {
             val bounds = tparams map (tp => tp.info.instantiateTypeParams(tparams, targs).bounds)

@@ -270,4 +270,11 @@ object Manifest {
       def erasure = parents.head.erasure
       override def toString = parents.mkString(" with ")
     }
+
+  def refinedType[T](parent: Manifest[_], fieldNames: List[String], fieldTypes: List[Manifest[_]]): Manifest[T] =
+    new RefinedManifest[T] {
+      def erasure = parent.erasure
+      def fields = fieldNames zip fieldTypes
+    }
+
 }

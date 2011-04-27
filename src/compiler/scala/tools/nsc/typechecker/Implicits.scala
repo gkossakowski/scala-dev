@@ -1032,12 +1032,24 @@ trait Implicits {
               EmptyTree  // a manifest should have been found by normal searchImplicit
             }
           case RefinedType(parents, decls) =>
-            // refinement is not generated yet
-            if (hasLength(parents, 1)) findManifest(parents.head)
+            // refinement only generated if type has only one parent
+            if (hasLength(parents, 1)) {
+              val entries: List[Symbol] = (decls.toList filter { entry =>
+                !entry.isConstructor && entry.allOverriddenSymbols.isEmpty && !entry.isPrivate
+              })
+              val names: List[String] = entries map { _.name.toString }
+              val namesTrees: List[Tree] = names map { name => Literal(name) }
+              val namesTree: Tree = Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), namesTrees)
+              val maniTrees: List[Tree] = entries map { sym => findManifest(sym.tpe) }
+              val maniTree: Tree = Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), maniTrees)
+              manifestFactoryCall("refinedType", tp, findManifest(parents.head), namesTree, maniTree)
+            }
             else if (full) manifestFactoryCall("intersectionType", tp, parents map (findSubManifest(_)): _*)
             else mot(erasure.erasure.intersectionDominator(parents))
           case ExistentialType(tparams, result) =>
             mot(tp1.skolemizeExistential)
+          case NullaryMethodType(result) =>
+            mot(result)
           case _ =>
             EmptyTree
         }

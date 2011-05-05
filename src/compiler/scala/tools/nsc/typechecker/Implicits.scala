@@ -442,8 +442,6 @@ trait Implicits {
      }
 
     private def typedImplicit0(info: ImplicitInfo, ptChecked: Boolean): SearchResult = {
-      incCounter(plausiblyCompatibleImplicits)
-
       printTyping("typed impl for "+wildPt+"? "+info.name +":"+ depoly(info.tpe)+ " orig info= "+ info.tpe +"/"+undetParams+"/"+isPlausiblyCompatible(info.tpe, wildPt)+"/"+matchesPt(depoly(info.tpe), wildPt, List())+"/"+info.pre+"/"+isStable(info.pre))
       if (ptChecked || matchesPt(depoly(info.tpe), wildPt, List()) && isStable(info.pre))
         typedImplicit1(info)
@@ -452,8 +450,6 @@ trait Implicits {
     }
 
     private def typedImplicit1(info: ImplicitInfo): SearchResult = {
-      incCounter(matchingImplicits)
-
       val itree = atPos(tree.pos.focus) {
         if (info.pre == NoPrefix) Ident(info.name) 
         else Select(gen.mkAttributedQualifier(info.pre), info.name)
@@ -615,8 +611,8 @@ trait Implicits {
       def survives(info: ImplicitInfo): Boolean = {
         !info.isCyclicOrErroneous &&
         !(isView && isConformsMethod(info.sym)) &&
-        isPlausiblyCompatible(info.tpe, wildPt) &&        // <--- cheaper than matchesPt
-        matchesPt(depoly(info.tpe), wildPt, Nil) &&
+        isPlausiblyCompatible(info.tpe, wildPt)  &&{ incCounter(plausiblyCompatibleImplicits) ; true}&&      // <--- cheaper than matchesPt
+        matchesPt(depoly(info.tpe), wildPt, Nil) &&{ incCounter(matchingImplicits)            ; true}&&
         isStable(info.pre) &&
         (shadowed == null || (!shadowed(info.name) && !nonImplicitSynonymInScope(info.name)))
       }
@@ -627,7 +623,10 @@ trait Implicits {
       
       /** Tests for validity and updates invalidImplicits by side effect when false.
        */
-      private def checkValid(sym: Symbol) = isValid(sym) || { invalidImplicits += sym ; false }
+      private def checkValid(sym: Symbol) = {
+        incCounter(triedImplicits)
+        isValid(sym) || { invalidImplicits += sym ; false }
+      }
       
       /** Preventing a divergent implicit from terminating implicit search,
        *  so that if there is a best candidate it can still be selected.
@@ -653,7 +652,10 @@ trait Implicits {
         }
 
         // most frequent one first
-        matches sortBy (x => if (isView) -x.useCountView else -x.useCountArg)
+        val start = startTimer(sortingEligibleNanos)
+        val res = matches sortBy (x => if (isView) -x.useCountView else -x.useCountArg)
+        stopTimer(sortingEligibleNanos, start)
+        res
       }
 
       /** Faster implicit search.  Overall idea:

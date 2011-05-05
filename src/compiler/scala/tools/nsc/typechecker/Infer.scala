@@ -371,14 +371,19 @@ trait Infer {
     /** This expresses more cleanly in the negative: there's a linear path
      *  to a final true or false.
      */
-    private def isPlausiblySubType(tp1: Type, tp2: Type) = !isImpossibleSubType(tp1, tp2)
-    private def isImpossibleSubType(tp1: Type, tp2: Type) = {
+    private def isPlausiblySubType(tp1: Type, tp2: Type): Boolean = !isImpossibleSubType(tp1, tp2)
+    private def isImpossibleSubType(tp1: Type, tp2: Type): Boolean = {
+      @inline def isSubArg(t1: Type, t2: Type, variance: Int): Boolean =
+        (variance > 0 || isPlausiblySubType(t2, t1)) && (variance < 0 || isPlausiblySubType(t1, t2))
+      @inline def isPossibleSubArgs(tps1: List[Type], tps2: List[Type], tparams: List[Symbol]): Boolean =
+        corresponds3(tps1, tps2, tparams map (_.variance), isSubArg)
+
       (tp1.dealias, tp2.dealias) match {
-        case (TypeRef(_, sym1, _), TypeRef(_, sym2, _)) =>
+        case (TypeRef(_, sym1, args1), TypeRef(_, sym2, args2)) =>
            sym1.isClass &&
            sym2.isClass &&
           !(sym1 isSubClass sym2) &&
-          !(sym1 isNumericSubClass sym2)
+          !(sym1 isNumericSubClass sym2) || !isPossibleSubArgs(args1, args2, sym1.typeParams)
         case _ =>
           false
       }

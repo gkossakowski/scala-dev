@@ -163,6 +163,7 @@ object Statistics {
   val subtypeImprovCount = new SubCounter(subtypeCount)
   val subtypeETNanos = new Timer
   val matchesPtNanos = new Timer
+  val sortingEligibleNanos = new Timer
   val ctr1 = new Counter
   val ctr2 = new Counter
   val ctr3 = new Counter
@@ -243,6 +244,7 @@ abstract class Statistics {
         inform("        failed in scope  : "+showRelTyper(inscopeFailNanos))
         inform("     successful of type  : "+showRelTyper(oftypeSucceedNanos))
         inform("         failed of type  : "+showRelTyper(oftypeFailNanos))
+        inform("        sorting eligible : "+showRelTyper(sortingEligibleNanos))
         inform("       assembling parts  : "+showRelTyper(subtypeETNanos))
         inform("              matchesPT  : "+showRelTyper(matchesPtNanos))
         inform("implicit cache hits      : "+showRelative(implicitCacheHits.value + implicitCacheMisses.value)(implicitCacheHits.value))

@@ -89,9 +89,9 @@ override def companion: GenericCompanion[Vector] = Vector
   // In principle, escape analysis could even remove the iterator/builder allocations and do it
   // with local variables exclusively. But we're not quite there yet ...
 
-  @deprecated("this method is experimental and will be removed in a future release")
+  @deprecated("this method is experimental and will be removed in a future release", "2.8.0")
   @inline def foreachFast[U](f: A => U): Unit = iterator.foreachFast(f)
-  @deprecated("this method is experimental and will be removed in a future release")
+  @deprecated("this method is experimental and will be removed in a future release", "2.8.0")
   @inline def mapFast[B, That](f: A => B)(implicit bf: CanBuildFrom[Vector[A], B, That]): That = {
     val b = bf(repr)
     foreachFast(x => b += f(x))
@@ -195,8 +195,8 @@ override def companion: GenericCompanion[Vector] = Vector
     
   // concat (stub)
   
-  override def ++[B >: A, That](that: TraversableOnce[B])(implicit bf: CanBuildFrom[Vector[A], B, That]): That = {
-    super.++(that)
+  override def ++[B >: A, That](that: GenTraversableOnce[B])(implicit bf: CanBuildFrom[Vector[A], B, That]): That = {
+    super.++(that.seq)
   }
 
     
@@ -663,7 +663,7 @@ class VectorIterator[+A](_startIndex: Int, _endIndex: Int) extends Iterator[A] w
     v
   }
   
-  @deprecated("this method is experimental and will be removed in a future release")
+  @deprecated("this method is experimental and will be removed in a future release", "2.8.0")
   @inline def foreachFast[U](f: A =>  U) { while (hasNext) f(next()) }
 }
 
@@ -704,7 +704,7 @@ final class VectorBuilder[A]() extends Builder[A,Vector[A]] with VectorPointer[A
     s
   }
   
-  def clear: Unit = {
+  def clear(): Unit = {
     display0 = new Array[AnyRef](32)
     depth = 1
     blockIndex = 0

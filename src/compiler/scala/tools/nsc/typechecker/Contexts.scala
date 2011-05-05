@@ -383,7 +383,7 @@ trait Contexts { self: Analyzer =>
      *  @param superAccess ...
      *  @return            ...
      */
-    def isAccessible(sym: Symbol, pre: Type, superAccess: Boolean): Boolean = {
+    def isAccessible(sym: Symbol, pre: Type, superAccess: Boolean = false): Boolean = {
       lastAccessCheckDetails = ""
       // Console.println("isAccessible(%s, %s, %s)".format(sym, pre, superAccess))
 
@@ -495,7 +495,7 @@ trait Contexts { self: Analyzer =>
     private var implicitsCache: List[List[ImplicitInfo]] = null
     private var implicitsRunId = NoRunId
     
-    def resetCache : Unit = {
+    def resetCache() {
       implicitsRunId = NoRunId
       implicitsCache = null
       if (outer != null && outer != this) outer.resetCache
@@ -507,7 +507,7 @@ trait Contexts { self: Analyzer =>
      */
     private def isQualifyingImplicit(sym: Symbol, pre: Type, imported: Boolean) =
       sym.isImplicit &&
-      isAccessible(sym, pre, false) && 
+      isAccessible(sym, pre) && 
       !(imported && {
         val e = scope.lookupEntry(sym.name)
         (e ne null) && (e.owner == scope)

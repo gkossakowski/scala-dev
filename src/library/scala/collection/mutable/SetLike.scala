@@ -13,7 +13,7 @@ package mutable
 
 import generic._
 import script._
-import scala.annotation.migration
+import annotation.{migration, bridge}
 import parallel.mutable.ParSet
 
 /** A template trait for mutable sets of type `mutable.Set[A]`.
@@ -129,7 +129,7 @@ trait SetLike[A, +This <: SetLike[A, This] with Set[A]]
    */
   def clear() { foreach(-=) }
 
-  override def clone(): This = empty ++= repr
+  override def clone(): This = empty ++= repr.seq
 
   /** The result when this set is used as a builder
    *  @return  the set representation itself.
@@ -173,13 +173,15 @@ trait SetLike[A, +This <: SetLike[A, This] with Set[A]]
    *  $addDuplicates
    *
    *  @param xs        the traversable object.
-   *  @return          a new set cconsisting of elements of this set and those in `xs`.
+   *  @return          a new set consisting of elements of this set and those in `xs`.
    */
   @migration(2, 8,
     "As of 2.8, this operation creates a new set.  To add the elements as a\n"+
     "side effect to an existing set and return that set itself, use ++=."
   )
-  override def ++(xs: TraversableOnce[A]): This = clone() ++= xs
+  override def ++(xs: GenTraversableOnce[A]): This = clone() ++= xs.seq
+
+  @bridge def ++(xs: TraversableOnce[A]): This = ++(xs: GenTraversableOnce[A])
 
   /** Creates a new set consisting of all the elements of this set except `elem`.
    *
@@ -219,7 +221,9 @@ trait SetLike[A, +This <: SetLike[A, This] with Set[A]]
     "As of 2.8, this operation creates a new set.  To remove the elements as a\n"+
     "side effect to an existing set and return that set itself, use --=."
   )
-  override def --(xs: TraversableOnce[A]): This = clone() --= xs
+  override def --(xs: GenTraversableOnce[A]): This = clone() --= xs.seq
+
+  @bridge def --(xs: TraversableOnce[A]): This = --(xs: GenTraversableOnce[A])
 
   /** Send a message to this scriptable object.
    *

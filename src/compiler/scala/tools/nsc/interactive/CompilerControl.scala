@@ -66,11 +66,11 @@ trait CompilerControl { self: Global =>
    *  if it does not yet exist create a new one atomically
    *  Note: We want to get roid of this operation as it messes compiler invariants.
    */
-  @deprecated("use getUnitOf(s) or onUnitOf(s) instead")
+  @deprecated("use getUnitOf(s) or onUnitOf(s) instead", "2.9.0")
   def unitOf(s: SourceFile): RichCompilationUnit = getOrCreateUnitOf(s)
     
   /** The compilation unit corresponding to a position */
-  @deprecated("use getUnitOf(pos.source) or onUnitOf(pos.source) instead")
+  @deprecated("use getUnitOf(pos.source) or onUnitOf(pos.source) instead", "2.9.0")
   def unitOf(pos: Position): RichCompilationUnit = getOrCreateUnitOf(pos.source)
 
   /** Removes the CompilationUnit corresponding to the given SourceFile
@@ -107,7 +107,7 @@ trait CompilerControl { self: Global =>
     if (item.onCompilerThread) item() else scheduler.postWorkItem(item)
     
   /** Makes sure a set of compilation units is loaded and parsed.
-   *  Returns () to syncvar `response` on completions.
+   *  Returns () to syncvar `response` on completion.
    *  Afterwards a new background compiler run is started with
    *  the given sources at the head of the list of to-be-compiled sources.
    */
@@ -118,6 +118,13 @@ trait CompilerControl { self: Global =>
     }
     superseeded.foreach(_.response.set())
     postWorkItem(new ReloadItem(sources, response))
+  }
+
+  /** Removes source files and toplevel symbols, and issues a new typer run.
+   *  Returns () to syncvar `response` on completion.
+   */
+  def askFilesDeleted(sources: List[SourceFile], response: Response[Unit]) = {
+    postWorkItem(new FilesDeletedItem(sources, response))
   }
 
   /** Sets sync var `response` to the smallest fully attributed tree that encloses position `pos`.
@@ -199,12 +206,12 @@ trait CompilerControl { self: Global =>
   /** Cancels current compiler run and start a fresh one where everything will be re-typechecked
    *  (but not re-loaded).
    */
-  def askReset() = scheduler raise FreshRunReq
+  def askReset() = scheduler raise (new FreshRunReq)
 
   /** Tells the compile server to shutdown, and not to restart again */
   def askShutdown() = scheduler raise ShutdownReq
   
-  @deprecated("use parseTree(source) instead") 
+  @deprecated("use parseTree(source) instead", "2.9.0")
   def askParse(source: SourceFile, response: Response[Tree]) = respond(response) {
     parseTree(source)
   }
@@ -253,12 +260,17 @@ trait CompilerControl { self: Global =>
   // items that get sent to scheduler
   
   abstract class WorkItem extends (() => Unit) {
-    def onCompilerThread = self.onCompilerThread
+    val onCompilerThread = self.onCompilerThread
   }
 
   case class ReloadItem(sources: List[SourceFile], response: Response[Unit]) extends WorkItem {
     def apply() = reload(sources, response)
     override def toString = "reload "+sources
+  }
+
+  case class FilesDeletedItem(sources: List[SourceFile], response: Response[Unit]) extends WorkItem {
+    def apply() = filesDeleted(sources, response)
+    override def toString = "files deleted "+sources
   }
 
   class AskTypeAtItem(val pos: Position, response: Response[Tree]) extends WorkItem {
@@ -307,7 +319,7 @@ trait CompilerControl { self: Global =>
 /** Signals a request for a fresh background compiler run.
  *  Note: The object has to stay top-level so that the PresentationCompilerThread may access it.
  */
-object FreshRunReq extends ControlThrowable
+class FreshRunReq extends ControlThrowable
 
 /** Signals a request for a shutdown of the presentation compiler.
  *  Note: The object has to stay top-level so that the PresentationCompilerThread may access it.

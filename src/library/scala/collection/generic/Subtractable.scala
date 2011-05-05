@@ -10,6 +10,8 @@
 package scala.collection
 package generic
 
+import annotation.bridge
+
 /** This trait represents collection-like objects that can be reduced 
  *  using a '+' operator. It defines variants of `-` and `--`
  *  as convenience methods in terms of single-element removal `-`.
@@ -55,5 +57,8 @@ trait Subtractable[A, +Repr <: Subtractable[A, Repr]] { self =>
    *  @return a new $coll that contains all elements of the current $coll
    *  except one less occurrence of each of the elements of `elems`.
    */
-  def --(xs: TraversableOnce[A]): Repr = (repr /: xs) (_ - _)
+  def --(xs: GenTraversableOnce[A]): Repr = (repr /: xs.seq) (_ - _)
+
+  @bridge
+  def --(xs: TraversableOnce[A]): Repr = --(xs: GenTraversableOnce[A])
 }

@@ -380,15 +380,18 @@ trait Infer {
     private def isImpossibleSubType(tp1: Type, tp2: Type): Boolean = {
       @inline def isSubArg(t1: Type, t2: Type, variance: Int): Boolean =
         (variance > 0 || isPlausiblySubType(t2, t1)) && (variance < 0 || isPlausiblySubType(t1, t2))
-      @inline def isPossibleSubArgs(tps1: List[Type], tps2: List[Type], tparams: List[Symbol]): Boolean =
-        corresponds3(tps1, tps2, tparams map (_.variance), isSubArg)
+      @inline def isPossibleSubArgs(tps1: List[Type], tps2: List[Type], tparams: List[Symbol]): Boolean = {
+        val res = corresponds3(tps1, tps2, tparams map (_.variance), isSubArg)
+        if(!res) println("impossibleSubArgs"+(tps1, tps2, tparams, res))
+        res
+      }
 
       (tp1.dealias, tp2.dealias) match {
         case (TypeRef(_, sym1, args1), TypeRef(_, sym2, args2)) =>
            sym1.isClass &&
            sym2.isClass &&
-          !(sym1 isSubClass sym2) &&
-          !(sym1 isNumericSubClass sym2) || !isPossibleSubArgs(args1, args2, sym1.typeParams)
+          !((sym1 isSubClass sym2) /*&& isPossibleSubArgs(args1, args2, sym1.typeParams)*/) &&
+          !(sym1 isNumericSubClass sym2)
         case _ =>
           false
       }

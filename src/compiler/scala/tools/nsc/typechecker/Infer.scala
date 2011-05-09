@@ -1067,7 +1067,7 @@ trait Infer {
       }
       errorMessages.toList
     }
-    /** Substitite free type variables `undetparams' of polymorphic argument
+    /** Substitute free type variables `undetparams' of polymorphic argument
      *  expression `tree', given two prototypes `strictPt', and `lenientPt'.
      *  `strictPt' is the first attempt prototype where type parameters
      *  are left unchanged. `lenientPt' is the fall-back prototype where type
@@ -1114,7 +1114,7 @@ trait Infer {
       }
     }
 
-    /** Substitite free type variables `undetparams' of polymorphic argument
+    /** Substitute free type variables `undetparams' of polymorphic argument
      *  expression <code>tree</code> to `targs', Error if `targs' is null
      *
      *  @param tree ...
@@ -1196,7 +1196,7 @@ trait Infer {
         tp
     }
 
-    /** Substitite free type variables <code>undetparams</code> of type constructor
+    /** Substitute free type variables <code>undetparams</code> of type constructor
      *  <code>tree</code> in pattern, given prototype <code>pt</code>.
      *
      *  @param tree        ...
@@ -1569,7 +1569,9 @@ trait Infer {
                 (alts map pre.memberType) +", argtpes = "+ argtpes +", pt = "+ pt)
 
           var allApplicable = alts filter (alt =>
-            isApplicable(undetparams, followApply(pre.memberType(alt)), argtpes, pt))
+            // TODO: this will need to be re-written once we substitute throwing exceptions
+            // with generating error trees. We wrap this applicability in try/catch because of #4457.
+            try {isApplicable(undetparams, followApply(pre.memberType(alt)), argtpes, pt)} catch {case _: TypeError => false})
 
           //log("applicable: "+ (allApplicable map pre.memberType))
 

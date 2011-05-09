@@ -70,7 +70,11 @@ trait ParallelMatching extends ast.TreeDSL
 
       val newRows = rows1 flatMap (_ expandAlternatives classifyPat)
       if (rows1.length != newRows.length) make(roots1, newRows)  // recursive call if any change
-      else Rep(roots1, newRows).checkExhaustive
+      else {
+        val rep = Rep(roots1, newRows)
+        new ExhaustivenessChecker(rep, roots.head.sym.pos).check
+        rep
+      }
     }
     
     override def toString() = "MatchMatrix(%s) { %s }".format(matchResultType, indentAll(targets))
@@ -167,8 +171,7 @@ trait ParallelMatching extends ast.TreeDSL
       def size = ps.length
       
       def headType = head.necessaryType
-      def isCaseHead = head.isCaseClass
-      private val dummyCount = if (isCaseHead) headType.typeSymbol.caseFieldAccessors.length else 0
+      private val dummyCount = if (head.isCaseClass) headType.typeSymbol.caseFieldAccessors.length else 0
       def dummies = emptyPatterns(dummyCount)
 
       def apply(i: Int): Pattern = ps(i)
@@ -284,8 +287,8 @@ trait ParallelMatching extends ast.TreeDSL
 
       // bound vars and rows for default pattern (only one row, but a list is easier to use later)
       lazy val (defaultVars, defaultRows) = defaultPattern match {
-        case None                 => (Nil, Nil)
-        case Some(Pattern(_, vs)) => (vs, List(rebindAll(rest rows literals.size, vs, scrut.sym)))
+        case None    => (Nil, Nil)
+        case Some(p) => (p.boundVariables, List(rebindAll(rest rows literals.size, p.boundVariables, scrut.sym)))
       }
       
       // literalMap is a map from each literal to a list of row indices.
@@ -327,46 +330,41 @@ trait ParallelMatching extends ast.TreeDSL
     /** mixture rule for unapply pattern
      */
     class MixUnapply(val pmatch: PatternMatch, val rest: Rep) extends RuleApplication {
-      val uapattern = head match { case x: UnapplyPattern => x ; case _ => abort("XXX") }
-      val ua @ UnApply(app, args) = head.tree
-
-      // Note: trailingArgs is not necessarily Nil, because unapply can take implicit parameters.      
-      val Apply(fxn, _ :: trailingArgs) = app
-      private def reapply = Apply(fxn, scrut.id :: trailingArgs)
+      val Pattern(UnApply(unMethod, unArgs)) = head
+      val Apply(unTarget, _ :: trailing) = unMethod
+      
+      object SameUnapplyCall {
+        def isSame(t: Tree) = isEquivalentTree(unTarget, t)
+        def unapply(x: Pattern) = /*tracing("SameUnapplyCall (%s vs. %s)".format(unTarget, x))*/(x match {
+          case Pattern(UnApply(Apply(fn, _), args)) if isSame(fn) => Some(args)
+          case _                                                  => None
+        })
+      }
+      object SameUnapplyPattern {
+        def isSame(t: Tree)   = isEquivalentTree(unMethod, t)
+        def apply(x: Pattern) = unapply(x).isDefined
+        def unapply(x: Pattern) = /*tracing("SameUnapplyPattern (%s vs. %s)".format(unMethod, x))*/(x match {
+          case Pattern(UnApply(t, _)) if isSame(t) => Some(unArgs)
+          case _                                   => None
+        })
+      }
       
       private lazy val zipped      = pmatch pzip rest.rows
       
       lazy val unapplyResult: PatternVar =
-        scrut.createVar(app.tpe, lhs => reapply setType lhs.tpe)
+        scrut.createVar(unMethod.tpe, Apply(unTarget, scrut.id :: trailing) setType _.tpe)
 
-      // XXX in transition.
-      object sameUnapplyCall {
-        private def sameFunction(fn1: Tree) = fxn.symbol == fn1.symbol && (fxn equalsStructure fn1)
-
-        def unapply(p: Pattern) = condOpt(p) {
-          case Pattern(UnApply(Apply(fn1, _), args), _) if sameFunction(fn1)  =>
-            tracing("sameUnapply")(args)
-        }
-      }      
-      object SameUnapply {
-        def unapply(p: Pattern) = p match {
-          case x: UnapplyPattern if uapattern isSameUnapply x => Some(args)
-          case _                                              => None
-        }
-      }
-      def isSameUnapply(p: Pattern) = SameUnapply.unapply(p).isDefined
-      
       lazy val cond: Tree =
         if (unapplyResult.tpe.isBoolean) ID(unapplyResult.valsym)
         else unapplyResult.valsym IS_DEFINED
 
       lazy val failure = 
-        mkFail(zipped.tail filterNot (x => isSameUnapply(x._1)) map { case (pat, r) => r insert pat })
+        mkFail(zipped.tail filterNot (x => SameUnapplyPattern(x._1)) map { case (pat, r) => r insert pat })
       
       private def doSuccess: (List[PatternVar], List[PatternVar], List[Row]) = {
         // pattern variable for the unapply result of Some(x).get
         lazy val pv = scrut.createVar(
-          app.tpe typeArgs 0,
+          unMethod.tpe typeArgs 0,
           _ => fn(ID(unapplyResult.lhs), nme.get)
         )
         def tuple = pv.lhs
@@ -381,15 +379,15 @@ trait ParallelMatching extends ast.TreeDSL
             
         // the filter prevents infinite unapply recursion
         def mkNewRows(sameFilter: (List[Tree]) => List[Tree]) = {
-          val dum = if (args.length <= 1) args.length else tpes.size
+          val dum = if (unArgs.length <= 1) unArgs.length else tpes.size
           for ((pat, r) <- zipped) yield pat match {
-            case sameUnapplyCall(xs)  => r.insert2(toPats(sameFilter(xs)) ::: List(NoPattern), pat.boundVariables, scrut.sym)
-            case _                    => r insert (emptyPatterns(dum) ::: List(pat))
+            case SameUnapplyCall(xs)  => r.insert2(toPats(sameFilter(xs)) :+ NoPattern, pat.boundVariables, scrut.sym)
+            case _                    => r insert (emptyPatterns(dum) :+ pat)
           }
         }
 
         // 0 is Boolean, 1 is Option[T], 2+ is Option[(T1,T2,...)]
-        args.length match {
+        unArgs.length match {
           case 0  => (Nil, Nil, mkNewRows((xs) => Nil))
           case 1  => (List(pv), List(pv), mkNewRows(xs => List(xs.head)))
           case _  => (pv :: tuplePVs, tuplePVs, mkNewRows(identity))
@@ -416,9 +414,6 @@ trait ParallelMatching extends ast.TreeDSL
       def hasStar = pivot.hasStar
       private def pivotLen    = pivot.nonStarLength
       private def seqDummies  = emptyPatterns(pivot.elems.length + 1)
-      
-      // one pattern var per sequence element up to elemCount, and one more for the rest of the sequence
-      lazy val pvs = scrut createSequenceVars pivotLen
       
       // Should the given pattern join the expanded pivot in the success matrix? If so,
       // this partial function will be defined for the pattern, and the result of the apply
@@ -497,7 +492,12 @@ trait ParallelMatching extends ast.TreeDSL
         nullSafe(compareFn, FALSE)(scrut.id)
         // condition(head.tpe, scrut.id, head.boundVariables.nonEmpty)
       }
-      lazy val success  = squeezedBlock(pvs map (_.valDef), remake(successRows, pvs, hasStar).toTree)
+      lazy val success = {
+        // one pattern var per sequence element up to elemCount, and one more for the rest of the sequence
+        lazy val pvs = scrut createSequenceVars pivotLen
+
+        squeezedBlock(pvs map (_.valDef), remake(successRows, pvs, hasStar).toTree)
+      }
       lazy val failure  = remake(failRows).toTree
             
       final def tree(): Tree = codegen
@@ -554,16 +554,16 @@ trait ParallelMatching extends ast.TreeDSL
           def subs()          = passl(ifEquiv(NoPattern), pattern subpatterns pmatch)
           
           val (oneY, oneN) = pattern match {
-            case Pattern(LIT(null), _) if !(p =:= s)        => (None, passr)      // (1)
-            case x if isObjectTest                          => (passl(), None)    // (2)
-            case Pattern(Typed(pp, _), _)     if sMatchesP  => (typed(pp), None)  // (4)
+            case Pattern(LIT(null)) if !(p =:= s)       => (None, passr)      // (1)
+            case x if isObjectTest                      => (passl(), None)    // (2)
+            case Pattern(Typed(pp, _))     if sMatchesP => (typed(pp), None)  // (4)
             // The next line used to be this which "fixed" 1697 but introduced
             // numerous regressions including #3136.
-            // case Pattern(_: UnApply, _)                     => (passl(), passr)
-            case Pattern(_: UnApply, _)                     => (None, passr)
-            case x if !x.isDefault && sMatchesP             => (subs(), None)
-            case x if  x.isDefault || pMatchesS             => (passl(), passr)
-            case _                                          => (None, passr)              
+            // case Pattern(_: UnApply, _)              => (passl(), passr)
+            case Pattern(_: UnApply)                    => (None, passr)
+            case x if !x.isDefault && sMatchesP         => (subs(), None)
+            case x if  x.isDefault || pMatchesS         => (passl(), passr)
+            case _                                      => (None, passr)              
           }
           oneY map (_ys +=)
           oneN map (_ns +=)
@@ -726,9 +726,6 @@ trait ParallelMatching extends ast.TreeDSL
       lazy val Row(pats, subst, guard, index) = rows.head
       lazy val guardedRest        = if (guard.isEmpty) Rep(Nil, Nil) else make(tvars, rows.tail)
       lazy val (defaults, others) = pats span (_.isDefault)
-      
-      /** Sealed classes. */
-      def checkExhaustive = new ExhaustivenessChecker(this).check
       
       /** Cut out the column containing the non-default pattern. */
       class Cut(index: Int) {

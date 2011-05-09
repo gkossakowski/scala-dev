@@ -925,7 +925,32 @@ trait Typers extends Modes {
               log("error tree = "+tree)
               if (settings.explaintypes.value) explainTypes(tree.tpe, pt)
             }
-            typeErrorTree(tree, tree.tpe, pt)
+            try {
+              typeErrorTree(tree, tree.tpe, pt)
+            } catch {
+              case ex: TypeError => 
+                if (phase.id > currentRun.typerPhase.id &&
+                    pt.existentialSkolems.nonEmpty) {
+                  // Ignore type errors raised in later phases that are due to mismatching types with existential skolems
+                  // We have lift crashing in 2.9 with an adapt failure in the pattern matcher.
+                  // Here's my hypothsis why this happens. The pattern matcher defines a variable of type
+                  //
+                  //   val x: T = expr
+                  // 
+                  // where T is the type of expr, but T contains existential skolems ts.
+                  // In that case, this value definition does not typecheck. 
+                  // The value definition
+                  // 
+                  //   val x: T forSome { ts } = expr
+                  // 
+                  // would typecheck. Or one can simply leave out the type of the `val':
+                  //
+                  //   val x = expr
+                  context.unit.warning(tree.pos, "recovering from existential Skolem type error in tree \n"+tree+"\nwith type "+tree.tpe+"\n expected type = "+pt+"\n context = "+context.tree)
+                  adapt(tree, mode, pt.subst(pt.existentialSkolems, pt.existentialSkolems map (_ => WildcardType)))
+                } else 
+                  throw ex 
+            }
           }
         }
     }
@@ -2715,7 +2740,7 @@ trait Typers extends Modes {
                                    fun1clazz, 
                                    List(selfsym.info, annClass.tpe))
 
-            typed(func, mode, funcType) match {
+            (typed(func, mode, funcType): @unchecked) match {
               case t @ Function(List(arg), rhs) => 
                 val subs =
                   new TreeSymSubstituter(List(arg.symbol),List(selfsym))
@@ -2744,12 +2769,7 @@ trait Typers extends Modes {
           }
 
           if (annType.typeSymbol == DeprecatedAttr && argss.flatten.size < 2)
-            unit.deprecationWarning(ann.pos, """
-              |The `deprecated` annotation now takes two String parameters: the first is
-              |an explanation and/or recommended alternative, which will be printed to the
-              |console and also appear in the scaladoc.  The second is the first released
-              |version in which the member was deprecated.""".trim.stripMargin
-            )
+            unit.deprecationWarning(ann.pos, "@deprecated now takes two arguments; see the scaladoc.")
 
           if ((typedAnn.tpe == null) || typedAnn.tpe.isErroneous) annotationError
           else annInfo(typedAnn)
@@ -3173,8 +3193,7 @@ trait Typers extends Modes {
           context.tree match {
             case ValDef(mods, _, _, Apply(Select(`tree`, _), _)) if !mods.isMutable && sym != null && sym != NoSymbol =>
               val sym1 = if (sym.owner.isClass && sym.getter(sym.owner) != NoSymbol) sym.getter(sym.owner)
-                else if (sym.isLazyAccessor) sym.lazyAccessor
-                else sym
+                else sym.lazyAccessorOrSelf
               val pre = if (sym1.owner.isClass) sym1.owner.thisType else NoPrefix
               intersectionType(List(tp, singleType(pre, sym1)))
             case _ => tp
@@ -3874,6 +3893,7 @@ trait Typers extends Modes {
         // case x :: xs in class List would return the :: method)
         // unless they are stable or are accessors (the latter exception is for better error messages).
         def qualifies(sym: Symbol): Boolean = {
+          sym.hasRawInfo &&       // this condition avoids crashing on self-referential pattern variables
           reallyExists(sym) &&
           ((mode & PATTERNmode | FUNmode) != (PATTERNmode | FUNmode) || !sym.isSourceMethod || sym.hasFlag(ACCESSOR))
         }
@@ -3998,7 +4018,10 @@ trait Typers extends Modes {
                     // atPos necessary because qualifier might come from startContext
           val (tree2, pre2) = makeAccessible(tree1, defSym, pre, qual)
           // assert(pre.typeArgs isEmpty) // no need to add #2416-style check here, right?
-          stabilize(tree2, pre2, mode, pt)
+          stabilize(tree2, pre2, mode, pt) match {
+            case accErr: Inferencer#AccessError => accErr.emit()
+            case result => result
+          }
         }
       }
 

@@ -56,6 +56,15 @@ abstract class Pickler extends SubComponent {
           case _ =>
         }
       }
+      // If there are any erroneous types in the tree, then we will crash
+      // when we pickle it: so let's report an erorr instead.  We know next
+      // to nothing about what happened, but our supposition is a lot better
+      // than "bad type: <error>" in terms of explanatory power.
+      for (t <- unit.body ; if t.isErroneous) {
+        unit.error(t.pos, "erroneous or inaccessible type")
+        return
+      }
+
       pickle(unit.body)
     }
   }
@@ -135,15 +144,15 @@ abstract class Pickler extends SubComponent {
             putType(sym.typeOfThis);
           putSymbol(sym.alias)
           if (!sym.children.isEmpty) {
-            val (locals, globals) = sym.children.toList.partition(_.isLocalClass)
+            val (locals, globals) = sym.children partition (_.isLocalClass)
             val children = 
               if (locals.isEmpty) globals
               else {
                 val localChildDummy = sym.newClass(sym.pos, tpnme.LOCAL_CHILD)
                 localChildDummy.setInfo(ClassInfoType(List(sym.tpe), EmptyScope, localChildDummy))
-                localChildDummy :: globals
+                globals + localChildDummy
               }
-            putChildren(sym, children sortBy (_.sealedSortName))
+            putChildren(sym, children.toList sortBy (_.sealedSortName))
           }
           for (annot <- staticAnnotations(sym.annotations.reverse))
             putAnnotation(sym, annot)

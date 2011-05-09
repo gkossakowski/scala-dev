@@ -458,7 +458,7 @@ abstract class Erasure extends AddInterfaces
       else if (sym.name == nme.apply) 
         tp
       else if (sym.name == nme.update)
-        tp match {
+        (tp: @unchecked) match {
           case MethodType(List(index, tvar), restpe) =>
             MethodType(List(index.cloneSymbol.setInfo(erasure(index.tpe)), tvar),
                        erasedTypeRef(UnitClass))
@@ -569,7 +569,7 @@ abstract class Erasure extends AddInterfaces
             else BLOCK(tree, UNIT)
           case x          =>
             assert(x != ArrayClass)
-            (REF(unboxMethod(pt.typeSymbol)) APPLY tree) setType pt
+            Apply(unboxMethod(pt.typeSymbol), tree) setType pt
         })
     }
 
@@ -987,7 +987,7 @@ abstract class Erasure extends AddInterfaces
 
         case Apply(fn, args) =>
           if (fn.symbol == Any_asInstanceOf)
-            fn match {
+            (fn: @unchecked) match {
               case TypeApply(Select(qual, _), List(targ)) =>
                 if (qual.tpe <:< targ.tpe) {
                   atPos(tree.pos) { Typed(qual, TypeTree(targ.tpe)) }

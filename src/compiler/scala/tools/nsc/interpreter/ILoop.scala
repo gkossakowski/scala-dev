@@ -269,6 +269,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
     cmd("phase", "<phase>", "set the implicit phase for power commands", phaseCommand),
     cmd("wrap", "<method>", "name of method to wrap around each repl line", wrapCommand) withLongHelp ("""
       |:wrap
+      |:wrap clear
       |:wrap <method>
       |
       |Installs a wrapper around each line entered into the repl.
@@ -282,7 +283,8 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
       |}
       |:wrap timed
       |
-      |If given no argument, :wrap removes any wrapper present.
+      |If given no argument, :wrap names the wrapper installed.
+      |An argument of clear will remove the wrapper if any is active.
       |Note that wrappers do not compose (a new one replaces the old
       |one) and also that the :phase command uses the same machinery,
       |so setting :wrap will clear any :phase setting.       
@@ -388,15 +390,30 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
   
   protected def newJavap() = new Javap(intp.classLoader, new IMain.ReplStrippingWriter(intp)) {
     override def tryClass(path: String): Array[Byte] = {
-      // Look for Foo first, then Foo$, but if Foo$ is given explicitly,
-      // we have to drop the $ to find object Foo, then tack it back onto
-      // the end of the flattened name.
-      def className  = intp flatName path
-      def moduleName = (intp flatName path.stripSuffix("$")) + "$"
+      val hd :: rest = path split '.' toList;
+      // If there are dots in the name, the first segment is the
+      // key to finding it.
+      if (rest.nonEmpty) {
+        intp optFlatName hd match {
+          case Some(flat) =>
+            val clazz = flat :: rest mkString "$"
+            val bytes = super.tryClass(clazz)
+            if (bytes.nonEmpty) bytes
+            else super.tryClass(clazz + "$")
+          case _          => super.tryClass(path)
+        }
+      }
+      else {
+        // Look for Foo first, then Foo$, but if Foo$ is given explicitly,
+        // we have to drop the $ to find object Foo, then tack it back onto
+        // the end of the flattened name.
+        def className  = intp flatName path
+        def moduleName = (intp flatName path.stripSuffix("$")) + "$"
 
-      val bytes = super.tryClass(className)
-      if (bytes.nonEmpty) bytes
-      else super.tryClass(moduleName)
+        val bytes = super.tryClass(className)
+        if (bytes.nonEmpty) bytes
+        else super.tryClass(moduleName)
+      }
     }
   }
   private lazy val javap =
@@ -437,8 +454,15 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
 
     words(line) match {
       case Nil            =>
-        intp setExecutionWrapper ""
-        "Cleared wrapper."
+        intp.executionWrapper match {
+          case ""   => "No execution wrapper is set."
+          case s    => "Current execution wrapper: " + s
+        }
+      case "clear" :: Nil =>
+        intp.executionWrapper match {
+          case ""   => "No execution wrapper is set."
+          case s    => intp.clearExecutionWrapper() ; "Cleared execution wrapper."
+        }
       case wrapper :: Nil =>
         intp.typeOfExpression(wrapper) match {
           case Some(PolyType(List(targ), MethodType(List(arg), restpe))) =>
@@ -525,7 +549,10 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
           echo("Unrecoverable error.")
           throw ex
         case _  =>
-          def fn(): Boolean = in.readYesOrNo(replayQuestionMessage, { echo("\nYou must enter y or n.") ; fn() })
+          def fn(): Boolean =
+            try in.readYesOrNo(replayQuestionMessage, { echo("\nYou must enter y or n.") ; fn() })
+            catch { case _: RuntimeException => false }
+
           if (fn()) replay()
           else echo("\nAbandoning crashed session.")
       }
@@ -675,7 +702,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: PrintWriter)
     }
     
     def transcript(start: String) = {
-      // Printing this message doesn't work very well becaues it's buried in the
+      // Printing this message doesn't work very well because it's buried in the
       // transcript they just pasted.  Todo: a short timer goes off when
       // lines stop coming which tells them to hit ctrl-D.
       //

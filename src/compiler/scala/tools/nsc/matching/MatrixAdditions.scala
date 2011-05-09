@@ -136,7 +136,7 @@ trait MatrixAdditions extends ast.TreeDSL {
     /** Exhaustiveness checking requires looking for sealed classes
      *  and if found, making sure all children are covered by a pattern.
      */
-    class ExhaustivenessChecker(rep: Rep) {
+    class ExhaustivenessChecker(rep: Rep, matchPos: Position) {
       val Rep(tvars, rows) = rep
 
       import Flags.{ MUTABLE, ABSTRACT, SEALED }
@@ -172,10 +172,15 @@ trait MatrixAdditions extends ast.TreeDSL {
         val collected = toCollect map { case (pv, i) =>
           // okay, now reset the flag
           pv.sym resetFlag MUTABLE
-          // have to filter out children which cannot match: see ticket #3683 for an example
-          val kids = pv.tpe.typeSymbol.sealedDescendants filter (_.tpe matchesPattern pv.tpe)
 
-          i -> kids
+          i -> (
+            pv.tpe.typeSymbol.sealedDescendants.toList sortBy (_.sealedSortName)
+            // symbols which are both sealed and abstract need not be covered themselves, because
+            // all of their children must be and they cannot otherwise be created.
+            filterNot (x => x.isSealed && x.isAbstractClass && !isValueClass(x))
+            // have to filter out children which cannot match: see ticket #3683 for an example
+            filter (_.tpe matchesPattern pv.tpe)
+          )
         }
 
         val folded =
@@ -201,7 +206,7 @@ trait MatrixAdditions extends ast.TreeDSL {
       def check = {
         def errMsg = (inexhaustives map mkMissingStr).mkString
         if (inexhaustives.nonEmpty)
-          cunit.warning(tvars.head.lhs.pos, "match is not exhaustive!\n" + errMsg)
+          cunit.warning(matchPos, "match is not exhaustive!\n" + errMsg)
 
         rep
       }

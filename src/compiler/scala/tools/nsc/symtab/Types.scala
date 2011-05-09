@@ -577,7 +577,8 @@ trait Types extends reflect.generic.Types { self: SymbolTable =>
      *  symbols `from' in this type.
      */
     def subst(from: List[Symbol], to: List[Type]): Type =
-      new SubstTypeMap(from, to) apply this
+      if (from.isEmpty) this
+      else new SubstTypeMap(from, to) apply this
 
     /** Substitute symbols `to' for occurrences of symbols
      *  `from' in this type.
@@ -1649,11 +1650,19 @@ trait Types extends reflect.generic.Types { self: SymbolTable =>
 //    assert(args.isEmpty || !sym.info.typeParams.isEmpty, this)
 //    assert(args.isEmpty || ((sym ne AnyClass) && (sym ne NothingClass))
 
-    private val parentsCache = new ListOfTypesCache {
-      @inline final def calculate() = thisInfo.parents map transform
-    }
+    private var parentsCache: List[Type] = _
+    private var parentsPeriod = NoPeriod
+
     private var baseTypeSeqCache: BaseTypeSeq = _
     private var baseTypeSeqPeriod = NoPeriod
+
+    private var symInfoCache: Type = _
+    private var memberInfoCache: Type = _
+    private var thisInfoCache: Type = _
+    private var relativeInfoCache: Type = _
+
+    private var normalized: Type = null
+    
 
     override def isStable: Boolean = {
       sym == NothingClass ||
@@ -1706,12 +1715,28 @@ trait Types extends reflect.generic.Types { self: SymbolTable =>
     //@M! use appliedType on the polytype that represents the bounds (or if aliastype, the rhs)
     def transformInfo(tp: Type): Type = appliedType(tp.asSeenFrom(pre, sym.owner), typeArgsOrDummies)
 
-    def thisInfo     = 
+    def thisInfo: Type = 
       if (sym.isAliasType) normalize
-      else if (sym.isNonClassType) transformInfo(sym.info) 
-      else sym.info
-
-    def relativeInfo = if (sym.isNonClassType) transformInfo(pre.memberInfo(sym)) else pre.memberInfo(sym)
+      else if (!sym.isNonClassType) sym.info
+      else {
+        val symInfo = sym.info
+        if (thisInfoCache == null || (symInfo ne symInfoCache)) {
+          symInfoCache = symInfo
+          thisInfoCache = transformInfo(symInfo)            
+        }
+        thisInfoCache
+      }
+    
+    def relativeInfo: Type = 
+      if (!sym.isNonClassType) pre.memberInfo(sym)
+      else {
+        val memberInfo = pre.memberInfo(sym)
+        if (relativeInfoCache == null || (memberInfo ne memberInfoCache)) {
+          memberInfoCache = memberInfo
+          relativeInfoCache = transformInfo(memberInfo)
+        }
+        relativeInfoCache
+      }
 
     override def typeSymbol = if (sym.isAliasType) normalize.typeSymbol else sym
     override def termSymbol = if (sym.isAliasType) normalize.termSymbol else super.termSymbol
@@ -1731,7 +1756,18 @@ A type's typeSymbol should never be inspected directly.
       if (sym.isAbstractType) thisInfo.bounds // transform(thisInfo.bounds).asInstanceOf[TypeBounds] // ??? seems to be doing asSeenFrom twice
       else super.bounds
 
-    override def parents: List[Type] = parentsCache.get()
+    override def parents: List[Type] = { 
+      val period = parentsPeriod 
+      if (period != currentPeriod) { 
+        parentsPeriod = currentPeriod 
+        if (!isValidForBaseClasses(period)) { 
+          parentsCache = thisInfo.parents map transform 
+        } else if (parentsCache == null) { // seems this can happen if things are currupted enough, see #2641 
+          parentsCache = List(AnyClass.tpe) 
+        } 
+      } 
+      parentsCache 
+    }
     override def typeOfThis = transform(sym.typeOfThis)
 
 /*
@@ -1788,8 +1824,6 @@ A type's typeSymbol should never be inspected directly.
         super.instantiateTypeParams(formals, actuals)
 
 
-    private var normalized: Type = null
-
     @inline private def betaReduce: Type = {
       assert(sameLength(sym.info.typeParams, typeArgs), this)
       // isHKSubType0 introduces synthetic type params so that betaReduce can first apply sym.info to typeArgs before calling asSeenFrom
@@ -1809,7 +1843,7 @@ A type's typeSymbol should never be inspected directly.
         betaReduce.dealias
       } else this
 
-    def normalize0: Type =
+    private def normalize0: Type =
       if (pre eq WildcardType) WildcardType // arises when argument-dependent types are approximated (see def depoly in implicits)
       else if (isHigherKinded) etaExpand   // eta-expand, subtyping relies on eta-expansion of higher-kinded types
       else if (sym.isAliasType && sameLength(sym.info.typeParams, args))
@@ -3418,7 +3452,7 @@ A type's typeSymbol should never be inspected directly.
 
   /** A base class to compute all substitutions */
   abstract class SubstMap[T](from: List[Symbol], to: List[T]) extends TypeMap {
-    val fromContains = from.toSet // avoiding repeatedly traversing from
+    val fromContains = (x: Symbol) => from.contains(x) //from.toSet <-- traversing short lists seems to be faster than allocating sets
     assert(sameLength(from, to), "Unsound substitution from "+ from +" to "+ to)
 
     /** Are `sym' and `sym1' the same.
@@ -3428,12 +3462,6 @@ A type's typeSymbol should never be inspected directly.
 
     /** Map target to type, can be tuned by subclasses */
     protected def toType(fromtp: Type, tp: T): Type
-
-    def subst(tp: Type, sym: Symbol, from: List[Symbol], to: List[T]): Type =
-      if (from.isEmpty) tp
-      // else if (to.isEmpty) error("Unexpected substitution on '%s': from = %s but to == Nil".format(tp, from))
-      else if (matches(from.head, sym)) toType(tp, to.head)
-      else subst(tp, sym, from.tail, to.tail)
 
     protected def renameBoundSyms(tp: Type): Type = tp match {
       case MethodType(ps, restp) =>
@@ -3450,6 +3478,12 @@ A type's typeSymbol should never be inspected directly.
     }
 
     def apply(tp0: Type): Type = if (from.isEmpty) tp0 else {
+      @tailrec def subst(tp: Type, sym: Symbol, from: List[Symbol], to: List[T]): Type =
+        if (from.isEmpty) tp
+        // else if (to.isEmpty) error("Unexpected substitution on '%s': from = %s but to == Nil".format(tp, from))
+        else if (matches(from.head, sym)) toType(tp, to.head)
+        else subst(tp, sym, from.tail, to.tail)
+
       val boundSyms = tp0.boundSyms
       val tp1 = if (boundSyms exists fromContains) renameBoundSyms(tp0) else tp0
       val tp = mapOver(tp1)
@@ -3483,7 +3517,7 @@ A type's typeSymbol should never be inspected directly.
       case SingleType(pre, _) => singleType(pre, sym)
     }
     override def apply(tp: Type): Type = if (from.isEmpty) tp else {
-      def subst(sym: Symbol, from: List[Symbol], to: List[Symbol]): Symbol =
+      @tailrec def subst(sym: Symbol, from: List[Symbol], to: List[Symbol]): Symbol =
         if (from.isEmpty) sym
         // else if (to.isEmpty) error("Unexpected substitution on '%s': from = %s but to == Nil".format(sym, from))
         else if (matches(from.head, sym)) to.head

@@ -843,7 +843,7 @@ trait Types extends reflect.generic.Types { self: SymbolTable =>
      */
     //TODO: use narrow only for modules? (correct? efficiency gain?)
     def findMember(name: Name, excludedFlags: Long, requiredFlags: Long, stableOnly: Boolean): Symbol = {
-      val suspension = TypeVar.Suspension
+      var suspension: mutable.HashSet[TypeVar] = null
       // if this type contains type variables, put them to sleep for a while -- don't just wipe them out by
       // replacing them by the corresponding type parameter, as that messes up (e.g.) type variables in type refinements
       // without this, the matchesType call would lead to type variables on both sides
@@ -860,9 +860,10 @@ trait Types extends reflect.generic.Types { self: SymbolTable =>
         // For now I modified it as below, which achieves the same without error.
         //
         // make each type var in this type use its original type for comparisons instead of collecting constraints
+        suspension = new mutable.HashSet
         this foreach {
-          case tv: TypeVar  => suspension suspend tv
-          case _            => ()
+          case tv: TypeVar  => tv.suspended = true; suspension += tv
+          case _            => 
         }
       }
 
@@ -895,7 +896,7 @@ trait Types extends reflect.generic.Types { self: SymbolTable =>
                    (bcs0.head.hasTransOwner(bcs.head)))) {
                 if (name.isTypeName || stableOnly && sym.isStable) {
                   stopTimer(findMemberNanos, start)
-                  suspension.resumeAll
+                  if (suspension ne null) suspension foreach (_.suspended = false)
                   return sym
                 } else if (member == NoSymbol) {
                   member = sym
@@ -937,7 +938,7 @@ trait Types extends reflect.generic.Types { self: SymbolTable =>
         excluded = excludedFlags
       } // while (continue)
       stopTimer(findMemberNanos, start)
-      suspension.resumeAll
+      if (suspension ne null) suspension foreach (_.suspended = false)
       if (members eq null) {
         if (member == NoSymbol) incCounter(noMemberCount)
         member
@@ -2286,6 +2287,7 @@ A type's typeSymbol should never be inspected directly.
   // now, pattern-matching returns the most recent constr
   object TypeVar {
     // encapsulate suspension so we can automatically link the suspension of cloned typevars to their original if this turns out to be necessary
+/*
     def Suspension = new Suspension
     class Suspension {
       private val suspended = mutable.HashSet[TypeVar]()
@@ -2300,7 +2302,7 @@ A type's typeSymbol should never be inspected directly.
         suspended.clear
       }
     }
-
+*/
     def unapply(tv: TypeVar): Some[(Type, TypeConstraint)] = Some((tv.origin, tv.constr))
     def apply(origin: Type, constr: TypeConstraint) = new TypeVar(origin, constr, List(), List())
     def apply(tparam: Symbol) = new TypeVar(tparam.tpeHK, new TypeConstraint, List(), tparam.typeParams) // TODO why not initialise TypeConstraint with bounds of tparam?
@@ -2368,7 +2370,7 @@ A type's typeSymbol should never be inspected directly.
     // </region>
 
     // ignore subtyping&equality checks while true -- see findMember
-    private[TypeVar] var suspended = false
+    private[Types] var suspended = false
 
     /** Called when a TypeVar is involved in a subtyping check.  Result is whether
      *  this TypeVar could plausibly be a [super/sub]type of argument `tp` and if so,

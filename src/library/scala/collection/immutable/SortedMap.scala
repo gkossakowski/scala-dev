@@ -14,6 +14,7 @@ package immutable
 import generic._
 import mutable.Builder
 import annotation.unchecked.uncheckedVariance
+import annotation.bridge
 
 /** A map whose keys are sorted.
  *  
@@ -61,8 +62,10 @@ trait SortedMap[A, +B] extends Map[A, B]
    *
    *  @param xs     the traversable object.
    */
-  override def ++[B1 >: B](xs: TraversableOnce[(A, B1)]): SortedMap[A, B1] = 
-    ((repr: SortedMap[A, B1]) /: xs) (_ + _)
+  override def ++[B1 >: B](xs: GenTraversableOnce[(A, B1)]): SortedMap[A, B1] = 
+    ((repr: SortedMap[A, B1]) /: xs.seq) (_ + _)
+
+  @bridge def ++[B1 >: B](xs: TraversableOnce[(A, B1)]): SortedMap[A, B1] = ++(xs: GenTraversableOnce[(A, B1)])
 }
 
 /** $factoryInfo

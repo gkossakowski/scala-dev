@@ -13,6 +13,7 @@ import Flags._
 
 abstract class Erasure extends AddInterfaces 
                           with typechecker.Analyzer
+                          with TypingTransformers
                           with ast.TreeDSL
 {
   import global._
@@ -229,7 +230,7 @@ abstract class Erasure extends AddInterfaces
     }
   }
   // for debugging signatures: traces logic given system property
-  private val traceProp = sys.BooleanProp keyExists "scalac.sigs.trace"
+  private val traceProp = (sys.BooleanProp keyExists "scalac.sigs.trace").value // performance: get the value here
   private val traceSig  = util.Tracer(traceProp)
   
   /** This object is only used for sanity testing when -check:genjvm is set.
@@ -457,7 +458,7 @@ abstract class Erasure extends AddInterfaces
       else if (sym.name == nme.apply) 
         tp
       else if (sym.name == nme.update)
-        tp match {
+        (tp: @unchecked) match {
           case MethodType(List(index, tvar), restpe) =>
             MethodType(List(index.cloneSymbol.setInfo(erasure(index.tpe)), tvar),
                        erasedTypeRef(UnitClass))
@@ -568,7 +569,7 @@ abstract class Erasure extends AddInterfaces
             else BLOCK(tree, UNIT)
           case x          =>
             assert(x != ArrayClass)
-            (REF(unboxMethod(pt.typeSymbol)) APPLY tree) setType pt
+            Apply(unboxMethod(pt.typeSymbol), tree) setType pt
         })
     }
 
@@ -922,9 +923,12 @@ abstract class Erasure extends AddInterfaces
      *   - Add bridge definitions to a template.
      *   - Replace all types in type nodes and the EmptyTree object by their erasure.
      *     Type nodes of type Unit representing result types of methods are left alone.
+     *   - Given a selection q.s, where the owner of `s` is not accessible but the
+     *     type symbol of q's type qT is accessible, insert a cast (q.asInstanceOf[qT]).s
+     *     This prevents illegal access errors (see #4283).
      *   - Reset all other type attributes to null, thus enforcing a retyping.
      */
-    private val preTransformer = new Transformer {
+    private val preTransformer = new TypingTransformer(unit) {
       def preErase(tree: Tree): Tree = tree match {
         case ClassDef(mods, name, tparams, impl) =>
           if (settings.debug.value)
@@ -983,7 +987,7 @@ abstract class Erasure extends AddInterfaces
 
         case Apply(fn, args) =>
           if (fn.symbol == Any_asInstanceOf)
-            fn match {
+            (fn: @unchecked) match {
               case TypeApply(Select(qual, _), List(targ)) =>
                 if (qual.tpe <:< targ.tpe) {
                   atPos(tree.pos) { Typed(qual, TypeTree(targ.tpe)) }
@@ -1042,14 +1046,25 @@ abstract class Erasure extends AddInterfaces
             }
           }
 
-        case Select(_, _) =>
+        case Select(qual, name) =>
+          val owner = tree.symbol.owner
           // println("preXform: "+ (tree, tree.symbol, tree.symbol.owner, tree.symbol.owner.isRefinementClass))
-          if (tree.symbol.owner.isRefinementClass) {
+          if (owner.isRefinementClass) {
             val overridden = tree.symbol.allOverriddenSymbols
             assert(!overridden.isEmpty, tree.symbol)
             tree.symbol = overridden.head
           }
-          tree
+          def isAccessible(sym: Symbol) = localTyper.context.isAccessible(sym, sym.owner.thisType)
+          if (!isAccessible(owner) && qual.tpe != null) {
+            // Todo: Figure out how qual.tpe could be null in the check above (it does appear in build where SwingWorker.this 
+            // has a null type).
+            val qualSym = qual.tpe.widen.typeSymbol
+            if (isAccessible(qualSym) && !qualSym.isPackageClass && !qualSym.isPackageObjectClass) {
+              // insert cast to prevent illegal access error (see #4283)
+              // util.trace("insert erasure cast ") (*/
+              treeCopy.Select(tree, qual AS_ATTR qual.tpe.widen, name) //)
+            } else tree
+          } else tree
 
         case Template(parents, self, body) =>
           assert(!currentOwner.isImplClass)

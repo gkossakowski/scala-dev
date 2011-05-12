@@ -13,7 +13,7 @@ package typechecker
 
 import annotation.tailrec
 import scala.collection.{ mutable, immutable }
-import mutable.{ LinkedHashMap, ListBuffer }
+import mutable.{ HashMap, LinkedHashMap, ListBuffer }
 import scala.util.matching.Regex
 import symtab.Flags._
 import util.Statistics._
@@ -65,12 +65,20 @@ trait Implicits {
     result
   }
 
-  final val sizeLimit = 50000
+  private final val sizeLimit = 50000
   private type Infos = List[ImplicitInfo]
   private type Infoss = List[List[ImplicitInfo]]
-  val implicitsCache = new LinkedHashMap[Type, Infoss]
+  private type InfoMap = LinkedHashMap[Symbol, List[ImplicitInfo]] // A map from class symbols to their associated implicits
+  private val implicitsCache = new LinkedHashMap[Type, Infoss]
+  private val infoMapCache = new LinkedHashMap[Symbol, InfoMap]
+  private val improvesCache = new HashMap[(ImplicitInfo, ImplicitInfo), Boolean]
   
-  def resetImplicits() { implicitsCache.clear() }
+  def resetImplicits() { 
+    implicitsCache.clear()
+    infoMapCache.clear() 
+    improvesCache.clear()
+  }
+  
   private val ManifestSymbols = Set(PartialManifestClass, FullManifestClass, OptManifestClass)
 
   /** The result of an implicit search
@@ -223,8 +231,17 @@ trait Implicits {
     def improves(info1: ImplicitInfo, info2: ImplicitInfo) = {
       incCounter(improvesCount)
       (info2 == NoImplicitInfo) ||
-      (info1 != NoImplicitInfo) &&
-      isStrictlyMoreSpecific(info1.tpe, info2.tpe, info1.sym, info2.sym)
+      (info1 != NoImplicitInfo) && {
+        if (info1.sym.isStatic && info2.sym.isStatic) {
+          improvesCache get (info1, info2) match {
+            case Some(b) => incCounter(improvesCachedCount); b
+            case None => 
+              val result = isStrictlyMoreSpecific(info1.tpe, info2.tpe, info1.sym, info2.sym)
+              improvesCache((info1, info2)) = result
+              result
+          }
+        } else isStrictlyMoreSpecific(info1.tpe, info2.tpe, info1.sym, info2.sym)
+      }
     }
 
     /** Map all type params in given list to WildcardType
@@ -770,7 +787,9 @@ trait Implicits {
       if (implicitInfoss.forall(_.isEmpty)) SearchFailure
       else new ImplicitComputation(implicitInfoss, if (isLocal) util.HashSet[Name](128) else null) findBest()
       
-    /** The parts of a type is the smallest set of types that contains
+    /** Produce an implicict info map, i.e. a map from the class symbols C of all parts of this type to 
+     *  the implicit infos in the companion objects of these class symbols C.
+     * The parts of a type is the smallest set of types that contains
      *    - the type itself
      *    - the parts of its immediate components (prefix and argument)
      *    - the parts of its base types
@@ -780,6 +799,111 @@ trait Implicits {
      *  can be accessed with unambiguous stable prefixes, the implicits infos
      *  which are members of these companion objects.
      */
+    private def companionImplicitMap(tp: Type): InfoMap = {
+        
+      /** Populate implicit info map by traversing all parts of type `tp`.
+       *  Parameters as for `getParts`.  
+       */
+      def getClassParts(tp: Type)(implicit infoMap: InfoMap, seen: mutable.Set[Type], pending: Set[Symbol]) = tp match {
+        case TypeRef(pre, sym, args) =>
+          infoMap get sym match {
+            case Some(infos1) =>
+              if (infos1.nonEmpty && !(pre =:= infos1.head.pre.prefix)) {
+                println("amb prefix: "+pre+"#"+sym+" "+infos1.head.pre.prefix+"#"+sym)
+                infoMap(sym) = List() // ambiguous prefix - ignore implicit members 
+              }
+            case None =>
+              if (pre.isStable) {
+                val companion = sym.companionModule
+                companion.moduleClass match {
+                  case mc: ModuleClassSymbol =>
+                    val infos =
+                      for (im <- mc.implicitMembers) yield new ImplicitInfo(im.name, singleType(pre, companion), im)
+                    if (infos.nonEmpty)
+                      infoMap += (sym -> infos)
+                  case _ =>
+                }
+              }
+              val bts = tp.baseTypeSeq
+              var i = 1
+              while (i < bts.length) {
+                getParts(bts(i))
+                i += 1
+              } 
+              getParts(pre)
+            }
+      }
+
+      /** Populate implicit info map by traversing all parts of type `tp`.
+       *  This method is performance critical.
+       *  @param tp   The type for which we want to traverse parts
+       *  @param infoMap  The infoMap in which implicit infos corresponding to parts are stored
+       *  @param seen     The types that were already visited previously when collecting parts for the given infoMap
+       *  @param pending  The set of static symbols for which we are currently trying to collect their parts
+       *                  in order to cache them in infoMapCache
+       */
+      def getParts(tp: Type)(implicit infoMap: InfoMap, seen: mutable.Set[Type], pending: Set[Symbol]) {
+        if (seen(tp))
+          return
+        seen += tp
+        tp match { 
+          case TypeRef(pre, sym, args) =>
+            if (sym.isClass) {
+              if (!((sym.name == tpnme.REFINE_CLASS_NAME) ||
+                    (sym.name startsWith tpnme.ANON_CLASS_NAME) ||
+                    (sym.name == tpnme.ROOT))) {
+                if (sym.isStatic && !(pending contains sym))
+                  infoMap ++= {
+                    infoMapCache get sym match {
+                      case Some(imap) => imap
+                      case None =>
+                        val result = new InfoMap
+                        getClassParts(sym.tpe)(result, new mutable.HashSet(), pending + sym)
+                        infoMapCache(sym) = result
+                        result
+                    }
+                  }
+                else
+                  getClassParts(tp)
+                args foreach (getParts(_))
+              }
+            } else if (sym.isAliasType) {
+              getParts(tp.normalize)
+            } else if (sym.isAbstractType) {
+              getParts(tp.bounds.hi)
+            }
+          case ThisType(_) =>
+            getParts(tp.widen)
+          case _: SingletonType =>
+            getParts(tp.widen)
+          case RefinedType(ps, _) =>
+            for (p <- ps) getParts(p)
+          case AnnotatedType(_, t, _) =>
+            getParts(t)
+          case ExistentialType(_, t) => 
+            getParts(t)
+          case PolyType(_, t) => 
+            getParts(t)
+          case _ =>
+        }
+      }
+      
+      val infoMap = new InfoMap
+      getParts(tp)(infoMap, new mutable.HashSet(), Set())
+      if (traceImplicits) println("companion implicits of "+tp+" = "+infoMap) 
+      infoMap
+    }
+
+    /** The parts of a type is the smallest set of types that contains
+     *    - the type itself
+     *    - the parts of its immediate components (prefix and argument)
+     *    - the parts of its base types
+     *    - for alias types and abstract types, we take instead the parts
+     *    - of their upper bounds.
+     *  @return For those parts that refer to classes with companion objects that
+     *  can be accessed with unambiguous stable prefixes, the implicits infos
+     *  which are members of these companion objects.
+
     private def companionImplicits(tp: Type): Infoss = {
       val partMap = new LinkedHashMap[Symbol, Type]
       val seen = mutable.HashSet[Type]()  // cycle detection
@@ -849,6 +973,8 @@ trait Implicits {
       //println("companion implicits of "+tp+" = "+buf.toList) // DEBUG
       buf.toList
     }
+
+*/
     
     /** The implicits made available by type `pt`.
      *  These are all implicits found in companion objects of classes C
@@ -861,12 +987,19 @@ trait Implicits {
       case None                 =>
         incCounter(implicitCacheMisses)
         val start = startTimer(subtypeETNanos)
-        val implicitInfoss = companionImplicits(pt)
+//        val implicitInfoss = companionImplicits(pt)
+        val implicitInfoss1 = companionImplicitMap(pt).valuesIterator.toList
+//        val is1 = implicitInfoss.flatten.toSet
+//        val is2 = implicitInfoss1.flatten.toSet
+//        for (i <- is1) 
+//          if (!(is2 contains i)) println("!!! implicit infos of "+pt+" differ, new does not contain "+i+",\nold: "+implicitInfoss+",\nnew: "+implicitInfoss1)
+//        for (i <- is2)
+//          if (!(is1 contains i)) println("!!! implicit infos of "+pt+" differ, old does not contain "+i+",\nold: "+implicitInfoss+",\nnew: "+implicitInfoss1)
         stopTimer(subtypeETNanos, start)
-        implicitsCache(pt) = implicitInfoss
+        implicitsCache(pt) = implicitInfoss1
         if (implicitsCache.size >= sizeLimit)
           implicitsCache -= implicitsCache.keysIterator.next
-        implicitInfoss
+        implicitInfoss1
     }
 
     def contextSourceInfoChain(ctx: Context,
@@ -992,7 +1125,7 @@ trait Implicits {
       def findSubManifest(tp: Type) = findManifest(tp, if (full) FullManifestClass else OptManifestClass)
       def mot(tp0: Type)(implicit from: List[Symbol] = List(), to: List[Type] = List()): SearchResult = {
         implicit def wrapResult(tree: Tree): SearchResult = 
-          if (tree == EmptyTree) SearchFailure else new SearchResult(tree, new TreeTypeSubstituter(from, to))
+          if (tree == EmptyTree) SearchFailure else new SearchResult(tree, if (from.isEmpty) EmptyTreeTypeSubstituter else new TreeTypeSubstituter(from, to))
 
         val tp1 = tp0.normalize
         tp1 match {
@@ -1149,7 +1282,7 @@ trait Implicits {
 
   object ImplicitNotFoundMsg {
     def unapply(sym: Symbol): Option[(Message)] = sym.implicitNotFoundMsg map (m => (new Message(sym, m)))
-    // check the message's syntax: should be a string literal that may contain occurences of the string "${X}",
+    // check the message's syntax: should be a string literal that may contain occurrences of the string "${X}",
     // where `X` refers to a type parameter of `sym`
     def check(sym: Symbol): Option[String] =
       sym.getAnnotation(ImplicitNotFoundClass).flatMap(_.stringArg(0) match {

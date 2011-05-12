@@ -301,7 +301,7 @@ trait DocComments { self: SymbolTable =>
       val defines = sections filter { startsWithTag(raw, _, "@define") }
       val usecases = sections filter { startsWithTag(raw, _, "@usecase") }
 
-      val end = startTag(raw, (defines ::: usecases).sort(_._1 < _._1))
+      val end = startTag(raw, (defines ::: usecases).sortBy(_._1))
 
       (if (end == raw.length - 2) raw else raw.substring(0, end) + "*/",
        defines map { case (start, end) => raw.substring(start, end) },
@@ -328,13 +328,18 @@ trait DocComments { self: SymbolTable =>
         pos withStart start1 withPoint start1 withEnd end1
       }
 
-    def defineVariables(sym: Symbol) {
-      for (str <- defines) {
-        val start = skipWhitespace(str, "@define".length)
-        var idx   = skipVariable(str, start)
-        val vble  = variableName(str.substring(start, idx))
-        
-        defs(sym) += vble -> (str drop idx).trim.replaceAll("""\s+\*+$""", "")
+    def defineVariables(sym: Symbol) = {
+      val Trim = "(?s)^[\\s&&[^\n\r]]*(.*?)\\s*$".r
+
+      defs(sym) ++= defines.map {
+        str => {
+          val start = skipWhitespace(str, "@define".length)
+          val (key, value) = str.splitAt(skipVariable(str, start))
+          key.drop(start) -> value
+        }
+      } map {
+        case (key, Trim(value)) =>
+          variableName(key) -> value.replaceAll("\\s+\\*+$", "")
       }
     }
   }

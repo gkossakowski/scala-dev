@@ -14,6 +14,7 @@ trait TypeDebugging {
   // @M toString that is safe during debugging (does not normalize, ...)
   object TypeDebugStrings {
     object str {
+      def parentheses(xs: List[_]): String     = xs.mkString("(", ", ", ")")
       def brackets(xs: List[_]): String        = if (xs.isEmpty) "" else xs.mkString("[", ", ", "]")
       def tparams(tparams: List[Type]): String = brackets(tparams map debug)
       def parents(ps: List[Type]): String      = (ps map debug).mkString(" with ")
@@ -47,7 +48,7 @@ trait TypeDebugging {
       println("toLongString = " + toLongString)
     }
     
-    def debug(tp: Type): String = tp match {
+    private def debug(tp: Type): String = tp match {
       case TypeRef(pre, sym, args)             => debug(pre) + "." + sym.nameString + str.tparams(args)
       case ThisType(sym)                       => sym.nameString + ".this"
       case SingleType(pre, sym)                => debug(pre) +"."+ sym.nameString +".type"
@@ -57,10 +58,15 @@ trait TypeDebugging {
       case TypeBounds(lo, hi)                  => ">: "+ debug(lo) +" <: "+ debug(hi)
       case tv @ TypeVar(_, _)                  => tv.toString
       case ExistentialType(tparams, qtpe)      => "forSome "+ str.brackets(tparams) + " " + debug(qtpe)
-      case _                                   => tp.toString      
+      case _                                   => "?"+tp.getClass.getName+"?"//tp.toString might produce cyclic error...
     }
+    def debugString(tp: Type) = debug(tp)
   }
+  private def TDS = TypeDebugStrings
 
-  def debugString(tp: Type) = TypeDebugStrings.debug(tp)
+  def paramString(tp: Type)      = TDS.str parentheses (tp.params map (_.defString))
+  def typeParamsString(tp: Type) = TDS.str brackets (tp.typeParams map (_.defString))
+  def typeArgsString(tp: Type)   = TDS.str brackets (tp.typeArgs map (_.safeToString))
+  def debugString(tp: Type)      = TDS debugString tp
 }
 

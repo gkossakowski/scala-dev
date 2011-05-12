@@ -122,7 +122,7 @@ extends Seq[T]
   } 
 
   /** View the top element of the stack. */
-  @deprecated("use top instead")
+  @deprecated("use top instead", "2.8.0")
   def peek = top
 
   /** View the top element of the stack.
@@ -143,7 +143,7 @@ extends Seq[T]
   def dup() = push(top)
 
   /** Empties the stack. */
-  def clear {
+  def clear() {
     index = 0
     table = new Array(1)
   }
@@ -169,8 +169,23 @@ extends Seq[T]
    */
   def +=(x: T): this.type = { push(x); this }
   
-  def result = new ArrayStack[T](table.reverse, index)
-
+  def result = {
+    reverseTable()
+    this
+  }
+  
+  private def reverseTable() {
+    var i = 0
+    val until = index / 2
+    while (i < until) {
+      val revi = index - i - 1
+      val tmp = table(i)
+      table(i) = table(revi)
+      table(revi) = tmp
+      i += 1
+    }
+  }
+  
   /** Pop the top two elements off the stack, apply `f` to them and push the result
    *  back on to the stack.
    *  

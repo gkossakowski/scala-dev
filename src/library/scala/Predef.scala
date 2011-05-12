@@ -57,19 +57,22 @@ object Predef extends LowPriorityImplicits with EmbeddedControls  {
   def identity[A](x: A): A         = x    // @see `conforms` for the implicit version
   def implicitly[T](implicit e: T) = e    // for summoning implicit values from the nether world
   @inline def locally[T](x: T): T  = x    // to communicate intent and avoid unmoored statements
+  
+  // Apparently needed for the xml library
+  val $scope = scala.xml.TopScope
 
   // Deprecated
 
-  @deprecated("Use sys.error(message) instead")
+  @deprecated("Use sys.error(message) instead", "2.9.0")
   def error(message: String): Nothing = sys.error(message)
 
-  @deprecated("Use sys.exit() instead")
+  @deprecated("Use sys.exit() instead", "2.9.0")
   def exit(): Nothing = sys.exit()
 
-  @deprecated("Use sys.exit(status) instead")
+  @deprecated("Use sys.exit(status) instead", "2.9.0")
   def exit(status: Int): Nothing = sys.exit(status)
 
-  @deprecated("Use formatString.format(args: _*) or arg.formatted(formatString) instead")
+  @deprecated("Use formatString.format(args: _*) or arg.formatted(formatString) instead", "2.9.0")
   def format(text: String, xs: Any*) = augmentString(text).format(xs: _*)
 
   // errors and asserts -------------------------------------------------
@@ -313,7 +316,7 @@ object Predef extends LowPriorityImplicits with EmbeddedControls  {
   implicit def stringCanBuildFrom: CanBuildFrom[String, Char, String] = 
     new CanBuildFrom[String, Char, String] { 
       def apply(from: String) = apply()
-      def apply() = StringBuilder.newBuilder
+      def apply() = mutable.StringBuilder.newBuilder
     }
 
   implicit def seqToCharSequence(xs: collection.IndexedSeq[Char]): CharSequence = new CharSequence {
@@ -359,7 +362,7 @@ object Predef extends LowPriorityImplicits with EmbeddedControls  {
   }
 
   // less useful due to #2781
-  @deprecated("Use From => To instead")
+  @deprecated("Use From => To instead", "2.9.0")
   sealed abstract class <%<[-From, +To] extends (From => To) with Serializable
   object <%< {
     implicit def conformsOrViewsAs[A <% B, B]: A <%< B = new (A <%< B) {def apply(x: A) = x}

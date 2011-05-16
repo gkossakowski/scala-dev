@@ -675,7 +675,7 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
       def bitmapOperation[T](field: Symbol, transientCase: => T, privateCase: => T, rest: => T): T =
         if (field.accessed.hasAnnotation(TransientAttr))
           transientCase
-        else if (field.hasFlag(PRIVATE))
+        else if (field.hasFlag(PRIVATE) || field.hasFlag(notPRIVATE))
           privateCase
         else
           rest
@@ -686,7 +686,7 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
        *  Similarly fields in the checkinit mode use private bitmaps.
        */
       def localBitmapField(field: Symbol) =
-        field.accessed.hasAnnotation(TransientAttr) || field.hasFlag(PRIVATE) || checkinitField(field)
+        field.accessed.hasAnnotation(TransientAttr) || field.hasFlag(PRIVATE | notPRIVATE) || checkinitField(field)
 
       /**
        *  Return the bitmap field for 'offset'. Depending on the hierarchy it is possible to reuse
@@ -705,7 +705,6 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
         val bitmapName = if (checkinitField) bitmapCheckinitName else bitmapLazyName
  
         def createBitmap: Symbol = {
-
           val sym = clazz0.newVariable(clazz0.pos, bitmapName).setInfo(IntClass.tpe)
           atPhase(currentRun.typerPhase) {
             sym addAnnotation AnnotationInfo(VolatileAttr.tpe, Nil, Nil)
@@ -828,6 +827,18 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
         val result    = gen.mkDoubleCheckedLocking(clazz, cond, syncBody, nulls)
         typedPos(init.head.pos)(BLOCK(result, retVal))
       }
+      
+      def mkInnerClassAccessorDoubleChecked(clazz: Symbol, rhs: Tree): Tree =
+        rhs match {
+          case Block(List(assign), returnTree) =>
+            val Assign(moduleVarRef, _) = assign
+            val cond = Apply(Select(moduleVarRef, nme.eq),List(Literal(Constant(null))))
+            val doubleSynchrTree = gen.mkDoubleCheckedLocking(clazz, cond, List(assign), Nil)
+            Block(List(doubleSynchrTree), returnTree)
+          case _ =>
+            assert(false, "Invalid getter " + rhs + " for module in class " + clazz)
+            EmptyTree
+        }
 
       def mkCheckedAccessor(clazz: Symbol, retVal: Tree, offset: Int, pos: Position, fieldSym: Symbol): Tree = {
         val bitmapSym = bitmapFor(clazz, offset, fieldSym.getter(fieldSym.owner))
@@ -878,7 +889,10 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
                         Block(List(rhs, localTyper.typed(mkSetFlag(clazz, fieldOffset(getter), getter))), UNIT))
               else 
                 stat
-
+          case DefDef(mods, name, tp, vp, tpt, rhs)
+            if sym.isModule && !clazz.isTrait && !sym.hasFlag(BRIDGE) =>
+              val rhs1 = mkInnerClassAccessorDoubleChecked(clazz, rhs)
+              treeCopy.DefDef(stat, mods, name, tp, vp, tpt, typedPos(stat.pos)(rhs1))
           case _ => stat
         }
         stats1
@@ -963,7 +977,7 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
           field <- cl.info.decls.iterator
           if needsBitmap(field) && !localBitmapField(field)
         } bits += 1
-        
+
         bits
       }
       
@@ -980,7 +994,7 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
 
         for (f <- clazz0.info.decls.iterator) {
           if (settings.debug.value) log(f.fullName + " -> " + fields)
-          
+
           if (fieldWithBitmap(f)) {
             val (idx, _) =
               bitmapOperation(f, (fieldsTransient, fieldsTransient += 1),
@@ -1069,6 +1083,15 @@ abstract class Mixin extends InfoTransform with ast.TreeDSL {
                 } else
                   gen.mkCheckInit(accessedRef)
               })
+            } else if (sym.isModule && !(sym hasFlag LIFTED | BRIDGE)) { 
+              // add modules  
+              val vdef = gen.mkModuleVarDef(sym) 
+              addDef(position(sym), vdef)
+              
+              val rhs  = gen.newModule(sym, vdef.symbol.tpe)
+              val assignAndRet = gen.mkAssignAndReturn(vdef.symbol, rhs)
+              val rhs1 = mkInnerClassAccessorDoubleChecked(clazz, assignAndRet)
+              addDef(position(sym), DefDef(sym, rhs1))
             } else if (!sym.isMethod) {
               // add fields
               addDef(position(sym), ValDef(sym))

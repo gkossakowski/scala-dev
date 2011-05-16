@@ -10,6 +10,7 @@ import scala.collection.{ mutable, immutable }
 import scala.collection.mutable.ListBuffer
 import scala.util.control.ControlThrowable
 import symtab.Flags._
+import scala.annotation.tailrec
 
 /** This trait ...
  *
@@ -232,15 +233,7 @@ trait Infer {
     }
 
     def explainTypes(tp1: Type, tp2: Type) = 
-      withDisambiguation(tp1, tp2)(global.explainTypes(tp1, tp2))
-
-    def accessError(tree: Tree, sym: Symbol, pre: Type, explanation: String): Tree = {
-      val realsym = underlying(sym)
-      
-      errorTree(tree, realsym + realsym.locationString + " cannot be accessed in " +
-                (if (sym.isClassConstructor) context.enclClass.owner else pre.widen) +
-                explanation)
-    }
+      withDisambiguation(List(), tp1, tp2)(global.explainTypes(tp1, tp2))
 
     /* -- Tests & Checks---------------------------------------------------- */
 
@@ -258,8 +251,11 @@ trait Infer {
         if (context.unit != null)
           context.unit.depends += sym.toplevelClass 
 
-        val sym1 = sym filter (alt => context.isAccessible(alt, pre, site.isInstanceOf[Super]))
+        var sym1 = sym filter (alt => context.isAccessible(alt, pre, site.isInstanceOf[Super]))
         // Console.println("check acc " + (sym, sym1) + ":" + (sym.tpe, sym1.tpe) + " from " + pre);//DEBUG
+        
+        if (sym1 == NoSymbol && sym.isJavaDefined && context.unit.isJava) // don't try to second guess Java; see #4402
+          sym1 = sym
 
         if (sym1 == NoSymbol) {
           if (settings.debug.value) {
@@ -267,7 +263,7 @@ trait Infer {
             Console.println(tree)
             Console.println("" + pre + " " + sym.owner + " " + context.owner + " " + context.outer.enclClass.owner + " " + sym.owner.thisType + (pre =:= sym.owner.thisType))
           }
-          accessError(tree, sym, pre,
+          new AccessError(tree, sym, pre,
             if (settings.check.isDefault) {
               analyzer.lastAccessCheckDetails
             } else {
@@ -295,10 +291,10 @@ trait Infer {
               if (settings.debug.value) ex.printStackTrace
               val sym2 = underlying(sym1)
               val itype = pre.memberType(sym2)
-              accessError(tree, sym, pre,
+              new AccessError(tree, sym, pre,
                           "\n because its instance type "+itype+
                           (if ("malformed type: "+itype.toString==ex.msg) " is malformed" 
-                           else " contains a "+ex.msg))
+                           else " contains a "+ex.msg)).emit()
               ErrorType
           }
           if (pre.isInstanceOf[SuperType])
@@ -313,6 +309,7 @@ trait Infer {
      *  they are: perhaps someone more familiar with the intentional distinctions
      *  can examine the now much smaller concrete implementations below.
      */
+/*
     abstract class CompatibilityChecker {
       def resultTypeCheck(restpe: Type, arg: Type): Boolean
       def argumentCheck(arg: Type, param: Type): Boolean
@@ -322,7 +319,7 @@ trait Infer {
         val MethodType(params, restpe) = tp
         val TypeRef(pre, sym, args) = pt
 
-        if (sym.isAliasType) apply(tp, pt.dealias)
+        if (sym.isAliasType) apply(tp, pt.normalize)
         else if (sym.isAbstractType) apply(tp, pt.bounds.lo)
         else {
           val len = args.length - 1
@@ -358,7 +355,7 @@ trait Infer {
     }
     
     object isPlausiblyCompatible extends CompatibilityChecker {
-      def resultTypeCheck(restpe: Type, arg: Type) = isPlausiblySubType(restpe, arg)
+      def resultTypeCheck(restpe: Type, arg: Type) = isPlausiblyCompatible(restpe, arg)
       def argumentCheck(arg: Type, param: Type)    = isPlausiblySubType(arg, param)
       def lastChanceCheck(tp: Type, pt: Type)      = false
     }
@@ -372,22 +369,74 @@ trait Infer {
         case _                         => super.apply(tp, pt)
       }
     }
+*/
+    def isPlausiblyCompatible(tp: Type, pt: Type) = checkCompatibility(true, tp, pt)
+    def normSubType(tp: Type, pt: Type) = checkCompatibility(false, tp, pt)
+
+    @tailrec private def checkCompatibility(fast: Boolean, tp: Type, pt: Type): Boolean = tp match {
+      case mt @ MethodType(params, restpe) =>
+        if (mt.isImplicit)
+          checkCompatibility(fast, restpe, pt)
+        else pt match {
+          case tr @ TypeRef(pre, sym, args) => 
+
+            if (sym.isAliasType) checkCompatibility(fast, tp, pt.normalize)
+            else if (sym.isAbstractType) checkCompatibility(fast, tp, pt.bounds.lo)
+            else {
+              val len = args.length - 1
+              hasLength(params, len) &&
+              sym == FunctionClass(len) && {
+                var ps = params
+                var as = args
+                if (fast) {
+                  while (ps.nonEmpty && as.nonEmpty) {
+                    if (!isPlausiblySubType(as.head, ps.head.tpe))
+                      return false
+                    ps = ps.tail
+                    as = as.tail
+                  }
+                } else {
+                  while (ps.nonEmpty && as.nonEmpty) {
+                    if (!(as.head <:< ps.head.tpe))
+                      return false
+                    ps = ps.tail
+                    as = as.tail
+                  }
+                }
+                ps.isEmpty && as.nonEmpty && {
+                  val lastArg = as.head
+                  as.tail.isEmpty && checkCompatibility(fast, restpe, lastArg)
+                }
+              }
+            }
+          
+          case _            => if (fast) false else tp <:< pt
+        }
+      case NullaryMethodType(restpe)  => checkCompatibility(fast, restpe, pt)
+      case PolyType(_, restpe)        => checkCompatibility(fast, restpe, pt)
+      case ExistentialType(_, qtpe)   => if (fast) checkCompatibility(fast, qtpe, pt) else normalize(tp) <:< pt // is !fast case needed??
+      case _                          => if (fast) isPlausiblySubType(tp, pt) else tp <:< pt
+    }
+
 
     /** This expresses more cleanly in the negative: there's a linear path
      *  to a final true or false.
      */
     private def isPlausiblySubType(tp1: Type, tp2: Type) = !isImpossibleSubType(tp1, tp2)
-    private def isImpossibleSubType(tp1: Type, tp2: Type) = {
-      (tp1.dealias, tp2.dealias) match {
-        case (TypeRef(_, sym1, _), TypeRef(_, sym2, _)) =>
-           sym1.isClass &&
-           sym2.isClass &&
-          !(sym1 isSubClass sym2) &&
-          !(sym1 isNumericSubClass sym2)
-        case _ =>
-          false
-      }
-    }
+    private def isImpossibleSubType(tp1: Type, tp2: Type) = tp1.normalize.widen match {
+      case tr1 @ TypeRef(_, sym1, _) =>
+        tp2.normalize.widen match {
+          case TypeRef(_, sym2, _) =>
+             sym1.isClass &&
+             sym2.isClass &&
+            !(sym1 isSubClass sym2) &&
+            !(sym1 isNumericSubClass sym2)
+          case RefinedType(_, decls) =>
+            decls.nonEmpty && tp1.member(decls.head.name) == NoSymbol
+          case _ => false
+        }
+      case _ => false
+    }      
 
     def isCompatible(tp: Type, pt: Type): Boolean = {
       val tp1 = normalize(tp)
@@ -1024,9 +1073,10 @@ trait Infer {
           //val bounds = instantiatedBounds(pre, owner, tparams, targs)//DEBUG
           //println("bounds = "+bounds+", targs = "+targs+", targclasses = "+(targs map (_.getClass))+", parents = "+(targs map (_.parents)))
           //println(List.map2(bounds, targs)((bound, targ) => bound containsType targ))
+          val ownerString = if (tparams.nonEmpty) tparams.head.owner.toString else "<tparams=Nil>"
           error(pos, 
                 prefix + "type arguments " + targs.mkString("[", ",", "]") + 
-                " do not conform to " + tparams.head.owner + "'s type parameter bounds " + 
+                " do not conform to " + ownerString + "'s type parameter bounds " + 
                 (tparams map (_.defString)).mkString("[", ",", "]"))
           if (settings.explaintypes.value) {
             val bounds = tparams map (tp => tp.info.instantiateTypeParams(tparams, targs).bounds)
@@ -1071,7 +1121,7 @@ trait Infer {
       }
       errorMessages.toList
     }
-    /** Substitite free type variables `undetparams' of polymorphic argument
+    /** Substitute free type variables `undetparams' of polymorphic argument
      *  expression `tree', given two prototypes `strictPt', and `lenientPt'.
      *  `strictPt' is the first attempt prototype where type parameters
      *  are left unchanged. `lenientPt' is the fall-back prototype where type
@@ -1118,7 +1168,7 @@ trait Infer {
       }
     }
 
-    /** Substitite free type variables `undetparams' of polymorphic argument
+    /** Substitute free type variables `undetparams' of polymorphic argument
      *  expression <code>tree</code> to `targs', Error if `targs' is null
      *
      *  @param tree ...
@@ -1200,7 +1250,7 @@ trait Infer {
         tp
     }
 
-    /** Substitite free type variables <code>undetparams</code> of type constructor
+    /** Substitute free type variables <code>undetparams</code> of type constructor
      *  <code>tree</code> in pattern, given prototype <code>pt</code>.
      *
      *  @param tree        ...
@@ -1511,7 +1561,7 @@ trait Infer {
           secondTry = true
         }
         def improves(sym1: Symbol, sym2: Symbol): Boolean =
-          sym2 == NoSymbol || 
+          sym2 == NoSymbol || sym2.hasAnnotation(BridgeClass) ||
           { val tp1 = pre.memberType(sym1)
             val tp2 = pre.memberType(sym2)
             (tp2 == ErrorType ||
@@ -1573,7 +1623,9 @@ trait Infer {
                 (alts map pre.memberType) +", argtpes = "+ argtpes +", pt = "+ pt)
 
           var allApplicable = alts filter (alt =>
-            isApplicable(undetparams, followApply(pre.memberType(alt)), argtpes, pt))
+            // TODO: this will need to be re-written once we substitute throwing exceptions
+            // with generating error trees. We wrap this applicability in try/catch because of #4457.
+            try {isApplicable(undetparams, followApply(pre.memberType(alt)), argtpes, pt)} catch {case _: TypeError => false})
 
           //log("applicable: "+ (allApplicable map pre.memberType))
 
@@ -1601,7 +1653,7 @@ trait Infer {
 
           def improves(sym1: Symbol, sym2: Symbol) =
 //            util.trace("improve "+sym1+sym1.locationString+" on "+sym2+sym2.locationString)(
-            sym2 == NoSymbol || sym2.isError ||
+            sym2 == NoSymbol || sym2.isError || sym2.hasAnnotation(BridgeClass) ||
             isStrictlyMoreSpecific(followApply(pre.memberType(sym1)),
                                    followApply(pre.memberType(sym2)), sym1, sym2)
 
@@ -1696,6 +1748,21 @@ trait Infer {
       }
       // Side effects tree with symbol and type
       tree setSymbol resSym setType resTpe
+    }
+
+    case class AccessError(tree: Tree, sym: Symbol, pre: Type, explanation: String) extends Tree {
+      override def pos = tree.pos
+      override def hasSymbol = tree.hasSymbol
+      override def symbol = tree.symbol
+      override def symbol_=(x: Symbol) = tree.symbol = x
+      setError(this)
+      
+      def emit(): Tree = {
+        val realsym = underlying(sym)
+        errorTree(tree, realsym + realsym.locationString + " cannot be accessed in " +
+            (if (sym.isClassConstructor) context.enclClass.owner else pre.widen) +
+            explanation)
+      }
     }
   }
 }

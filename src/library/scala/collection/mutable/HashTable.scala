@@ -190,7 +190,7 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
   protected final def foreachEntry[C](f: Entry => C) { entriesIterator.foreach(f) }
 
   /** An iterator returning all entries */
-  @deprecated("use entriesIterator instead")
+  @deprecated("use entriesIterator instead", "2.8.0")
   protected def entries: Iterator[Entry] = entriesIterator
 
   /** Remove all entries from table
@@ -265,7 +265,7 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
   }
   
   // discards the previous sizemap and populates the new one
-  protected def sizeMapInitAndRebuild {
+  protected def sizeMapInitAndRebuild() {
     sizeMapInit(table.length)
     
     // go through the buckets, count elements
@@ -291,7 +291,7 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
     }
   }
   
-  private[collection] def printSizeMap {
+  private[collection] def printSizeMap() {
     println(sizemap.toList)
   }
   

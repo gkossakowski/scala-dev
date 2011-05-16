@@ -23,10 +23,10 @@ object BigInt {
   private val maxCached = 1024
   private val cache = new Array[BigInt](maxCached - minCached + 1)
   
-  @deprecated("Use Long.MinValue")
+  @deprecated("Use Long.MinValue", "2.9.0")
   val MinLong = BigInt(Long.MinValue)
   
-  @deprecated("Use Long.MaxValue")
+  @deprecated("Use Long.MaxValue", "2.9.0")
   val MaxLong = BigInt(Long.MaxValue)
 
   /** Constructs a <code>BigInt</code> whose value is equal to that of the
@@ -113,11 +113,10 @@ object BigInt {
  *  @author  Martin Odersky
  *  @version 1.0, 15/07/2003
  */
-class BigInt(val bigInteger: BigInteger) extends ScalaNumber with ScalaNumericConversions with Serializable
-{
+class BigInt(val bigInteger: BigInteger) extends ScalaNumber with ScalaNumericConversions with Serializable {
   /** Returns the hash code for this BigInt. */
   override def hashCode(): Int =
-    if (fitsInLong) unifiedPrimitiveHashcode
+    if (isValidLong) unifiedPrimitiveHashcode
     else bigInteger.##
 
   /** Compares this BigInt with the specified value for equality.
@@ -125,9 +124,13 @@ class BigInt(val bigInteger: BigInteger) extends ScalaNumber with ScalaNumericCo
   override def equals(that: Any): Boolean = that match {
     case that: BigInt     => this equals that
     case that: BigDecimal => that.toBigIntExact exists (this equals _)
-    case x                => fitsInLong && unifiedPrimitiveEquals(x)
+    case x                => isValidLong && unifiedPrimitiveEquals(x)
   }
-  private def fitsInLong = this >= Long.MinValue && this <= Long.MaxValue
+  override def isValidByte  = this >= Byte.MinValue && this <= Byte.MaxValue
+  override def isValidShort = this >= Short.MinValue && this <= Short.MaxValue
+  override def isValidChar  = this >= Char.MinValue && this <= Char.MaxValue
+  override def isValidInt   = this >= Int.MinValue && this <= Int.MaxValue
+           def isValidLong  = this >= Long.MinValue && this <= Long.MaxValue 
   
   protected[math] def isWhole = true
   def underlying = bigInteger

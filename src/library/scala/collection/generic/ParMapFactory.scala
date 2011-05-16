@@ -1,3 +1,11 @@
+/*                     __                                               *\
+**     ________ ___   / /  ___     Scala API                            **
+**    / __/ __// _ | / /  / _ |    (c) 2003-2011, LAMP/EPFL             **
+**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
+** /____/\___/_/ |_/____/_/ | |                                         **
+**                          |/                                          **
+\*                                                                      */
+
 package scala.collection.generic
 
 import scala.collection.parallel.ParMap
@@ -12,7 +20,7 @@ import scala.collection.mutable.Builder
  *  @define Coll ParMap
  */
 abstract class ParMapFactory[CC[X, Y] <: ParMap[X, Y] with ParMapLike[X, Y, CC[X, Y], _]]
-extends MapFactory[CC]
+extends GenMapFactory[CC]
    with GenericParMapCompanion[CC] {
   
   type MapColl = CC[_, _]
@@ -35,3 +43,4 @@ extends MapFactory[CC]
   }
   
 }
+

@@ -18,25 +18,6 @@ trait MemberHandlers {
   import global._
   import naming._
 
-  def string2codeQuoted(str: String) =
-    "\"" + string2code(str) + "\""
-
-  def any2stringOf(x: Any, maxlen: Int) = 
-    "scala.runtime.ScalaRunTime.replStringOf(%s, %s)".format(x, maxlen)
-
-  /** Convert a string into code that can recreate the string.
-   *  This requires replacing all special characters by escape
-   *  codes. It does not add the surrounding " marks.  */
-  def string2code(str: String): String = {    
-    val res = new StringBuilder
-    for (c <- str) c match {
-      case '"' | '\'' | '\\'  => res += '\\' ; res += c
-      case _ if c.isControl   => res ++= Chars.char2uescape(c)
-      case _                  => res += c
-    }
-    res.toString
-  }
-
   private def codegenln(leadingPlus: Boolean, xs: String*): String = codegen(leadingPlus, (xs ++ Array("\n")): _*)
   private def codegenln(xs: String*): String = codegenln(true, xs: _*)
 
@@ -190,6 +171,10 @@ trait MemberHandlers {
   class ImportHandler(imp: Import) extends MemberHandler(imp) {
     val Import(expr, selectors) = imp
     def targetType = intp.typeOfExpression("" + expr)
+    // TODO: Need to track these specially to honor Predef masking attempts,
+    // because they must be the leading imports in the code generated for each
+    // line.  We can use the same machinery as Contexts now, anyway.
+    def isPredefImport = treeInfo.isPredefExpr(expr)
     
     // wildcard imports, e.g. import foo._
     private def selectorWild    = selectors filter (_.name == nme.USCOREkw)

@@ -3,22 +3,20 @@ import reflect.SourceContext
 
 object Test {
 
-/* The following doesn't work, since the newly created manifest would always
- * have the same source position, namely, the position of the invocation
- * of the withNewManifest method
-  implicit def sourceInfoManifest[T]: SourceInfoManifest[T] = {
-    def withNewManifest()(implicit m: Manifest[T]) {
-      // here we know that m has been generated at the current source location
-    }
-    withNewManifest()
+  def relative(name: String) = {
+    val lastSlash = name.lastIndexOf('/')
+    if (lastSlash == -1)
+      name.substring(name.lastIndexOf('\\') + 1)
+    else
+      name.substring(lastSlash + 1)
   }
-*/
 
   def printInfo(m: SourceContext) {
     println("line: "+m.line)
     println("binding: "+m.bindings(0)._1)
     println("method name: "+m.methodName)
-    println("first context: "+m.firstContext)
+    println("contexts: "+m.allContexts)
+    println("file name: "+relative(m.fileName))
   }
   
   def inspect[T](x: T)(implicit m: SourceContext): Int = {
@@ -29,9 +27,7 @@ object Test {
     withManifest()
     0
   }
-
-  /* - by-name passing of manifests?
-   */
+  
   def main(args: Array[String]) {
     val l = List(1, 2, 3)
     val x = inspect(l)

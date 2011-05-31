@@ -9,36 +9,43 @@ trait SourceContext extends SourceLocation {
 
   def methodName: String
 
-  def update(name: String, sourceInfo: List[(String, Int)]): SourceContext
-
-  def firstContext: List[(String, Int)]
+  def update(context: SourceContext): SourceContext
 
   def allContexts: List[List[(String, Int)]]
+
+  var parent: Option[SourceContext] =
+    None
 }
 
 object SourceContext {
+
   def apply(name: String, sourceInfo: List[(String, Int)]): SourceContext =
-    new ConcreteSourceContext(name, sourceInfo)
+    apply("<unknown file>", name, sourceInfo)
 
-  private class ConcreteSourceContext(override val methodName: String,
-                                      currBindings: List[(String, Int)])
+  def apply(fileName: String, name: String, sourceInfo: List[(String, Int)]): SourceContext =
+    new ConcreteSourceContext(fileName, name, sourceInfo)
+
+  private class ConcreteSourceContext(override val fileName: String,
+                                      override val methodName: String,
+                                      override val bindings: List[(String, Int)])
   extends SourceContext {
-    var contexts: List[List[(String, Int)]] =
-      List(currBindings)
-
     def line = bindings(0)._2
 
-    def bindings = contexts.head
-
-    def firstContext: List[(String, Int)] =
-      contexts.last
-
-    def update(name: String, sourceInfo: List[(String, Int)]): SourceContext = {
-      contexts ::= sourceInfo
-      this
+    def update(context: SourceContext): SourceContext = {
+      context.parent = Some(this)
+      context
     }
 
-    def allContexts = contexts
+    def allContexts = {
+      var contexts: List[List[(String, Int)]] = List()
+      var curr: SourceContext = this
+      contexts = contexts ::: List(curr.bindings)
+      while (!curr.parent.isEmpty) {
+        curr = curr.parent.get
+        contexts = contexts ::: List(curr.bindings)
+      }
+      contexts
+    }
   }
   
 }

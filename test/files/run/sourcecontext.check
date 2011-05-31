@@ -1,16 +1,20 @@
-line: 37
+line: 33
 binding: x
 method name: inspect
-first context: List((x,37))
-line: 29
+contexts: List(List((x,33)))
+file name: sourcecontext.scala
+line: 27
+binding: null
+method name: withManifest
+contexts: List(List((null,27)), List((x,33)))
+file name: sourcecontext.scala
+line: 36
 binding: null
 method name: inspect
-first context: List((x,37))
-line: 40
+contexts: List(List((null,36)))
+file name: sourcecontext.scala
+line: 27
 binding: null
-method name: inspect
-first context: List((null,40))
-line: 29
-binding: null
-method name: inspect
-first context: List((null,40))
+method name: withManifest
+contexts: List(List((null,27)), List((null,36)))
+file name: sourcecontext.scala

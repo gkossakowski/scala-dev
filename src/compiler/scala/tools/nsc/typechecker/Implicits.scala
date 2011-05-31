@@ -1039,17 +1039,17 @@ trait Implicits {
         gen.mkNil
     }
 
+    /** Creates a tree that calls the factory method called constructor in object reflect.SourceContext */
+    def sourceInfoFactoryCall(constructor: String, args: Tree*): Tree =
+      if (args contains EmptyTree) EmptyTree
+      else typedPos(tree.pos.focus) {
+        Apply(
+          Select(gen.mkAttributedRef(SourceContextModule), constructor),
+          args.toList
+        )
+      }
+    
     private def sourceInfo(): SearchResult = {
-      /** Creates a tree that calls the factory method called constructor in object reflect.SourceContext */
-      def sourceInfoFactoryCall(constructor: String, args: Tree*): Tree =
-        if (args contains EmptyTree) EmptyTree
-        else typedPos(tree.pos.focus) {
-          Apply(
-            Select(gen.mkAttributedRef(SourceContextModule), constructor),
-            args.toList
-          )
-        }
-      
       def srcInfo()(implicit from: List[Symbol] = List(), to: List[Type] = List()): SearchResult = {
         implicit def wrapResult(tree: Tree): SearchResult = 
           if (tree == EmptyTree) SearchFailure else new SearchResult(tree, new TreeTypeSubstituter(from, to))
@@ -1065,7 +1065,10 @@ trait Implicits {
         //println("source info tree:")
         //println(sourceInfoTree(contextInfoChain))
         
-        sourceInfoFactoryCall("apply", Literal(methodName.toString), sourceInfoTree(contextInfoChain))
+        val position = tree.pos.focus
+        val fileName = if (position.isDefined) position.source.file.absolute.path
+                       else "<unknown file>"
+        sourceInfoFactoryCall("apply", Literal(fileName), Literal(methodName.toString), sourceInfoTree(contextInfoChain))
       }
 
       srcInfo()
@@ -1087,7 +1090,8 @@ trait Implicits {
           if (tree == EmptyTree) SearchFailure else new SearchResult(tree, new TreeTypeSubstituter(from, to))
 
         val position = tree.pos.focus
-        val fileName = position.source.file.absolute.path
+        val fileName = if (position.isDefined) position.source.file.absolute.path
+                       else "<unknown file>"
         sourceLocationFactoryCall("apply", Literal(position.line), Literal(position.point), Literal(fileName))
       }
 
@@ -1257,16 +1261,24 @@ trait Implicits {
       val methodName = tree match {
         case Apply(TypeApply(s, _), args) => s.symbol.name
         case Apply(s@Select(_, _), args) => s.symbol.name
+        case Apply(s@Ident(_), args) => s.symbol.name
         case _ => ""
       }
 
+      val position = tree.pos.focus
+
       val updatedRes = pt.dealias match {
         case TypeRef(_, SourceContextClass, _) if updateSourceContext =>
-          new SearchResult(typedPos(tree.pos.focus) {
-            Apply(Select(result.tree, "update"), List(Literal(methodName.toString), sourceInfoTree(contextInfoChain)))
+          val fileName = if (position.isDefined) position.source.file.absolute.path
+                         else "<unknown file>"
+          new SearchResult(typedPos(position) {
+//            Apply(Select(result.tree, "update"), List(Literal(methodName.toString), sourceInfoTree(contextInfoChain)))
+
+            // use sourceInfoFactoryCall to construct SourceContext
+            Apply(Select(result.tree, "update"), List(sourceInfoFactoryCall("apply", Literal(fileName), Literal(methodName.toString), sourceInfoTree(contextInfoChain))))
           }, result.subst)
         case TypeRef(_, SourceLocationClass, _) =>
-          new SearchResult(typedPos(tree.pos.focus) {
+          new SearchResult(typedPos(position) {
             sourceLocation().tree
           }, result.subst)
         case _ => result

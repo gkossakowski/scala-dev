@@ -8,7 +8,6 @@
 
 // $Id: Predef.scala 21249 2010-03-24 15:37:50Z extempore $
 
-
 package scala
 
 /** The <code>StandardEmbeddings</code> object provides method definitions
@@ -26,6 +25,7 @@ package scala
  *  replace it by an `If` tree node. If not, the call will be laft as it is
  *  and a staging or interpreting DSL can take over.
  */
+/*
 trait EmbeddedControls {
   /** Note why types are by-value
    */
@@ -60,3 +60,4 @@ trait ProxyControlsBase extends EmbeddedControls {
 }
 
 trait ProxyControls extends ProxyControlsBase
+*/

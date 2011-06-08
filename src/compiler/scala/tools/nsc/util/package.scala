@@ -8,6 +8,14 @@ package scala.tools.nsc
 import java.io.{ OutputStream, PrintStream, ByteArrayOutputStream, PrintWriter, StringWriter }
 
 package object util {
+  
+  // forwarder for old code that builds against 2.9 and 2.10
+  val Chars = scala.reflect.internal.Chars
+  
+  type Set[T <: AnyRef] = scala.reflect.internal.util.Set[T]
+  type HashSet[T >: Null <: AnyRef] = scala.reflect.internal.util.HashSet[T]
+  val HashSet = scala.reflect.internal.util.HashSet
+  
   def onull[T](value: T, orElse: => T): T = if (value == null) orElse else value
   
   /** Apply a function and return the passed value */

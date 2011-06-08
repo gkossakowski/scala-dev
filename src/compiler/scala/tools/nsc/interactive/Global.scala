@@ -20,7 +20,7 @@ import scala.tools.nsc.ast._
 import scala.tools.nsc.io.Pickler._
 import scala.tools.nsc.typechecker.DivergentImplicit
 import scala.annotation.tailrec
-import scala.reflect.generic.Flags.{ACCESSOR, PARAMACCESSOR}
+import symtab.Flags.{ACCESSOR, PARAMACCESSOR}
 
 /** The main class of the presentation compiler in an interactive environment such as an IDE
  */
@@ -942,10 +942,7 @@ class Global(settings: Settings, reporter: Reporter, projectName: String = "")
      *  @return true iff typechecked correctly
      */
     private def applyPhase(phase: Phase, unit: CompilationUnit) {
-      val oldSource = reporter.getSource          
-      reporter.withSource(unit.source) {
-        atPhase(phase) { phase.asInstanceOf[GlobalPhase] applyPhase unit }
-      }
+      atPhase(phase) { phase.asInstanceOf[GlobalPhase] applyPhase unit }
     }
   }
   

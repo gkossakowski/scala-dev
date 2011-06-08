@@ -12,7 +12,7 @@ import scala.collection.mutable.ArrayBuffer
 import annotation.tailrec
 import java.util.regex.Pattern
 import java.io.IOException
-import Chars._
+import scala.reflect.internal.Chars._
 
 /** abstract base class of a source file used in the compiler */
 abstract class SourceFile {
@@ -22,7 +22,7 @@ abstract class SourceFile {
   def isSelfContained: Boolean
   def length : Int
   def position(offset: Int) : Position = {
-    assert(offset < length)
+    assert(offset < length, file + ": " + offset + " >= " + length)
     new OffsetPosition(this, offset)
   }
   def position(line: Int, column: Int) : Position = new OffsetPosition(this, lineToOffset(line) + column)

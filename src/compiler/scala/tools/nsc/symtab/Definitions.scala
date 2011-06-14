@@ -359,8 +359,6 @@ trait Definitions extends reflect.generic.StandardDefinitions {
     lazy val SourceLocationModule  = getModule("scala.reflect.SourceLocation")
     lazy val SourceContextClass    = getClass("scala.reflect.SourceContext")
     lazy val SourceContextModule   = getModule("scala.reflect.SourceContext")
-    lazy val SourceInfoClass       = getClass("scala.reflect.SourceInfo")
-    lazy val SourceInfoModule      = getModule("scala.reflect.SourceInfo")
     lazy val OptManifestClass      = getClass("scala.reflect.OptManifest")
     lazy val NoManifest            = getModule("scala.reflect.NoManifest")
     lazy val CodeClass             = getClass(sn.Code)

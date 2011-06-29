@@ -1982,8 +1982,6 @@ self =>
           return Nil
         
         if (in.token == IMPLICIT) {
-          if (contextBounds.nonEmpty)
-            syntaxError("cannot have both implicit parameters and context bounds `: ...' or view bounds `<% ...' on type parameters", false)
           in.nextToken()
           implicitmod = Flags.IMPLICIT
         }
@@ -2191,12 +2189,12 @@ self =>
     }
     
     /** Def    ::= val PatDef
-     *           | var VarDef
+     *           | var PatDef
      *           | def FunDef
      *           | type [nl] TypeDef
      *           | TmplDef 
-     *  Dcl    ::= val ValDcl
-     *           | var ValDcl
+     *  Dcl    ::= val PatDcl
+     *           | var PatDcl
      *           | def FunDcl
      *           | type [nl] TypeDcl
      */

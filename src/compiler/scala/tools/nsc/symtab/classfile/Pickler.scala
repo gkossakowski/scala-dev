@@ -56,6 +56,15 @@ abstract class Pickler extends SubComponent {
           case _ =>
         }
       }
+      // If there are any erroneous types in the tree, then we will crash
+      // when we pickle it: so let's report an erorr instead.  We know next
+      // to nothing about what happened, but our supposition is a lot better
+      // than "bad type: <error>" in terms of explanatory power.
+      for (t <- unit.body ; if t.isErroneous) {
+        unit.error(t.pos, "erroneous or inaccessible type")
+        return
+      }
+
       pickle(unit.body)
     }
   }
@@ -135,15 +144,15 @@ abstract class Pickler extends SubComponent {
             putType(sym.typeOfThis);
           putSymbol(sym.alias)
           if (!sym.children.isEmpty) {
-            val (locals, globals) = sym.children.toList.partition(_.isLocalClass)
+            val (locals, globals) = sym.children partition (_.isLocalClass)
             val children = 
               if (locals.isEmpty) globals
               else {
                 val localChildDummy = sym.newClass(sym.pos, tpnme.LOCAL_CHILD)
                 localChildDummy.setInfo(ClassInfoType(List(sym.tpe), EmptyScope, localChildDummy))
-                localChildDummy :: globals
+                globals + localChildDummy
               }
-            putChildren(sym, children sortBy (_.sealedSortName))
+            putChildren(sym, children.toList sortBy (_.sealedSortName))
           }
           for (annot <- staticAnnotations(sym.annotations.reverse))
             putAnnotation(sym, annot)
@@ -582,12 +591,12 @@ abstract class Pickler extends SubComponent {
         case ClassInfoType(parents, decls, clazz) =>
           writeRef(clazz); writeRefs(parents); CLASSINFOtpe
         case mt @ MethodType(formals, restpe) =>
-          writeRef(restpe); writeRefs(formals)
-          if (mt.isImplicit) IMPLICITMETHODtpe
-          else METHODtpe
-        case mt @ NullaryMethodType(restpe) => // reuse POLYtpe since those can never have an empty list of tparams -- TODO: is there any way this can come back and bite us in the bottom?
-        // ugliness and thrift aside, this should make this somewhat more backward compatible
-        // (I'm not sure how old scalac's would deal with nested PolyTypes, as these used to be folded into one)
+          writeRef(restpe); writeRefs(formals) ; METHODtpe
+        case mt @ NullaryMethodType(restpe) =>
+          // reuse POLYtpe since those can never have an empty list of tparams.
+          // TODO: is there any way this can come back and bite us in the bottom?
+          // ugliness and thrift aside, this should make this somewhat more backward compatible
+          // (I'm not sure how old scalac's would deal with nested PolyTypes, as these used to be folded into one)
           writeRef(restpe); writeRefs(Nil); POLYtpe
         case PolyType(tparams, restpe) => // invar: tparams nonEmpty
           writeRef(restpe); writeRefs(tparams); POLYtpe
@@ -1037,8 +1046,7 @@ abstract class Pickler extends SubComponent {
         case ClassInfoType(parents, decls, clazz) =>
           print("CLASSINFOtpe "); printRef(clazz); printRefs(parents); 
         case mt @ MethodType(formals, restpe) =>
-          print(if (mt.isImplicit) "IMPLICITMETHODtpe " else "METHODtpe ");
-          printRef(restpe); printRefs(formals)
+          print("METHODtpe"); printRef(restpe); printRefs(formals)
         case PolyType(tparams, restpe) =>
           print("POLYtpe "); printRef(restpe); printRefs(tparams); 
         case ExistentialType(tparams, restpe) =>

@@ -236,9 +236,12 @@ abstract class Inliners extends SubComponent {
       }
     }
 
-    private def isMonadicMethod(sym: Symbol) = sym.name match {
-      case nme.foreach | nme.filter | nme.withFilter | nme.map | nme.flatMap => true
-      case _                                                                 => false
+    private def isMonadicMethod(sym: Symbol) = {
+      val (origName, _, _) = nme.splitSpecializedName(sym.name)
+      origName match {
+        case nme.foreach | nme.filter | nme.withFilter | nme.map | nme.flatMap => true
+        case _ => false
+      }
     }
 
     private def isHigherOrderMethod(sym: Symbol) =
@@ -534,7 +537,7 @@ abstract class Inliners extends SubComponent {
             if (settings.debug.value)
               log("Making not-private symbol out of synthetic: " + f)
 
-            f setFlag Flags.notPRIVATE
+            if (f hasFlag Flags.PRIVATE) f setFlag Flags.notPRIVATE
             true
           }
 

@@ -20,6 +20,7 @@ package scala.util
  */
 
 import java.lang.Integer.{ rotateLeft => rotl }
+import scala.collection.Iterator
 
 /** A class designed to generate well-distributed non-cryptographic
  *  hashes.  It is designed to be passed to a collection's foreach method,
@@ -176,10 +177,10 @@ object MurmurHash {
    *  where the order of appearance of elements does not matter.
    *  This is useful for hashing sets, for example.
    */
-  def symmetricHash[T](xs: TraversableOnce[T], seed: Int) = {
+  def symmetricHash[T](xs: collection.TraversableOnce[T], seed: Int) = {
     var a,b,n = 0
     var c = 1
-    xs.foreach(i => {
+    xs.seq.foreach(i => {
       val h = i.##
       a += h
       b ^= h

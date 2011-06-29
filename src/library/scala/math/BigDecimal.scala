@@ -25,10 +25,10 @@ object BigDecimal {
   private val maxCached = 512
   val defaultMathContext = MathContext.DECIMAL128
 
-  @deprecated("Use Long.MinValue")
+  @deprecated("Use Long.MinValue", "2.9.0")
   val MinLong = new BigDecimal(BigDec valueOf Long.MinValue, defaultMathContext)
 
-  @deprecated("Use Long.MaxValue")
+  @deprecated("Use Long.MaxValue", "2.9.0")
   val MaxLong = new BigDecimal(BigDec valueOf Long.MaxValue, defaultMathContext)
   
   /** Cache ony for defaultMathContext using BigDecimals in a small range. */
@@ -183,9 +183,18 @@ extends ScalaNumber with ScalaNumericConversions with Serializable {
     case that: BigDecimal     => this equals that 
     case that: BigInt         => this.toBigIntExact exists (that equals _)
     case _: Float | _: Double => unifiedPrimitiveEquals(that)
-    case _                    => fitsInLong && unifiedPrimitiveEquals(that)
+    case _                    => isValidLong && unifiedPrimitiveEquals(that)
   }
-  private def fitsInLong = isWhole && this <= Long.MaxValue && this >= Long.MinValue
+  override def isValidByte  = noArithmeticException(toByteExact)
+  override def isValidShort = noArithmeticException(toShortExact)
+  override def isValidChar  = isValidInt && toIntExact >= Char.MinValue && toIntExact <= Char.MaxValue
+  override def isValidInt   = noArithmeticException(toIntExact)
+  def isValidLong  = noArithmeticException(toLongExact)
+  
+  private def noArithmeticException(body: => Unit): Boolean = {
+    try   { body ; true }
+    catch { case _: ArithmeticException => false }
+  }
   
   protected[math] def isWhole = (this remainder 1) == BigDecimal(0)
   def underlying = bigDecimal

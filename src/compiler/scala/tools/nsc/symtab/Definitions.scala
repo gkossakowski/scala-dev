@@ -217,6 +217,7 @@ trait Definitions extends reflect.generic.StandardDefinitions {
     lazy val ScalaInlineClass           = getClass("scala.inline")
     lazy val ScalaNoInlineClass         = getClass("scala.noinline")
     lazy val SpecializedClass           = getClass("scala.specialized")
+    lazy val BridgeClass                = getClass("scala.annotation.bridge") 
 
     // fundamental reference classes
     lazy val ScalaObjectClass     = getClass("scala.ScalaObject")
@@ -354,6 +355,10 @@ trait Definitions extends reflect.generic.StandardDefinitions {
     lazy val PartialManifestModule = getModule("scala.reflect.ClassManifest")
     lazy val FullManifestClass     = getClass("scala.reflect.Manifest")
     lazy val FullManifestModule    = getModule("scala.reflect.Manifest")
+    lazy val SourceLocationClass   = getClass("scala.reflect.SourceLocation")
+    lazy val SourceLocationModule  = getModule("scala.reflect.SourceLocation")
+    lazy val SourceContextClass    = getClass("scala.reflect.SourceContext")
+    lazy val SourceContextModule   = getModule("scala.reflect.SourceContext")
     lazy val OptManifestClass      = getClass("scala.reflect.OptManifest")
     lazy val NoManifest            = getModule("scala.reflect.NoManifest")
     lazy val CodeClass             = getClass(sn.Code)
@@ -617,6 +622,13 @@ trait Definitions extends reflect.generic.StandardDefinitions {
       while (result.isAliasType) result = result.info.typeSymbol
       result
     }
+    
+    def getClassIfDefined(fullname: Name): Symbol = 
+      try {
+        getClass(fullname)
+      } catch {
+        case ex: MissingRequirementError => NoSymbol
+      }
 
     def getMember(owner: Symbol, name: Name): Symbol = {
       if (owner == NoSymbol) NoSymbol
@@ -801,7 +813,7 @@ trait Definitions extends reflect.generic.StandardDefinitions {
         sym
     }
 
-    def init {
+    def init() {
       if (isInitialized) return
 
       EmptyPackageClass setInfo ClassInfoType(Nil, new Scope, EmptyPackageClass)

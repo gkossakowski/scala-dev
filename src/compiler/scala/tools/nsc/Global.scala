@@ -13,8 +13,8 @@ import scala.tools.util.Profiling
 import scala.collection.{ mutable, immutable }
 import io.{ SourceReader, AbstractFile, Path }
 import reporters.{ Reporter, ConsoleReporter }
-import util.{ Exceptional, ClassPath, SourceFile, Statistics, BatchSourceFile, ScriptSourceFile, ShowPickled, returning }
-import reflect.generic.{ PickleBuffer, PickleFormat }
+import util.{ Exceptional, ClassPath, SourceFile, Statistics, StatisticsInfo, BatchSourceFile, ScriptSourceFile, ShowPickled, returning }
+import scala.reflect.internal.pickling.{ PickleBuffer, PickleFormat }
 import settings.{ AestheticSettings }
 
 import symtab.{ Flags, SymbolTable, SymbolLoaders, SymbolTrackers }
@@ -32,11 +32,17 @@ import backend.jvm.GenJVM
 import backend.opt.{ Inliners, ClosureElimination, DeadCodeElimination }
 import backend.icode.analysis._
 
-class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
-                                                             with CompilationUnits
-                                                             with Plugins
-                                                             with PhaseAssembly
-{
+class Global(var currentSettings: Settings, var reporter: Reporter) extends SymbolTable
+                                                                      with CompilationUnits
+                                                                      with Plugins
+                                                                      with PhaseAssembly
+                                                                      with Trees
+                                                                      with TreePrinters
+                                                                      with DocComments
+                                                                      with symtab.Positions {
+  
+  override def settings = currentSettings
+  
   // alternate constructors ------------------------------------------
 
   def this(reporter: Reporter) =
@@ -45,6 +51,15 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
   def this(settings: Settings) =
     this(settings, new ConsoleReporter(settings))
   
+  // fulfilling requirements
+    
+  type AbstractFile = scala.tools.nsc.io.AbstractFile
+  val AbstractFile = scala.tools.nsc.io.AbstractFile
+
+  def mkAttributedQualifier(tpe: Type, termSym: Symbol): Tree = gen.mkAttributedQualifier(tpe, termSym)
+  
+  def picklerPhase: Phase = currentRun.picklerPhase
+    
   // platform specific elements
 
   type ThisPlatform = Platform[_] { val global: Global.this.type }
@@ -103,7 +118,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
   /** Some statistics (normally disabled) set with -Ystatistics */
   object statistics extends {
     val global: Global.this.type = Global.this
-  } with Statistics
+  } with StatisticsInfo
 
   /** Print tree in detailed form */
   object nodePrinters extends {
@@ -233,7 +248,6 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
     // debugging
     def checkPhase = wasActive(settings.check)
     def logPhase   = isActive(settings.log)
-    def typerDebug = settings.Ytyperdebug.value
     def writeICode = settings.writeICode.value
     
     // showing/printing things
@@ -256,9 +270,10 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
     def profileClass = settings.YprofileClass.value
     def profileMem   = settings.YprofileMem.value
 
-    // XXX: short term, but I can't bear to add another option.
-    // scalac -Dscala.timings will make this true.
+    // shortish-term property based options
     def timings       = sys.props contains "scala.timings"
+    def inferDebug    = (sys.props contains "scalac.debug.infer") || settings.Yinferdebug.value
+    def typerDebug    = (sys.props contains "scalac.debug.typer") || settings.Ytyperdebug.value
   }
 
   // True if -Xscript has been set, indicating a script run.
@@ -325,7 +340,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
         currentRun.currentUnit = unit       
         if (!cancelled(unit)) {
           currentRun.informUnitStarting(this, unit)
-          reporter.withSource(unit.source) { apply(unit) }
+          apply(unit)
         }
         currentRun.advanceUnit
       } finally {
@@ -338,6 +353,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
 
   /** Switch to turn on detailed type logs */
   var printTypings = opt.typerDebug
+  var printInfers = opt.inferDebug
 
   // phaseName = "parser"
   object syntaxAnalyzer extends {
@@ -605,7 +621,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
   /* The set of phase objects that is the basis for the compiler phase chain */
   protected lazy val phasesSet     = new mutable.HashSet[SubComponent]
   protected lazy val phasesDescMap = new mutable.HashMap[SubComponent, String] withDefaultValue ""
-  private lazy val phaseTimings = new Phase.TimingModel   // tracking phase stats
+  private lazy val phaseTimings = new Phases.TimingModel   // tracking phase stats
   protected def addToPhasesSet(sub: SubComponent, descr: String) {
     phasesSet += sub
     phasesDescMap(sub) = descr
@@ -1054,9 +1070,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
       def loop(ph: Phase) {
         if (stop(ph)) refreshProgress
         else {
-          reporter.withSource(unit.source) {
-            atPhase(ph)(ph.asInstanceOf[GlobalPhase] applyPhase unit)
-          }
+          atPhase(ph)(ph.asInstanceOf[GlobalPhase] applyPhase unit)
           loop(ph.next match {
             case `ph`   => null   // ph == ph.next implies terminal, and null ends processing
             case x      => x
@@ -1123,6 +1137,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
         else f.file.name match {
           case "ScalaObject.scala"            => 1
           case "LowPriorityImplicits.scala"   => 2
+          case "StandardEmbeddings.scala"     => 2
           case "EmbeddedControls.scala"       => 2
           case "Predef.scala"                 => 3 /* Predef.scala before Any.scala, etc. */
           case _                              => goLast 
@@ -1224,7 +1239,7 @@ class Global(var settings: Settings, var reporter: Reporter) extends SymbolTable
   // to false except in old code.  The downside is that this leaves us calling a
   // deprecated method: but I see no simple way out, so I leave it for now.
   def forJVM           = opt.jvm
-  def forMSIL          = opt.msil
+  override def forMSIL = opt.msil
   def forInteractive   = onlyPresentation
   def forScaladoc      = onlyPresentation
   def createJavadoc    = false

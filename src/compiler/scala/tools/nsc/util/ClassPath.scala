@@ -8,7 +8,7 @@ package scala.tools.nsc
 package util
 
 import java.net.URL
-import scala.collection.mutable
+import scala.collection.{ mutable, immutable }
 import io.{ File, Directory, Path, Jar, AbstractFile, ClassAndJarInfo }
 import scala.tools.util.StringOps.splitWhere
 import Jar.isJarOrZip
@@ -103,8 +103,10 @@ object ClassPath {
   
   /** Expand dir out to contents, a la extdir */
   def expandDir(extdir: String): List[String] = {
-    val dir = Option(AbstractFile getDirectory extdir) getOrElse (return Nil)
-    dir filter (_.isClassContainer) map (dir.sfile.get / _.name path) toList
+    AbstractFile getDirectory extdir match {
+      case null => Nil
+      case dir  => dir filter (_.isClassContainer) map (x => new java.io.File(dir.file, x.name) getPath) toList
+    }
   }
   
   /** A useful name filter. */
@@ -170,7 +172,7 @@ object ClassPath {
   }
   
   object DefaultJavaContext extends JavaContext {
-    override def isValidName(name: String) = !isTraitImplementation(name)
+    override def isValidName(name: String) = true //!isTraitImplementation(name)
   }
   
   /** From the source file to its identifier.
@@ -284,12 +286,12 @@ abstract class ClassPath[T] {
       case _                                        => None
     }
 
-  def sortString = asURLs map (_.toString) sorted
+  def sortString = join(split(asClasspathString).sorted: _*)
   override def equals(that: Any) = that match {
     case x: ClassPath[_]  => this.sortString == x.sortString
     case _                => false
   }
-  override def hashCode = sortString.hashCode
+  override def hashCode = sortString.##
 }
 
 /**
@@ -298,20 +300,26 @@ abstract class ClassPath[T] {
 class SourcePath[T](dir: AbstractFile, val context: ClassPathContext[T]) extends ClassPath[T] {  
   def name = dir.name
   override def origin = dir.underlyingSource map (_.path)
-  def asURLs = dir.sfile.toList map (_.toURL)
+  def asURLs = dir.file match {
+    case null   => Nil
+    case file   => File(file).toURL :: Nil
+  }  
   def asClasspathString = dir.path
   val sourcepaths: IndexedSeq[AbstractFile] = IndexedSeq(dir)
-
-  lazy val classes: IndexedSeq[ClassRep] = dir flatMap { f =>
-    if (f.isDirectory || !validSourceFile(f.name)) Nil
-    else List(ClassRep(None, Some(f)))
-  } toIndexedSeq
   
-  lazy val packages: IndexedSeq[SourcePath[T]] = dir flatMap { f =>
-    if (f.isDirectory && validPackage(f.name)) List(new SourcePath[T](f, context))
-    else Nil
-  } toIndexedSeq
+  private def traverse() = {
+    val classBuf   = immutable.Vector.newBuilder[ClassRep]
+    val packageBuf = immutable.Vector.newBuilder[SourcePath[T]]
+    dir foreach { f =>
+      if (!f.isDirectory && validSourceFile(f.name))
+        classBuf += ClassRep(None, Some(f))
+      else if (f.isDirectory && validPackage(f.name))
+        packageBuf += new SourcePath[T](f, context)
+    }
+    (packageBuf.result, classBuf.result)
+  }
 
+  lazy val (packages, classes) = traverse()
   override def toString() = "sourcepath: "+ dir.toString()
 }
 
@@ -321,21 +329,28 @@ class SourcePath[T](dir: AbstractFile, val context: ClassPathContext[T]) extends
 class DirectoryClassPath(val dir: AbstractFile, val context: ClassPathContext[AbstractFile]) extends ClassPath[AbstractFile] {
   def name = dir.name
   override def origin = dir.underlyingSource map (_.path)
-  def asURLs = dir.sfile.toList map (_.toURL)
+  def asURLs = dir.file match {
+    case null   => Nil
+    case file   => File(file).toURL :: Nil
+  }  
   def asClasspathString = dir.path
   val sourcepaths: IndexedSeq[AbstractFile] = IndexedSeq()
   
-  lazy val classes: IndexedSeq[ClassRep] = dir flatMap { f =>
-    if (f.isDirectory || !validClassFile(f.name)) Nil
-    else List(ClassRep(Some(f), None))
-  } toIndexedSeq
+  // calculates (packages, classes) in one traversal.
+  private def traverse() = {
+    val classBuf   = immutable.Vector.newBuilder[ClassRep]
+    val packageBuf = immutable.Vector.newBuilder[DirectoryClassPath]
+    dir foreach { f =>
+      if (!f.isDirectory && validClassFile(f.name))
+        classBuf += ClassRep(Some(f), None)
+      else if (f.isDirectory && validPackage(f.name))
+        packageBuf += new DirectoryClassPath(f, context)
+    }
+    (packageBuf.result, classBuf.result)
+  }
   
-  lazy val packages: IndexedSeq[DirectoryClassPath] = dir flatMap { f =>
-    if (f.isDirectory && validPackage(f.name)) List(new DirectoryClassPath(f, context))
-    else Nil
-  } toIndexedSeq
-  
-  override def toString() = "directory classpath: "+ dir
+  lazy val (packages, classes) = traverse()
+  override def toString() = "directory classpath: "+ origin.getOrElse("?")
 }
 
 /**

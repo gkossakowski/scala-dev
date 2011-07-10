@@ -14,6 +14,7 @@ import Exceptional.unwrap
 import ScalaClassLoader.URLClassLoader
 import symtab.Flags
 import io.VirtualDirectory
+import scala.tools.nsc.io.AbstractFile
 import reporters._
 import symtab.Flags
 import scala.reflect.internal.Names
@@ -75,7 +76,7 @@ class IMain(val settings: Settings, protected val out: JPrintWriter) extends Imp
   lazy val formatting: Formatting = new Formatting {
     val prompt = Properties.shellPromptString
   }
-  lazy val reporter: ReplReporter = new ReplReporter(this)
+  lazy val reporter: ConsoleReporter = new ReplReporter(this)
 
   import formatting._
   import reporter.{ printMessage, withoutTruncating }
@@ -128,18 +129,27 @@ class IMain(val settings: Settings, protected val out: JPrintWriter) extends Imp
         result
       }
   }
+  def initializeSynchronous(): Unit = {
+    if (!isInitializeComplete) {
+      _initialize()
+      assert(global != null, global)
+    }
+  }
   def isInitializeComplete = _initializeComplete
 
   /** the public, go through the future compiler */
   lazy val global: Global = {
-    // If init hasn't been called yet you're on your own.
-    if (_isInitialized == null) {
-      repldbg("Warning: compiler accessed before init set up.  Assuming no postInit code.")
-      initialize(())
+    if (isInitializeComplete) _compiler
+    else {
+      // If init hasn't been called yet you're on your own.
+      if (_isInitialized == null) {
+        repldbg("Warning: compiler accessed before init set up.  Assuming no postInit code.")
+        initialize(())
+      }
+      // blocks until it is ; false means catastrophic failure
+      if (_isInitialized()) _compiler
+      else null
     }
-    // blocks until it is ; false means catastrophic failure
-    if (_isInitialized()) _compiler
-    else null
   }
   @deprecated("Use `global` for access to the compiler instance.", "2.9.0")
   lazy val compiler: global.type = global
@@ -457,15 +467,20 @@ class IMain(val settings: Settings, protected val out: JPrintWriter) extends Imp
           else {
             // The position of the last tree
             val lastpos0 = earliestPosition(trees.last)
-            // Oh boy, the parser throws away parens so "(2+2)" is mispositioned.
-            // So until we can fix the parser we'll have to go trawling.
-            val adjustment = ((content take lastpos0).reverse takeWhile { ch =>
-              ch.isWhitespace || ch == '(' || ch == ')'
-            }).length
+            // Oh boy, the parser throws away parens so "(2+2)" is mispositioned,
+            // with increasingly hard to decipher positions as we move on to "() => 5",
+            // (x: Int) => x + 1, and more.  So I abandon attempts to finesse and just
+            // look for semicolons and newlines, which I'm sure is also buggy.
+            val (raw1, raw2) = content splitAt lastpos0
+            repldbg("[raw] " + raw1 + "   <--->   " + raw2)
+
+            val adjustment = (raw1.reverse takeWhile (ch => (ch != ';') && (ch != '\n'))).size
             val lastpos = lastpos0 - adjustment
 
             // the source code split at the laboriously determined position.
             val (l1, l2) = content splitAt lastpos
+            repldbg("[adj] " + l1 + "   <--->   " + l2)
+
             val prefix   = if (l1.trim == "") "" else l1 + ";\n"
             // Note to self: val source needs to have this precise structure so that
             // error messages print the user-submitted part without the "val res0 = " part.

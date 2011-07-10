@@ -52,9 +52,9 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
     this(settings, new ConsoleReporter(settings))
   
   // fulfilling requirements
-    
-  type AbstractFile = scala.tools.nsc.io.AbstractFile
-  val AbstractFile = scala.tools.nsc.io.AbstractFile
+  // Renamed AbstractFile to AbstractFileType for backward compatibility:
+  // it is difficult for sbt to work around the ambiguity errors which result.
+  type AbstractFileType = scala.tools.nsc.io.AbstractFile
 
   def mkAttributedQualifier(tpe: Type, termSym: Symbol): Tree = gen.mkAttributedQualifier(tpe, termSym)
   
@@ -163,6 +163,14 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
     if (opt.fatalWarnings) globalError(msg)
     else reporter.warning(NoPosition, msg)
   
+  @inline final def ifDebug(body: => Unit) {
+    if (settings.debug.value)
+      body
+  }
+  @inline final def debuglog(msg: => String) {
+    if (settings.debug.value && (settings.log containsPhase globalPhase))
+      inform("[log " + phase + "] " + msg)
+  }
   private def elapsedMessage(msg: String, start: Long) =
     msg + " in " + (currentTime - start) + "ms"
     
@@ -173,7 +181,10 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
   def informTime0(msg: String, start: Long) = if (System.getProperty("scalacTimings") != null) inform("[" + elapsedMessage(msg, start) + "]")
 
   def logError(msg: String, t: Throwable): Unit = ()
-  def log(msg: => AnyRef): Unit = if (opt.logPhase) inform("[log " + phase + "] " + msg)
+  // Over 200 closure objects are eliminated by inlining this.
+  @inline final def log(msg: => AnyRef): Unit =
+    if (settings.log containsPhase globalPhase)
+      inform("[log " + phase + "] " + msg)
   
   def logThrowable(t: Throwable): Unit = globalError(throwableAsString(t))
   def throwableAsString(t: Throwable): String =
@@ -645,6 +656,28 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
     }
     line1 :: line2 :: descs mkString
   }
+  /** Summary of the per-phase values of nextFlags and newFlags, shown
+   *  with -Xshow-phases if -Ydebug also given.
+   */
+  def phaseFlagDescriptions: String = {
+    val width = phaseNames map (_.length) max
+    val fmt   = "%" + width + "s  %2s  %s\n"
+    
+    val line1 = fmt.format("phase name", "id", "new flags")
+    val line2 = fmt.format("----------", "--", "---------")
+    val descs = phaseDescriptors.zipWithIndex map {
+      case (ph, idx) =>
+        def fstr1 = if (ph.phaseNewFlags == 0L) "" else "[START] " + Flags.flagsToString(ph.phaseNewFlags)
+        def fstr2 = if (ph.phaseNextFlags == 0L) "" else "[END] " + Flags.flagsToString(ph.phaseNextFlags)
+        val fstr = (
+          if (ph.ownPhase.id == 1) Flags.flagsToString(Flags.InitialFlags)
+          else if (ph.phaseNewFlags != 0L && ph.phaseNextFlags != 0L) fstr1 + " " + fstr2
+          else fstr1 + fstr2
+        )
+        fmt.format(ph.phaseName, idx + 1, fstr)
+    }
+    line1 :: line2 :: descs mkString
+  }
 
   // ----------- Runs ---------------------------------------
 
@@ -1035,6 +1068,9 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
       // record dependency data
       if (!dependencyAnalysis.off)
         dependencyAnalysis.saveDependencyAnalysis()
+
+      // Clear any sets or maps created via perRunCaches.
+      perRunCaches.clearAll()
     }
 
     /** Compile list of abstract files. */
@@ -1198,21 +1234,21 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
       inform(List(name, baseClasses, contents) mkString "\n\n")
     }
   }
-
-  /** Returns the file with the given suffix for the given class. Used for icode writing. */
-  def getFile(clazz: Symbol, suffix: String): File = {
+  
+  def getFile(source: AbstractFile, segments: Array[String], suffix: String): File = {
     val outDir = Path(
-      settings.outputDirs.outputDirFor(clazz.sourceFile).path match {
+      settings.outputDirs.outputDirFor(source).path match {
         case ""   => "."
         case path => path
       }
     )
-    val segments = clazz.fullName split '.'
     val dir      = segments.init.foldLeft(outDir)(_ / _).createDirectory()
-    
     new File(dir.path, segments.last + suffix)
   }
 
+  /** Returns the file with the given suffix for the given class. Used for icode writing. */
+  def getFile(clazz: Symbol, suffix: String): File = getFile(clazz.sourceFile, clazz.fullName split '.', suffix)
+ 
   private def writeICode() {
     val printer = new icodes.TextPrinter(null, icodes.linearizer)
     icodes.classes.values.foreach((cls) => {

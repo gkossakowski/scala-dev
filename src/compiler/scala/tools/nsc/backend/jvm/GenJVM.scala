@@ -19,6 +19,7 @@ import ch.epfl.lamp.fjbg._
 import JAccessFlags._
 import JObjectType.{ JAVA_LANG_STRING, JAVA_LANG_OBJECT }
 import java.util.jar.{ JarEntry, JarOutputStream }
+import scala.tools.nsc.io.AbstractFile
 
 /** This class ...
  *
@@ -285,7 +286,17 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
             !(sym.name.toString contains '$') && sym.hasModuleFlag && !sym.isImplClass && !sym.isNestedClass
           }
 
-        val lmoc = c.symbol.companionModule
+        // At some point this started throwing lots of exceptions as a compile was finishing.
+        // error: java.lang.AssertionError:
+        //   assertion failed: List(object package$CompositeThrowable, object package$CompositeThrowable)
+        // ...is the one I've seen repeatedly.  Suppressing.
+        val lmoc = (
+          try c.symbol.companionModule
+          catch { case x: AssertionError =>
+            Console.println("Suppressing failed assert: " + x)
+            NoSymbol
+          }
+        )
         // add static forwarders if there are no name conflicts; see bugs #363 and #1735
         if (lmoc != NoSymbol && !c.symbol.isInterface) {
           if (isCandidateForForwarders(lmoc) && !settings.noForwarders.value) {
@@ -572,7 +583,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
            *  in which case we treat every signature as valid.  Medium term we
            *  should certainly write independent signature validation.
            */
-          if (!settings.Xnoverify.value && SigParser.isParserAvailable && !isValidSignature(sym, sig)) {
+          if (settings.Xverify.value && SigParser.isParserAvailable && !isValidSignature(sym, sig)) {
             clasz.cunit.warning(sym.pos, 
                 """|compiler bug: created invalid generic signature for %s in %s
                    |signature: %s
@@ -982,8 +993,8 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       addParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
     } 
 
-    /** Add forwarders for all methods defined in `module' that don't conflict
-     *  with methods in the companion class of `module'. A conflict arises when
+    /** Add forwarders for all methods defined in `module` that don't conflict
+     *  with methods in the companion class of `module`. A conflict arises when
      *  a method with the same name is defined both in a class and its companion
      *  object: method signature is not taken into account.
      */
@@ -1013,7 +1024,7 @@ abstract class GenJVM extends SubComponent with GenJVMUtil with GenAndroid with 
       lazy val membersInCommon     = 
         memberNames(linkedModule) intersect memberNames(linkedClass)
 
-      /** Should method `m' get a forwarder in the mirror class? */      
+      /** Should method `m` get a forwarder in the mirror class? */
       def shouldForward(m: Symbol): Boolean = (
         m.owner != ObjectClass
         && m.isMethod

@@ -6,6 +6,7 @@
 package scala.reflect
 package internal
 
+import scala.collection.{ mutable, immutable }
 import util._
 
 abstract class SymbolTable extends /*reflect.generic.Universe
@@ -27,14 +28,14 @@ abstract class SymbolTable extends /*reflect.generic.Universe
                               with Required
 {  
   def rootLoader: LazyType 
-  def log(msg: => AnyRef)
+  def log(msg: => AnyRef): Unit
   def abort(msg: String): Nothing = throw new Error(msg)
   def abort(): Nothing = throw new Error()
 
-  /** Are we compiling for Java SE ? */
+  /** Are we compiling for Java SE? */
   // def forJVM: Boolean
 
-  /** Are we compiling for .NET ? */
+  /** Are we compiling for .NET? */
   def forMSIL: Boolean = false
   
   /** A period is an ordinal number for a phase in a run.
@@ -63,28 +64,28 @@ abstract class SymbolTable extends /*reflect.generic.Universe
   /** The current compiler run identifier. */
   def currentRunId: RunId
 
-  /** The run identifier of the given period */
+  /** The run identifier of the given period. */
   final def runId(period: Period): RunId = period >> 8
 
-  /** The phase identifier of the given period */
+  /** The phase identifier of the given period. */
   final def phaseId(period: Period): Phase#Id = period & 0xFF
 
-  /** The period at the start of run that includes `period' */
+  /** The period at the start of run that includes `period`. */
   final def startRun(period: Period): Period = period & 0xFFFFFF00
 
-  /** The current period */
+  /** The current period. */
   final def currentPeriod: Period = {
     //assert(per == (currentRunId << 8) + phase.id)
     per
   }
 
-  /** The phase associated with given period */
+  /** The phase associated with given period. */
   final def phaseOf(period: Period): Phase = phaseWithId(phaseId(period))
 
   final def period(rid: RunId, pid: Phase#Id): Period = 
     (currentRunId << 8) + pid
 
-  /** Perform given operation at given phase */
+  /** Perform given operation at given phase. */
   final def atPhase[T](ph: Phase)(op: => T): T = {
     val current = phase
     phase = ph
@@ -112,19 +113,51 @@ abstract class SymbolTable extends /*reflect.generic.Universe
       else noChangeInBaseClasses(infoTransformers.nextFrom(phase.id), pid)
     }
   }
+ 
+  object perRunCaches {
+    import java.lang.ref.WeakReference
+    
+    // We can allow ourselves a structural type, these methods
+    // amount to a few calls per run at most.  This does suggest
+    // a "Clearable" trait may be useful.
+    private type Clearable = {
+      def size: Int
+      def clear(): Unit
+    }
+    // Weak references so the garbage collector will take care of
+    // letting us know when a cache is really out of commission.
+    private val caches = mutable.HashSet[WeakReference[Clearable]]()
+    
+    def clearAll() = {
+      if (settings.debug.value) {
+        val size = caches flatMap (ref => Option(ref.get)) map (_.size) sum;
+        log("Clearing " + caches.size + " caches totalling " + size + " entries.")
+      }
+      caches foreach { ref =>
+        val cache = ref.get()
+        if (cache == null)
+          caches -= ref
+        else
+          cache.clear()
+      }
+    }
 
-  /** Break into repl debugger if assertion is true */
+    def newMap[K, V]() = { val m = mutable.HashMap[K, V]() ; caches += new WeakReference(m) ; m }
+    def newSet[K]()    = { val s = mutable.HashSet[K]() ; caches += new WeakReference(s) ; s }
+  }
+
+  /** Break into repl debugger if assertion is true. */
   // def breakIf(assertion: => Boolean, args: Any*): Unit =
   //   if (assertion)
   //     ILoop.break(args.toList)
 
-  /** The set of all installed infotransformers */
+  /** The set of all installed infotransformers. */
   var infoTransformers = new InfoTransformer {
     val pid = NoPhase.id
     val changesBaseClasses = true
     def transform(sym: Symbol, tpe: Type): Type = tpe
   }
 
-  /** The phase which has given index as identifier */
+  /** The phase which has given index as identifier. */
   val phaseWithId: Array[Phase]
 }

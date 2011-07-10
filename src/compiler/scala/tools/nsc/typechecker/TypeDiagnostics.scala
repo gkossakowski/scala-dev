@@ -66,7 +66,7 @@ trait TypeDiagnostics {
   /** A map of Positions to addendums - if an error involves a position in
    *  the map, the addendum should also be printed.
    */
-  private var addendums = mutable.Map[Position, () => String]()
+  private var addendums = perRunCaches.newMap[Position, () => String]()
 
   def setAddendum(pos: Position, msg: () => String) =
     if (pos != NoPosition)
@@ -421,7 +421,7 @@ trait TypeDiagnostics {
         // Error suppression will squash some of these warnings unless we circumvent it.
         // It is presumed if you are using a -Y option you would really like to hear
         // the warnings you've requested.
-        if (settings.Ywarndeadcode.value && context.unit != null && treeOK(tree) && exprOK) {
+        if (settings.warnDeadCode.value && context.unit != null && treeOK(tree) && exprOK) {
           val saved = context.reportGeneralErrors
           try {
             context.reportGeneralErrors = true

@@ -5,7 +5,7 @@
 ** /____/\___/_/ |_/____/_/ | |                                         **
 **                          |/                                          **
 \*                                                                      */
-package scala.reflect.generic
+package scala.reflect.internal
 
 object ByteCodecs { 
 
@@ -214,11 +214,3 @@ object ByteCodecs {
     decode7to8(xs, len)
   }
 }
-
-      
-      
-      
-      
-      
-  
-    

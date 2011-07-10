@@ -56,7 +56,7 @@ abstract class UnPickler /*extends reflect.generic.UnPickler*/ {
     /** A map from entry numbers to symbols, types, or annotations */
     private val entries = new Array[AnyRef](index.length)
     
-    /** A map from symbols to their associated `decls' scopes */
+    /** A map from symbols to their associated `decls` scopes */
     private val symScopes = new HashMap[Symbol, Scope]
 
     //println("unpickled " + classRoot + ":" + classRoot.rawInfo + ", " + moduleRoot + ":" + moduleRoot.rawInfo);//debug
@@ -105,7 +105,7 @@ abstract class UnPickler /*extends reflect.generic.UnPickler*/ {
                               " in "+filename)
     }
 
-    /** The `decls' scope associated with given symbol */
+    /** The `decls` scope associated with given symbol */
     protected def symScope(sym: Symbol) = symScopes.getOrElseUpdate(sym, newScope)
 
     /** Does entry represent an (internal) symbol */
@@ -369,8 +369,14 @@ abstract class UnPickler /*extends reflect.generic.UnPickler*/ {
           else
             NullaryMethodType(restpe)
         case EXISTENTIALtpe =>
-          val restpe = readTypeRef()
-          ExistentialType(until(end, readSymbolRef), restpe)
+          val restpe  = readTypeRef()
+          // @PP: Where is the flag setting supposed to happen? I infer
+          // from the lack of flag setting in the rest of the unpickler
+          // that it isn't right here. See #4757 for the immediate
+          // motivation to fix it.
+          val tparams = until(end, readSymbolRef) map (_ setFlag EXISTENTIAL)
+          ExistentialType(tparams, restpe)
+
         case ANNOTATEDtpe =>
           var typeRef = readNat()
           val selfsym = if (isSymbolRef(typeRef)) {

@@ -95,8 +95,6 @@ trait MatchSupport extends ast.TreeDSL { self: ParallelMatching =>
       })
     }
     
-    @elidable(elidable.FINE) def ifDebug(body: => Unit): Unit     = { if (settings.debug.value) body }
-    @elidable(elidable.FINE) def DBG(msg: => String): Unit        = { ifDebug(println(msg)) }
     @elidable(elidable.FINE) def TRACE(f: String, xs: Any*): Unit = {
       if (trace) {
         val msg = if (xs.isEmpty) f else f.format(xs map pp: _*)
@@ -111,6 +109,10 @@ trait MatchSupport extends ast.TreeDSL { self: ParallelMatching =>
       if (trace)
         println(("[" + """%10s""".format(s) + "]  %s") format pp(x))
 
+      x
+    }
+    private[nsc] def printing[T](fmt: String, xs: Any*)(x: T): T = {
+      println(fmt.format(xs: _*) + " == " + x)
       x
     }
 

@@ -268,7 +268,7 @@ abstract class TreeBuilder {
       Apply(sel, exprs)
   }
 
-  /** Create block of statements `stats'  */
+  /** Create block of statements `stats`  */
   def makeBlock(stats: List[Tree]): Tree =
     if (stats.isEmpty) Literal(())
     else if (!stats.last.isTerm) Block(stats, Literal(()))
@@ -609,7 +609,7 @@ abstract class TreeBuilder {
   def makeFunctionTypeTree(argtpes: List[Tree], restpe: Tree): Tree =
     AppliedTypeTree(rootScalaDot(newTypeName("Function" + argtpes.length)), argtpes ::: List(restpe))
 
-  /** Append implicit parameter section if `contextBounds' nonempty */
+  /** Append implicit parameter section if `contextBounds` nonempty */
   def addEvidenceParams(owner: Name, vparamss: List[List[ValDef]], contextBounds: List[Tree]): List[List[ValDef]] =
     if (contextBounds.isEmpty) vparamss
     else {

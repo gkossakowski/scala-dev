@@ -15,6 +15,7 @@ import scala.tools.util.{ Signallable, Javap }
 import scala.annotation.tailrec
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.ops
+import scala.util.control.ControlThrowable
 import util.{ ClassPath, Exceptional, stringFromWriter, stringFromStream }
 import interpreter._
 import io.{ File, Sources }
@@ -494,6 +495,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
     """.trim.stripMargin
 
   private val crashRecovery: PartialFunction[Throwable, Unit] = {
+    case ex: ControlThrowable => throw ex
     case ex: Throwable =>
       if (settings.YrichExes.value) {
         val sources = implicitly[Sources]

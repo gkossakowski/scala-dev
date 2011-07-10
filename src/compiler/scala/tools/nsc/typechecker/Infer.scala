@@ -425,18 +425,17 @@ trait Infer {
     private def isPlausiblySubType(tp1: Type, tp2: Type) = !isImpossibleSubType(tp1, tp2)
     private def isImpossibleSubType(tp1: Type, tp2: Type) = tp1.normalize.widen match {
       case tr1 @ TypeRef(_, sym1, _) =>
-        tp2.normalize.widen match {
+        sym1.isClass && (tp2.normalize.widen match {
           case TypeRef(_, sym2, _) =>
-             sym1.isClass &&
              sym2.isClass &&
             !(sym1 isSubClass sym2) &&
             !(sym1 isNumericSubClass sym2)
           case RefinedType(_, decls) =>
-            decls.nonEmpty && tp1.member(decls.head.name) == NoSymbol
+            decls.nonEmpty && tr1.member(decls.head.name) == NoSymbol
           case _ => false
-        }
+        })
       case _ => false
-    }      
+    }
 
     def isCompatible(tp: Type, pt: Type): Boolean = {
       val tp1 = normalize(tp)

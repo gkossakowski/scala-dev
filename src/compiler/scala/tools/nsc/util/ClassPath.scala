@@ -172,7 +172,7 @@ object ClassPath {
   }
   
   object DefaultJavaContext extends JavaContext {
-    override def isValidName(name: String) = !isTraitImplementation(name)
+    override def isValidName(name: String) = true //!isTraitImplementation(name)
   }
   
   /** From the source file to its identifier.

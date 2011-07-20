@@ -1035,7 +1035,6 @@ trait Implicits {
     def sourceInfoTree(chain: List[(String, Int)]): Tree = chain match {
       case (name, line) :: rest =>
         val pairTree = gen.mkTuple(List(Literal(name), Literal(line)))
-        //gen.mkNewCons(pairTree, sourceInfoTree(rest))
         Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), List(pairTree))
       case List() =>
         gen.mkNil
@@ -1208,8 +1207,6 @@ trait Implicits {
           case SearchFailure if sym == OptManifestClass => wrapResult(gen.mkAttributedRef(NoManifest))
           case result                                   => result
         }
-      case TypeRef(_, sym, _) if sym == SourceLocationClass =>
-        sourceLocation()
       case tp@TypeRef(_, sym, _) if sym.isAbstractType =>
         implicitManifestOrOfExpectedType(tp.bounds.lo) // #3977: use tp (==pt.dealias), not pt (if pt is a type alias, pt.bounds.lo == pt)
       case _ =>
@@ -1229,6 +1226,8 @@ trait Implicits {
       val succstart = startTimer(inscopeSucceedNanos)
       
       var result = searchImplicit(context.implicitss, true)
+
+      // invoke update on implicitly found SourceContext
       var updateSourceContext = true
 
       if (result == SearchFailure) {
@@ -1246,7 +1245,9 @@ trait Implicits {
         if (result == SearchFailure) {
           pt.dealias match {
             case TypeRef(_, SourceContextClass, _) =>
+              // construct new SourceContext instance
               result = sourceInfo()
+              // there is no existing SourceContext to chain with
               updateSourceContext = false
             case _ =>
               stopTimer(oftypeFailNanos, failstart)
@@ -1260,26 +1261,23 @@ trait Implicits {
       if (result == SearchFailure && settings.debug.value)
         log("no implicits found for "+pt+" "+pt.typeSymbol.info.baseClasses+" "+implicitsOfExpectedType)
 
-      val methodName = tree match {
-        case Apply(TypeApply(s, _), args) => s.symbol.name
-        case Apply(s@Select(_, _), args) => s.symbol.name
-        case Apply(s@Ident(_), args) => s.symbol.name
-        case _ => ""
-      }
-
-      val position = tree.pos.focus
-
-      val updatedRes = pt.dealias match {
+      val updatedRes = pt/*.dealias*/ match {
         case TypeRef(_, SourceContextClass, _) if updateSourceContext =>
+          val position = tree.pos.focus
           val fileName = if (position.isDefined) position.source.file.absolute.path
                          else "<unknown file>"
+          val methodName = tree match {
+            case Apply(TypeApply(s, _), args) => s.symbol.name
+            case Apply(s@Select(_, _), args) => s.symbol.name
+            case Apply(s@Ident(_), args) => s.symbol.name
+            case _ => ""
+          }
           new SearchResult(typedPos(position) {
-//            Apply(Select(result.tree, "update"), List(Literal(methodName.toString), sourceInfoTree(contextInfoChain)))
-
             // use sourceInfoFactoryCall to construct SourceContext
             Apply(Select(result.tree, "update"), List(sourceInfoFactoryCall("apply", Literal(fileName), Literal(methodName.toString), sourceInfoTree(contextInfoChain))))
           }, result.subst)
         case TypeRef(_, SourceLocationClass, _) =>
+          val position = tree.pos.focus
           new SearchResult(typedPos(position) {
             sourceLocation().tree
           }, result.subst)

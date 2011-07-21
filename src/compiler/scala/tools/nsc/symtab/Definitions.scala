@@ -234,6 +234,8 @@ trait Definitions extends reflect.generic.StandardDefinitions {
       lazy val EmbeddedControls_ifThenElse = getMember(EmbeddedControlsClass, nme._ifThenElse)
       lazy val EmbeddedControls_whileDo = getMember(EmbeddedControlsClass, nme._whileDo)
       lazy val EmbeddedControls_doWhile = getMember(EmbeddedControlsClass, nme._doWhile)
+      lazy val EmbeddedControls_Row = getMember(EmbeddedControlsClass, tpnme.Row)
+      lazy val EmbeddedControls_new = getMember(EmbeddedControlsClass, nme._new)
       lazy val EmbeddedControls_newVar = getMember(EmbeddedControlsClass, nme._newVar)
       lazy val EmbeddedControls_assign = getMember(EmbeddedControlsClass, nme._assign)
       lazy val EmbeddedControls_return = getMember(EmbeddedControlsClass, nme._return)

@@ -3215,6 +3215,74 @@ trait Typers extends Modes {
         treeCopy.New(tree, tpt1).setType(tp)
       }
 
+      def shouldReifyNew(tp: Type, args: List[Tree]): Boolean = {
+        // TODO: get this from pt?
+        val sym = tp.typeSymbol
+        val rowBaseTp = tp.baseType(EmbeddedControls_Row)
+        
+        rowBaseTp != NoType && 
+        !phase.erasedTypes /* TODO: figure out varargs */ && 
+        sym.info.isInstanceOf[ClassInfoType] /*TODO: meh*/ &&
+        args.isEmpty /* TODO: what about non empty args? */
+      }
+
+      def typedReifiedNew(tpt: Tree): Tree = {
+        val tp = tpt.tpe
+        val sym = tp.typeSymbol
+        val rowBaseTp = tp.baseType(EmbeddedControls_Row)
+        val repTycon = if(phase.erasedTypes) AnyClass.tpe else rowBaseTp.typeArgs(0) // TODO
+        val repSym = repTycon.typeSymbolDirect
+
+        // TODO: remove once r25161 from main repo has been merged
+        def elimAnonymousClass(t: Type) = t match {
+          case TypeRef(pre, clazz, List()) if clazz.isAnonymousClass =>
+            clazz.classBound.asSeenFrom(pre, clazz.owner)
+          case _ =>
+            t
+        }
+
+        object unrep extends TypeMap {
+          def apply(tp: Type) = mapOver(tp) match {
+            case TypeRef(pre, sym, List(tp)) if sym == repSym => tp
+            case tp => tp
+          }
+        }
+
+        val ClassInfoType(parents, defSyms, origClass) = sym.info
+        val structTp = if(true) { // TODO: detect when we need to un-rep some of the member infos
+          val o = origClass.outerClass
+          val structTpSym = o.newAnonymousClass(tpt.pos)
+          structTpSym.setInfo(ClassInfoType(parents, new Scope, structTpSym))
+          o.info.decls.enter(structTpSym) 
+
+          def cloneAndUnRep(sym: Symbol) = {
+            val sym1 = sym.cloneSymbol
+            sym1.info = unrep(sym1.info)
+            sym1
+          }
+          // TODO: subst old symbols to new
+          defSyms foreach (sym => structTpSym.info.decls.enter(cloneAndUnRep(sym)))
+
+          structTpSym.tpe
+        } else tp
+
+        // make tree for `(label, rhs)`
+        def mkArg(label: String, rhs: Tree) = gen.mkTuple(List(Literal(Constant(label)), rhs))
+
+        // make args
+        val classDefTree = context.outer.tree
+        val args = defSyms filter (!_.isConstructor) flatMap { sym => 
+          classDefTree.find(_.symbol == sym) map { tree => 
+            mkArg(nme.getterName(sym.name).toString, tree.asInstanceOf[ValOrDefDef].rhs)
+          }
+        }
+
+        val repStructTp = appliedType(repTycon, List(elimAnonymousClass(structTp)))
+        // must supply type param explicitly as it can't be inferred from pt
+        val tree = typed1(Apply(TypeApply(Ident(nme._new),List(TypeTree(repStructTp))), args.toList), mode, repStructTp)
+        tree.setType(repStructTp)
+      }
+
       def typedEta(expr1: Tree): Tree = expr1.tpe match {
         case TypeRef(_, ByNameParamClass, _) =>
           val expr2 = Function(List(), expr1) setPos expr1.pos
@@ -3375,7 +3443,7 @@ trait Typers extends Modes {
 
           // ------------------------------------------------------------------------------
           
-          val proxytc = if (withinProxyTrait) enclClassTp.memberType(enclClassTp.member(nme.TransparentProxy)) else NoType
+          val proxytc = if (withinProxyTrait) enclClassTp.memberType(enclClassTp.member(tpnme.TransparentProxy)) else NoType
           //println("proxy: " + proxytc) // careful, must not access enclClassTp if it's *not* our marker
 
           val qual1tp = qual1.tpe.widen
@@ -4317,6 +4385,8 @@ trait Typers extends Modes {
                 new ApplyToImplicitArgs(Select(manif, if (level == 1) "newArray" else "newArray"+level), args)
               }
               typed(newArrayApp, mode, pt)
+            case tree1@Apply(Select(New(tpt), name), args) if tpt.tpe != null && shouldReifyNew(tpt.tpe, args) =>
+              typedReifiedNew(tpt)
             case tree1 =>
               tree1
           }

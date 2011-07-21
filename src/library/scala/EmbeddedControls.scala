@@ -23,7 +23,7 @@ package scala
  * 
  *  It then depends on the type assignment which version of `ifThenElse` is called.
  *  If it is still the standard one in this trait, the type checker will
- *  replace it by an `If` tree node. If not, the call will be laft as it is
+ *  replace it by an `If` tree node. If not, the call will be left as it is
  *  and a staging or interpreting DSL can take over.
  */
 trait EmbeddedControls {
@@ -49,6 +49,18 @@ trait EmbeddedControls {
 
   def __equal(expr1: Any, expr2: Any): Boolean = 
     throw new UnsupportedOperationException("__equal")
+
+  trait Row[Rep[x]]
+
+  /** 
+    * Rep is determined by looking at
+    * for args(i) = (l_i, v_i) : (String, T_i)
+    * type T'_i = T_i match { case Rep[T] => T case _ => T_i }
+    * T is the Rep of the structural type that consist of a def for each i:
+    * def <l_i> : <T'_i>
+    */
+  def __new[T](args: (String, Any)*): T =
+    throw new UnsupportedOperationException("__new")
 
 }
 

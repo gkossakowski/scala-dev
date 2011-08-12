@@ -3860,7 +3860,8 @@ trait Typers extends Modes {
               case _ => 
                 dynInvoke = Apply(dynInvoke, List())
             }
-            return typed1(util.trace("dynatype: ")(dynInvoke), mode, pt)
+            // typed1(util.trace("dynatype: ")(dynInvoke), mode, pt)
+            return typed1(dynInvoke, mode, pt)
           }
                   
           if (settings.debug.value) {

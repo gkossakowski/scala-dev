@@ -50,7 +50,7 @@ trait EmbeddedControls {
   def __equal(expr1: Any, expr2: Any): Boolean = 
     throw new UnsupportedOperationException("__equal")
 
-  trait Row[Rep[x]]
+  trait Row[+Rep[x]]
 
   /** 
     * Rep is determined by looking at

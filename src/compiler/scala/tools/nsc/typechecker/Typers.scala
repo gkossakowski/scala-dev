@@ -3806,6 +3806,49 @@ trait Typers extends Modes {
         }
       }
 
+      object dyna {
+        // TODO: use prefix as with TransparentProxy?
+        private def enclClassTp = PredefModule.tpe // ThisType(context.enclClass.owner)
+        lazy val rowTp = enclClassTp.memberType(EmbeddedControls_Row)
+
+        private lazy val _rep = NoSymbol.newTypeParameter(NoPosition, "Rep".toTypeName)
+        lazy val repTpar = _rep.newTypeParameter(NoPosition, "T".toTypeName).setFlag(COVARIANT).setInfo(TypeBounds.empty)
+        def rep = if(_rep.hasRawInfo) _rep else _rep.setInfo(polyType(List(repTpar), TypeBounds.empty))
+        private def boolOpt(c: Boolean) = if(c) Some(()) else None
+        private def listOpt[T](xs: List[T]) = xs match { case x :: Nil => Some(x) case _ => None }
+        private def symOpt[T](sym: Symbol) = if(sym == NoSymbol) None else Some(sym) // TODO: handle overloading?
+
+        def mkInvoke(qual: Tree, name: Name, wrapInApply: Boolean): Option[Tree] = {
+          def invocation(tp: Type = null): Tree = {
+            val applyDynamic = Select(qual, nme.applyDynamic)
+            val res = Apply(if (tp != null) TypeApply(applyDynamic, List(TypeTree(tp))) else applyDynamic, List(Literal(Constant(name.decode))))
+            if (wrapInApply) Apply(res, List()) else res
+          }
+
+          if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))
+            Some(invocation())
+          else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
+            // println("mkInvoke!")
+            val repVar = TypeVar(rep)
+            for( 
+              _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!? 
+              repTp <- listOpt(solvedTypes(List(repVar), List(rep), List(COVARIANT), false, -3)); // search for minimal solution
+              // _ <- Some(println("mkInvoke repTp="+ repTp));
+              // if so, generate an invocation and give it type `Rep[T]`, where T is the type given to member `name` in `decls`
+              repSym = repTp.typeSymbolDirect;
+              qualRowTp = qual.tpe.baseType(repSym).typeArgs.head; // this specifies `decls`
+              member <- symOpt(qualRowTp.member(name));
+              // _ <- Some(println("mkInvoke member="+ member))
+            ) yield {
+              val memberTp = qualRowTp.memberType(member).resultType // this is `T` from the comment above
+              // println("mkInvoke memberTp="+ memberTp)
+
+              invocation(memberTp)
+            }
+          }
+        }
+      }
+
       /** Attribute a selection where <code>tree</code> is <code>qual.name</code>.
        *  <code>qual</code> is already attributed.
        *
@@ -3851,19 +3894,15 @@ trait Typers extends Modes {
           }
 
           // try to expand according to Dynamic rules.
-
-          if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass)) {
-            var dynInvoke = Apply(Select(qual, nme.applyDynamic), List(Literal(Constant(name.decode))))
-            context.tree match {
-              case Apply(tree1, args) if tree1 eq tree => 
-                ;
-              case _ => 
-                dynInvoke = Apply(dynInvoke, List())
-            }
-            // typed1(util.trace("dynatype: ")(dynInvoke), mode, pt)
-            return typed1(dynInvoke, mode, pt)
+          // `qual`.applyDynamic(`name`)(`args`)  (where args are supplied by the enclosing tree, context.tree -- the empty list if there is no such tree)
+          def wrappedInApply = context.tree match { case Apply(tree1, args) if tree1 eq tree => true   case _ => false }
+          dyna.mkInvoke(qual, name, !wrappedInApply) match {
+            case Some(invocation) => 
+              // typed1(util.trace("dynatype: ")(invocation), mode, pt)
+              return typed1(invocation, mode, pt)
+            case _ =>
           }
-                  
+
           if (settings.debug.value) {
             log(
               "qual = "+qual+":"+qual.tpe+

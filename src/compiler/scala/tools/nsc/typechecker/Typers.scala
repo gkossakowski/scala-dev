@@ -3822,7 +3822,7 @@ trait Typers extends Modes {
           def invocation(tp: Type = null): Tree = {
             val applyDynamic = Select(qual, nme.applyDynamic)
             val res = Apply(if (tp != null) TypeApply(applyDynamic, List(TypeTree(tp))) else applyDynamic, List(Literal(Constant(name.decode))))
-            if (wrapInApply) Apply(res, List()) else res
+            atPos(qual.pos)(if (wrapInApply) Apply(res, List()) else res)
           }
 
           if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))

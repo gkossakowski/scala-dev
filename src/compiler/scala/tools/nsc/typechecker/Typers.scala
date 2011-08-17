@@ -3828,7 +3828,6 @@ trait Typers extends Modes {
           if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))
             Some(invocation())
           else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
-            // println("mkInvoke!")
             val repVar = TypeVar(rep)
             for( 
               _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!? 
@@ -3837,12 +3836,10 @@ trait Typers extends Modes {
               // if so, generate an invocation and give it type `Rep[T]`, where T is the type given to member `name` in `decls`
               repSym = repTp.typeSymbolDirect;
               qualRowTp = qual.tpe.baseType(repSym).typeArgs.head; // this specifies `decls`
-              member <- symOpt(qualRowTp.member(name));
-              // _ <- Some(println("mkInvoke member="+ member))
+              member <- symOpt(qualRowTp.member(name))
             ) yield {
               val memberTp = qualRowTp.memberType(member).resultType // this is `T` from the comment above
               // println("mkInvoke memberTp="+ memberTp)
-
               invocation(memberTp)
             }
           }

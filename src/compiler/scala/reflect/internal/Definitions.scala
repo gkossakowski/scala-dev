@@ -215,7 +215,8 @@ trait Definitions extends reflect.api.StandardDefinitions {
     lazy val ScalaInlineClass           = getClass("scala.inline")
     lazy val ScalaNoInlineClass         = getClass("scala.noinline")
     lazy val SpecializedClass           = getClass("scala.specialized")
-    lazy val BridgeClass                = getClass("scala.annotation.bridge") 
+    lazy val BridgeClass                = getClass("scala.annotation.bridge")
+    lazy val ErasedOverridingClass      = getClass("scala.annotation.erasedOverriding")
 
     // fundamental reference classes
     lazy val ScalaObjectClass           = getClass("scala.ScalaObject")

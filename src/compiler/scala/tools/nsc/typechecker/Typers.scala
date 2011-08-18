@@ -792,15 +792,12 @@ trait Typers extends Modes with Adaptations {
           // @M TODO: why do kind-* tree's have symbols, while higher-kinded ones don't?
           errorTree(tree, tree.symbol + " takes type parameters")
           tree setType tree.tpe
-        } else if ( // (7.1) @M: check kind-arity 
-        // @M: removed check for tree.hasSymbol and replace tree.symbol by tree.tpe.symbol (TypeTree's must also be checked here, and they don't directly have a symbol)
-        (inHKMode(mode)) &&
+        } else if (inHKMode(mode) && // (7.1) @M: check kind-arity 
+          !sameLength(tree.tpe.typeParams, pt.typeParams) && // arity mismatch and...
+          !(hasVarTypeParams(tree.tpe.typeSymbol) || pt == WildcardType)) { // ... not arity-polymorphic
           // @M: don't check tree.tpe.symbol.typeParams. check tree.tpe.typeParams!!! 
           // (e.g., m[Int] --> tree.tpe.symbol.typeParams.length == 1, tree.tpe.typeParams.length == 0!)
-          !sameLength(tree.tpe.typeParams, pt.typeParams) &&
-          !(tree.tpe.typeSymbol == AnyClass ||
-            tree.tpe.typeSymbol == NothingClass ||
-            pt == WildcardType)) {
+          // @M: removed check for tree.hasSymbol and replace tree.symbol by tree.tpe.symbol (TypeTree's must also be checked here, and they don't directly have a symbol)
           // Check that the actual kind arity (tree.symbol.typeParams.length) conforms to the expected
           // kind-arity (pt.typeParams.length). Full checks are done in checkKindBounds in Infer.
           // Note that we treat Any and Nothing as kind-polymorphic. 
@@ -3949,6 +3946,13 @@ trait Typers extends Modes with Adaptations {
                 result // you only get to see the wrapped tree after running this check :-p
               }).setType(result.tpe)
             else result
+          } else if (tpt1.symbol.isJavaDefined) { // && annotated with uncheckedTypeApply
+            // val args1 = args mapConserve (typedHigherKindedType(_, mode))
+            // val argtypes = args1 map (a => erasure.javaErasure(a.tpe))
+            // println("unchecked args for "+ (tpt1, argtypes))
+            // TypeTree(appliedType(tpt1.tpe, argtypes)) setOriginal treeCopy.AppliedTypeTree(tree, tpt1, args1)
+            // println("unchecked args for "+ (tpt1))
+            TypeTree(tpt1.tpe) setOriginal treeCopy.AppliedTypeTree(tree, tpt1, args)
           } else if (tparams.isEmpty) {
             errorTree(tree, tpt1.tpe+" does not take type parameters")
           } else {

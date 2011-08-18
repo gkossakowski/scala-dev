@@ -14,6 +14,8 @@ import event._
 import javax.swing._
 import javax.swing.event._
 
+import annotation.erasedOverriding
+
 object ListView {
   /**
    * The supported modes of user selections.
@@ -70,8 +72,8 @@ object ListView {
    */
   abstract class Renderer[-A] {
     def peer: ListCellRenderer[_ >: A] = new ListCellRenderer[A] {      
-      def getListCellRendererComponent(list: JList[_ <: A], a: A, index: Int, isSelected: Boolean, focused: Boolean) = 
-        componentFor(ListView.wrap[A](list.asInstanceOf[JList[A]]), isSelected, focused, a, index).peer
+      def getListCellRendererComponent(list: JList[_ <: A], a: A, index: Int, isSelected: Boolean, focused: Boolean): java.awt.Component
+        = componentFor(ListView.wrap[A](list.asInstanceOf[JList[A]]), isSelected, focused, a.asInstanceOf[A], index).peer
     }
     def componentFor(list: ListView[_ <: A], isSelected: Boolean, focused: Boolean, a: A, index: Int): Component
   }
@@ -150,12 +152,12 @@ class ListView[A] extends Component {
   }
   
   protected class ModelWrapper[A](val items: Seq[A]) extends AbstractListModel[A] {
-    def getElementAt(n: Int) = items(n)
+    @erasedOverriding def getElementAt(n: Int): A = items(n)
     def getSize = items.size
   }
   
   def listData: Seq[A] = peer.getModel match {
-    case model: ModelWrapper[a] => model.items
+    case model: ModelWrapper[a] => model.items.asInstanceOf[Seq[A]]
     case model => new Seq[A] { selfSeq =>
      def length = model.getSize
      def iterator = new Iterator[A] {
@@ -163,13 +165,13 @@ class ListView[A] extends Component {
        def next = { idx += 1; apply(idx-1) }
        def hasNext = idx < selfSeq.length
      }
-     def apply(n: Int): A = model.getElementAt(n)
+     def apply(n: Int): A = model.getElementAt(n).asInstanceOf[A]
     }
   }
   
   def listData_=(items: Seq[A]) {
     peer.setModel(new AbstractListModel[A] {
-      def getElementAt(n: Int) = items(n)
+      @erasedOverriding def getElementAt(n: Int): A = items(n)
       def getSize = items.size
     })
   } 

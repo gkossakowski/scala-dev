@@ -254,6 +254,23 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
           tp1 <:< tp2
       }
 
+      def overridesTypeUnderErasure(sym: Symbol, tp1: Type, tp2: Type) = {
+        // #3622: erasure operates on uncurried types -- 
+        // note on passing sym in both cases: only sym.isType is relevant for uncurry.transformInfo
+        val tp1_ = uncurryAndErase(sym, tp1)
+        val tp2_ = uncurryAndErase(sym, tp2)
+        atPhase(currentRun.erasurePhase.next)(overridesType(tp1_, tp2_))
+      }
+
+      def uncurryAndErase(sym: Symbol, tp: Type) = erasure.erasure(sym, uncurry.transformInfo(sym, tp))
+      def matchesUnderErasure(sym: Symbol, tp1: Type, tp2: Type): Boolean = {
+        // #3622: erasure operates on uncurried types -- 
+        // note on passing sym in both cases: only sym.isType is relevant for uncurry.transformInfo
+        val tp1_ = uncurryAndErase(sym, tp1)
+        val tp2_ = uncurryAndErase(sym, tp2)
+        atPhase(currentRun.erasurePhase.next)(tp1_ matches tp2_)
+      }
+
       /** Check that all conditions for overriding `other` by `member`
        *  of class `clazz` are met.
        */
@@ -417,7 +434,9 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
             other.cookJavaRawInfo() // #2454
             val memberTp = self.memberType(member)
             val otherTp = self.memberType(other)
-            if (!overridesType(memberTp, otherTp)) { // 8
+            if (!overridesType(memberTp, otherTp) &&
+                !(member.hasAnnotation(ErasedOverridingClass) && overridesTypeUnderErasure(member, otherTp, memberTp))
+               ) { // 8
               overrideTypeError()
               explainTypes(memberTp, otherTp)
             }
@@ -469,14 +488,10 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
 
         def javaErasedOverridingSym(sym: Symbol): Symbol = 
           clazz.tpe.nonPrivateMemberAdmitting(sym.name, BRIDGE).filter(other =>
-            !other.isDeferred && other.isJavaDefined && {
-              // #3622: erasure operates on uncurried types -- 
-              // note on passing sym in both cases: only sym.isType is relevant for uncurry.transformInfo
-              def uncurryAndErase(tp: Type) = erasure.erasure(sym, uncurry.transformInfo(sym, tp))
-              val tp1 = uncurryAndErase(clazz.thisType.memberType(sym))
-              val tp2 = uncurryAndErase(clazz.thisType.memberType(other))
-              atPhase(currentRun.erasurePhase.next)(tp1 matches tp2)
-            })
+            !other.isDeferred && 
+            other.isJavaDefined &&
+            matchesUnderErasure(sym, clazz.thisType.memberType(sym), clazz.thisType.memberType(other))
+          )
 
         def ignoreDeferred(member: Symbol) = (
           (member.isAbstractType && !member.isFBounded) || (
@@ -630,7 +645,8 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
           val symtpe            = clazz.thisType memberType sym
           def matches(tp: Type) = tp matches symtpe
           
-          matches(member.tpe) || (isVarargs && matches(varargsType))
+          matches(member.tpe) || (isVarargs && matches(varargsType)) || (
+            member.hasAnnotation(ErasedOverridingClass) && matchesUnderErasure(member, member.tpe, symtpe))
         }
         /** The rules for accessing members which have an access boundary are more
          *  restrictive in java than scala.  Since java has no concept of package nesting,

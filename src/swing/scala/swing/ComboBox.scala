@@ -14,6 +14,8 @@ import event._
 import javax.swing.{ JComponent, JComboBox, JTextField, ComboBoxModel, AbstractListModel, ListCellRenderer }
 import java.awt.event.ActionListener
 
+import annotation.erasedOverriding
+
 object ComboBox {
   /**
    * An editor for a combo box. Let's you edit the currently selected item.
@@ -130,8 +132,10 @@ object ComboBox {
           selected = a.asInstanceOf[A]
           fireContentsChanged(this, -1, -1)
         }
-      } 
-      def getElementAt(n: Int) = items(n).asInstanceOf[A]
+      }
+
+      @erasedOverriding def getElementAt(n: Int): A = items(n)
+
       def getSize = items.size
     }
   }
@@ -203,7 +207,7 @@ class ComboBox[A](items: Seq[A]) extends Component with Publisher {
     peer.setEditor(editor(this).comboBoxPeer)
   }
   
-  def prototypeDisplayValue: Option[A] = Option(peer.getPrototypeDisplayValue)
+  def prototypeDisplayValue: Option[A] = Option(peer.getPrototypeDisplayValue.asInstanceOf[A])
   def prototypeDisplayValue_=(v: Option[A]) { 
     peer.setPrototypeDisplayValue(v getOrElse null.asInstanceOf[A])
   }

@@ -5840,6 +5840,7 @@ A type's typeSymbol should never be inspected directly.
         throw new NoCommonType(tps)
     }
 
+  def hasVarTypeParams(sym: Symbol): Boolean = sym == AnyClass || sym == NothingClass
 
   // TODO: this desperately needs to be cleaned up
   // plan: split into kind inference and subkinding
@@ -5895,7 +5896,7 @@ A type's typeSymbol should never be inspected directly.
       }
 
       if (!sameLength(hkargs, hkparams)) {
-        if (arg == AnyClass || arg == NothingClass) (Nil, Nil, Nil) // Any and Nothing are kind-overloaded
+        if (hasVarTypeParams(arg)) (Nil, Nil, Nil) // Any and Nothing are kind-overloaded
         else {error = true; (List((arg, param)), Nil, Nil) } // shortcut: always set error, whether explainTypesOrNot
       }
       else {

@@ -129,6 +129,9 @@ trait StdNames extends reflect.generic.StdNames with NameManglers {
     final val String: NameType          = "String"
     final val Throwable: NameType       = "Throwable"
 
+    // embedding information
+    val TransparentProxy: NameType = "TransparentProxy"
+
     // Annotation types
     final val AnnotationDefaultATTR: NameType      = "AnnotationDefault"
     final val BridgeATTR: NameType                 = "Bridge"
@@ -267,7 +270,6 @@ trait StdNames extends reflect.generic.StdNames with NameManglers {
     val _return = newTermName("__return")
     val _whileDo = newTermName("__whileDo")
     val _forward = newTermName("__forward")
-    val TransparentProxy = newTypeName("TransparentProxy")
 
     // unencoded operators
     object raw {

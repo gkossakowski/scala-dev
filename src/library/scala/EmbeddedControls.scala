@@ -23,7 +23,7 @@ package scala
  * 
  *  It then depends on the type assignment which version of `ifThenElse` is called.
  *  If it is still the standard one in this trait, the type checker will
- *  replace it by an `If` tree node. If not, the call will be laft as it is
+ *  replace it by an `If` tree node. If not, the call will be left as it is
  *  and a staging or interpreting DSL can take over.
  */
 trait EmbeddedControls {

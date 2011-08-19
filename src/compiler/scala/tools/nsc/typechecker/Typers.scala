@@ -3807,16 +3807,9 @@ trait Typers extends Modes {
       }
 
       object dyna {
-        // TODO: use prefix as with TransparentProxy?
-        private def enclClassTp = PredefModule.tpe // ThisType(context.enclClass.owner)
-        lazy val rowTp = enclClassTp.memberType(EmbeddedControls_Row)
-
-        private lazy val _rep = NoSymbol.newTypeParameter(NoPosition, "Rep".toTypeName)
-        lazy val repTpar = _rep.newTypeParameter(NoPosition, "T".toTypeName).setFlag(COVARIANT).setInfo(TypeBounds.empty)
-        def rep = if(_rep.hasRawInfo) _rep else _rep.setInfo(polyType(List(repTpar), TypeBounds.empty))
-        private def boolOpt(c: Boolean) = if(c) Some(()) else None
-        private def listOpt[T](xs: List[T]) = xs match { case x :: Nil => Some(x) case _ => None }
-        private def symOpt[T](sym: Symbol) = if(sym == NoSymbol) None else Some(sym) // TODO: handle overloading?
+        @inline private def boolOpt(c: Boolean) = if(c) Some(()) else None
+        @inline private def listOpt[T](xs: List[T]) = xs match { case x :: Nil => Some(x) case _ => None }
+        @inline private def symOpt[T](sym: Symbol) = if(sym == NoSymbol) None else Some(sym) // TODO: handle overloading?
 
         def mkInvoke(qual: Tree, name: Name, wrapInApply: Boolean): Option[Tree] = {
           def invocation(tp: Type = null): Tree = {
@@ -3828,7 +3821,15 @@ trait Typers extends Modes {
           if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))
             Some(invocation())
           else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
+            val myPrefix = ThisType(context.enclClass.owner)
+            val rowPrefix = if(myPrefix.baseClasses.contains(EmbeddedControlsClass)) myPrefix else PredefModule.tpe
+            val rowTp = rowPrefix.memberType(EmbeddedControls_Row)
+
+            val rep = NoSymbol.newTypeParameter(NoPosition, "Rep".toTypeName)
+            val repTpar = rep.newTypeParameter(NoPosition, "T".toTypeName).setFlag(COVARIANT).setInfo(TypeBounds.empty)
+            rep.setInfo(polyType(List(repTpar), TypeBounds.empty))
             val repVar = TypeVar(rep)
+
             for( 
               _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!? 
               repTp <- listOpt(solvedTypes(List(repVar), List(rep), List(COVARIANT), false, -3)); // search for minimal solution

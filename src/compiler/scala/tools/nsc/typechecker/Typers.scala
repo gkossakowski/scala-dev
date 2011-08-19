@@ -3498,7 +3498,7 @@ trait Typers extends Modes with Adaptations {
 
           // ------------------------------------------------------------------------------
           
-          val proxytc = if (withinProxyTrait) enclClassTp.memberType(enclClassTp.member(nme.TransparentProxy)) else NoType
+          val proxytc = if (withinProxyTrait) enclClassTp.memberType(enclClassTp.member(tpnme.TransparentProxy)) else NoType
           //println("proxy: " + proxytc) // careful, must not access enclClassTp if it's *not* our marker
 
           val qual1tp = qual1.tpe.widen

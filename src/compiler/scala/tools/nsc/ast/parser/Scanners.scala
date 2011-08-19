@@ -142,8 +142,6 @@ trait Scanners extends ScannersCommon {
       if (docBuffer ne null) docBuffer.append(c)
     }
       
-    protected def foundComment(value: String, start: Int, end: Int) = ()
-
     protected def foundDocComment(value: String, start: Int, end: Int) = ()
 
     private class TokenData0 extends TokenData
@@ -346,10 +344,7 @@ trait Scanners extends ScannersCommon {
             nextChar()
             if (ch == '\"') {
               nextRawChar()
-              val saved = lineStartOffset
               getMultiLineStringLit()
-              if (lineStartOffset != saved) // ignore linestarts within a multi-line string 
-                lastLineStartOffset = saved
             } else {
               token = STRINGLIT
               strVal = ""
@@ -474,8 +469,6 @@ trait Scanners extends ScannersCommon {
           if (buildingDocComment)
             foundDocComment(comment.toString, offset, charOffset - 2)
         }
-        
-        foundComment(comment.toString, offset, charOffset - 2)
         true
       } else {
         false
@@ -1087,12 +1080,6 @@ trait Scanners extends ScannersCommon {
       }
     }
     
-    override def foundComment(value: String, start: Int, end: Int) {
-      val pos = new RangePosition(unit.source, start, start, end)
-    	unit.comments += unit.Comment(value, pos)
-    	unit.comment(pos, value)
-    }
-
     override def foundDocComment(value: String, start: Int, end: Int) {
       docPos = new RangePosition(unit.source, start, start, end)
       unit.comment(docPos, value)

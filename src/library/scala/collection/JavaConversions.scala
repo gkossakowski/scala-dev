@@ -73,9 +73,6 @@ object JavaConversions {
     case _ => IteratorWrapper(i)
   }
 
-  @deprecated("use asJavaIterator instead", "2.8.1")
-  def asIterator[A](i : Iterator[A]): ju.Iterator[A] = asJavaIterator[A](i)
-
   /**
    * Implicitly converts a Scala Iterator to a Java Enumeration.
    * The returned Java Enumeration is backed by the provided Scala
@@ -93,9 +90,6 @@ object JavaConversions {
     case JEnumerationWrapper(wrapped) => wrapped
     case _ => IteratorWrapper(i)
   }
-
-  @deprecated("use asJavaEnmeration instead", "2.8.1")
-  def asEnumeration[A](i : Iterator[A]): ju.Enumeration[A] = asJavaEnumeration[A](i)
 
   /**
    * Implicitly converts a Scala Iterable to a Java Iterable.
@@ -115,9 +109,6 @@ object JavaConversions {
     case _ => IterableWrapper(i)
   }
 
-  @deprecated("use asJavaIterable instead", "2.8.1")
-  def asIterable[A](i : Iterable[A]): jl.Iterable[A] = asJavaIterable[A](i)
-
   /**
    * Implicitly converts a Scala Iterable to an immutable Java
    * Collection.
@@ -133,9 +124,6 @@ object JavaConversions {
     case JCollectionWrapper(wrapped) => wrapped
     case _ => new IterableWrapper(i)
   }
-  
-  @deprecated("use asJavaCollection instead", "2.8.1")
-  def asCollection[A](i : Iterable[A]): ju.Collection[A] = asJavaCollection[A](i)
 
   /**
    * Implicitly converts a Scala mutable Buffer to a Java List.
@@ -156,8 +144,6 @@ object JavaConversions {
   }
   @deprecated("use bufferAsJavaList instead", "2.9.0")
   def asJavaList[A](b : mutable.Buffer[A]): ju.List[A] = bufferAsJavaList[A](b)
-  @deprecated("use bufferAsJavaList instead", "2.8.1")
-  def asList[A](b : mutable.Buffer[A]): ju.List[A] = bufferAsJavaList[A](b)
 
   /**
    * Implicitly converts a Scala mutable Seq to a Java List.
@@ -178,8 +164,6 @@ object JavaConversions {
   }
   @deprecated("use mutableSeqAsJavaList instead", "2.9.0")
   def asJavaList[A](b : mutable.Seq[A]): ju.List[A] = mutableSeqAsJavaList[A](b)
-  @deprecated("use mutableSeqAsJavaList instead", "2.8.1")
-  def asList[A](b : mutable.Seq[A]): ju.List[A] = mutableSeqAsJavaList[A](b)
 
   /**
    * Implicitly converts a Scala Seq to a Java List.
@@ -201,8 +185,6 @@ object JavaConversions {
 
   @deprecated("use seqAsJavaList instead", "2.9.0")
   def asJavaList[A](b : Seq[A]): ju.List[A] = seqAsJavaList[A](b)
-  @deprecated("use seqAsJavaList instead", "2.8.1")
-  def asList[A](b : Seq[A]): ju.List[A] = seqAsJavaList[A](b)
 
   /**
    * Implicitly converts a Scala mutable Set to a Java Set.
@@ -224,8 +206,6 @@ object JavaConversions {
 
   @deprecated("use mutableSetAsJavaSet instead", "2.9.0")
   def asJavaSet[A](s : mutable.Set[A]): ju.Set[A] = mutableSetAsJavaSet[A](s)
-  @deprecated("use mutableSetAsJavaSet instead", "2.8.1")
-  def asSet[A](s : mutable.Set[A]): ju.Set[A] = mutableSetAsJavaSet[A](s)
 
   /**
    * Implicitly converts a Scala Set to a Java Set.
@@ -247,8 +227,6 @@ object JavaConversions {
 
   @deprecated("use setAsJavaSet instead", "2.9.0")
   def asJavaSet[A](s: Set[A]): ju.Set[A] = setAsJavaSet[A](s)
-  @deprecated("use setAsJavaSet instead", "2.8.1")
-  def asSet[A](s : Set[A]): ju.Set[A] = setAsJavaSet[A](s)
 
   /**
    * Implicitly converts a Scala mutable Map to a Java Map.
@@ -271,21 +249,20 @@ object JavaConversions {
 
   @deprecated("use mutableMapAsJavaMap instead", "2.9.0")
   def asJavaMap[A, B](m : mutable.Map[A, B]): ju.Map[A, B] = mutableMapAsJavaMap[A, B](m)
-  @deprecated("use mutableMapAsJavaMap instead", "2.8.1")
-  def asMap[A, B](m : mutable.Map[A, B]): ju.Map[A, B] = mutableMapAsJavaMap[A, B](m)
 
   /**
-   * Implicitly converts a Scala mutable Map to a Java Dictionary.
-   * The returned Java Dictionary is backed by the provided Scala
-   * Dictionary and any side-effects of using it via the Java interface will
-   * be visible via the Scala interface and vice versa.
+   * Implicitly converts a Scala mutable `Map` to a Java `Dictionary`.
+   *
+   * The returned Java `Dictionary` is backed by the provided Scala
+   * `Dictionary` and any side-effects of using it via the Java interface
+   * will be visible via the Scala interface and vice versa.
    * 
-   * If the Scala Dictionary was previously obtained from an implicit or
-   * explicit call of asMap(java.util.Dictionary) then the original
+   * If the Scala `Dictionary` was previously obtained from an implicit or
+   * explicit call of `asMap(java.util.Dictionary)` then the original
    * Java Dictionary will be returned.
    * 
-   * @param m The Map to be converted.
-   * @return A Java Dictionary view of the argument.
+   * @param m The `Map` to be converted.
+   * @return A Java `Dictionary` view of the argument.
    */
   implicit def asJavaDictionary[A, B](m : mutable.Map[A, B]): ju.Dictionary[A, B] = m match {
     //case JConcurrentMapWrapper(wrapped) => wrapped
@@ -293,21 +270,19 @@ object JavaConversions {
     case _ => new DictionaryWrapper(m)
   }
 
-  @deprecated("use asJavaDictionary instead", "2.8.1")
-  def asDictionary[A, B](m : mutable.Map[A, B]): ju.Dictionary[A, B] = asJavaDictionary[A, B](m)
-
   /**
-   * Implicitly converts a Scala Map to a Java Map.
-   * The returned Java Map is backed by the provided Scala
-   * Map and any side-effects of using it via the Java interface will
-   * be visible via the Scala interface and vice versa.
+   * Implicitly converts a Scala `Map` to a Java `Map`.
+   *
+   * The returned Java `Map` is backed by the provided Scala `Map` and
+   * any side-effects of using it via the Java interface will be visible
+   * via the Scala interface and vice versa.
    * 
-   * If the Scala Map was previously obtained from an implicit or
-   * explicit call of asMap(java.util.Map) then the original
-   * Java Map will be returned.
+   * If the Scala `Map` was previously obtained from an implicit or
+   * explicit call of `asMap(java.util.Map)` then the original
+   * Java `Map` will be returned.
    * 
-   * @param m The Map to be converted.
-   * @return A Java Map view of the argument.
+   * @param m The `Map` to be converted.
+   * @return A Java `Map` view of the argument.
    */
   implicit def mapAsJavaMap[A, B](m : Map[A, B]): ju.Map[A, B] = m match {
     //case JConcurrentMapWrapper(wrapped) => wrapped
@@ -317,52 +292,47 @@ object JavaConversions {
   
   @deprecated("use mapAsJavaMap instead", "2.9.0")
   def asJavaMap[A, B](m : Map[A, B]): ju.Map[A, B] = mapAsJavaMap[A, B](m)
-  @deprecated("use mapAsJavaMap instead", "2.8.1")
-  def asMap[A, B](m : Map[A, B]): ju.Map[A, B] = mapAsJavaMap[A, B](m)
 
   /**
-   * Implicitly converts a Scala mutable `ConcurrentMap` to a Java `ConcurrentMap`.
-   * The returned Java `ConcurrentMap` is backed by the provided Scala `ConcurrentMap`
-   * and any side-effects of using it via the Java interface will be visible
-   * via the Scala interface and vice versa.
+   * Implicitly converts a Scala mutable `ConcurrentMap` to a Java
+   * `ConcurrentMap`.
+   *
+   * The returned Java `ConcurrentMap` is backed by the provided Scala
+   * `ConcurrentMap` and any side-effects of using it via the Java interface
+   * will be visible via the Scala interface and vice versa.
    * 
-   * If the Scala ConcurrentMap was previously obtained from an implicit or
-   * explicit call of asConcurrentMap(java.util.concurrect.ConcurrentMap) then the original
-   * Java ConcurrentMap will be returned.
+   * If the Scala `ConcurrentMap` was previously obtained from an implicit or
+   * explicit call of `asConcurrentMap(java.util.concurrect.ConcurrentMap)`
+   * then the original Java ConcurrentMap will be returned.
    * 
-   * @param m The ConcurrentMap to be converted.
-   * @return A Java ConcurrentMap view of the argument.
+   * @param m The `ConcurrentMap` to be converted.
+   * @return A Java `ConcurrentMap` view of the argument.
    */
   implicit def asJavaConcurrentMap[A, B](m: mutable.ConcurrentMap[A, B]): juc.ConcurrentMap[A, B] = m match {
     case JConcurrentMapWrapper(wrapped) => wrapped
     case _ => new ConcurrentMapWrapper(m)
   }
 
-  @deprecated("use asJavaConcurrentMap instead", "2.8.1")
-  def asConcurrentMap[A, B](m: mutable.ConcurrentMap[A, B]): juc.ConcurrentMap[A, B] = asJavaConcurrentMap[A, B](m)
-
   // Java => Scala
   
   /**
-   * Implicitly converts a Java Iterator to a Scala Iterator.
-   * The returned Scala Iterator is backed by the provided Java
-   * Iterator and any side-effects of using it via the Scala interface will
-   * be visible via the Java interface and vice versa.
+   * Implicitly converts a Java `Iterator` to a Scala `Iterator`.
+   *
+   * The returned Scala `Iterator` is backed by the provided Java `Iterator`
+   * and any side-effects of using it via the Scala interface will be visible
+   * via the Java interface and vice versa.
    * 
-   * If the Java Iterator was previously obtained from an implicit or
-   * explicit call of asIterator(scala.collection.Iterator) then the original
-   * Scala Iterator will be returned.
+   * If the Java `Iterator` was previously obtained from an implicit or
+   * explicit call of `asIterator(scala.collection.Iterator)` then the
+   * original Scala `Iterator` will be returned.
    * 
-   * @param i The Iterator to be converted.
-   * @return A Scala Iterator view of the argument.
+   * @param i The `Iterator` to be converted.
+   * @return A Scala `Iterator` view of the argument.
    */
   implicit def asScalaIterator[A](i : ju.Iterator[A]): Iterator[A] = i match {
     case IteratorWrapper(wrapped) => wrapped
     case _ => JIteratorWrapper(i)
   }
-
-  @deprecated("use asScalaIterator instead", "2.8.1")
-  def asIterator[A](i : ju.Iterator[A]): Iterator[A] = asScalaIterator[A](i)
   
   /**
    * Implicitly converts a Java Enumeration to a Scala Iterator.
@@ -381,19 +351,17 @@ object JavaConversions {
     case IteratorWrapper(wrapped) => wrapped
     case _ => JEnumerationWrapper(i)
   }
-  
-  @deprecated("use enumerationAsScalaIterator instead", "2.8.1")
-  def asIterator[A](i : ju.Enumeration[A]): Iterator[A] = enumerationAsScalaIterator[A](i)
 
   /**
-   * Implicitly converts a Java Iterable to a Scala Iterable.
-   * The returned Scala Iterable is backed by the provided Java
-   * Iterable and any side-effects of using it via the Scala interface will
-   * be visible via the Java interface and vice versa.
+   * Implicitly converts a Java `Iterable` to a Scala `Iterable`.
+   *
+   * The returned Scala `Iterable` is backed by the provided Java `Iterable`
+   * and any side-effects of using it via the Scala interface will be visible
+   * via the Java interface and vice versa.
    * 
-   * If the Java Iterable was previously obtained from an implicit or
-   * explicit call of iterableAsScalaIterable(scala.collection.Iterable) then the original
-   * Scala Iterable will be returned.
+   * If the Java `Iterable` was previously obtained from an implicit or
+   * explicit call of `iterableAsScalaIterable(scala.collection.Iterable)`
+   * then the original Scala Iterable will be returned.
    * 
    * @param i The Iterable to be converted.
    * @return A Scala Iterable view of the argument.
@@ -405,15 +373,13 @@ object JavaConversions {
   
   @deprecated("use iterableAsScalaIterable instead", "2.9.0")
   def asScalaIterable[A](i : jl.Iterable[A]): Iterable[A] = iterableAsScalaIterable[A](i)
-  @deprecated("use iterableAsScalaIterable instead", "2.8.1")
-  def asIterable[A](i : jl.Iterable[A]): Iterable[A] = iterableAsScalaIterable[A](i)
 
   /**
-   * Implicitly converts a Java Collection to an Scala Iterable.
+   * Implicitly converts a Java `Collection` to an Scala `Iterable`.
    * 
-   * If the Java Collection was previously obtained from an implicit or
-   * explicit call of collectionAsScalaIterable(scala.collection.SizedIterable) then
-   * the original Scala Iterable will be returned.
+   * If the Java `Collection` was previously obtained from an implicit or
+   * explicit call of `collectionAsScalaIterable(scala.collection.SizedIterable)`
+   * then the original Scala `Iterable` will be returned.
    * 
    * @param i The Collection to be converted.
    * @return A Scala Iterable view of the argument.
@@ -424,29 +390,25 @@ object JavaConversions {
   }
   @deprecated("use collectionAsScalaIterable instead", "2.9.0")
   def asScalaIterable[A](i : ju.Collection[A]): Iterable[A] = collectionAsScalaIterable[A](i)
-  @deprecated("use collectionAsScalaIterable instead", "2.8.1")
-  def asIterable[A](i : ju.Collection[A]): Iterable[A] = collectionAsScalaIterable[A](i)
 
   /**
-   * Implicitly converts a Java List to a Scala mutable Buffer.
-   * The returned Scala Buffer is backed by the provided Java
-   * List and any side-effects of using it via the Scala interface will
+   * Implicitly converts a Java `List` to a Scala mutable `Buffer`.
+   *
+   * The returned Scala `Buffer` is backed by the provided Java `List`
+   * and any side-effects of using it via the Scala interface will
    * be visible via the Java interface and vice versa.
    * 
-   * If the Java List was previously obtained from an implicit or
-   * explicit call of asScalaBuffer(scala.collection.mutable.Buffer) then the original
-   * Scala Buffer will be returned.
+   * If the Java `List` was previously obtained from an implicit or
+   * explicit call of `asScalaBuffer(scala.collection.mutable.Buffer)`
+   * then the original Scala `Buffer` will be returned.
    * 
-   * @param l The List to be converted.
-   * @return A Scala mutable Buffer view of the argument.
+   * @param l The `List` to be converted.
+   * @return A Scala mutable `Buffer` view of the argument.
    */
   implicit def asScalaBuffer[A](l : ju.List[A]): mutable.Buffer[A] = l match {
     case MutableBufferWrapper(wrapped) => wrapped
     case _ =>new JListWrapper(l)
   }
-
-  @deprecated("use asScalaBuffer instead", "2.8.1")
-  def asBuffer[A](l : ju.List[A]): mutable.Buffer[A] = asScalaBuffer[A](l)
 
   /**
    * Implicitly converts a Java Set to a Scala mutable Set.
@@ -465,18 +427,16 @@ object JavaConversions {
     case MutableSetWrapper(wrapped) => wrapped
     case _ =>new JSetWrapper(s)
   }
-  
-  @deprecated("use asScalaSet instead", "2.8.1")
-  def asSet[A](s : ju.Set[A]): mutable.Set[A] = asScalaSet[A](s)
 
   /**
-   * Implicitly converts a Java Map to a Scala mutable Map.
-   * The returned Scala Map is backed by the provided Java
-   * Map and any side-effects of using it via the Scala interface will
-   * be visible via the Java interface and vice versa.
+   * Implicitly converts a Java `Map` to a Scala mutable `Map`.
+   *
+   * The returned Scala `Map` is backed by the provided Java `Map` and any
+   * side-effects of using it via the Scala interface will be visible via
+   * the Java interface and vice versa.
    * 
-   * If the Java Map was previously obtained from an implicit or
-   * explicit call of mapAsScalaMap(scala.collection.mutable.Map) then the original
+   * If the Java `Map` was previously obtained from an implicit or
+   * explicit call of `mapAsScalaMap(scala.collection.mutable.Map)` then the original
    * Scala Map will be returned.
    * 
    * @param m The Map to be converted.
@@ -490,8 +450,6 @@ object JavaConversions {
 
   @deprecated("use mapAsScalaMap instead", "2.9.0")
   def asScalaMap[A, B](m : ju.Map[A, B]): mutable.Map[A, B] = mapAsScalaMap[A, B](m)
-  @deprecated("use mapAsScalaMap instead", "2.8.1")
-  def asMap[A, B](m : ju.Map[A, B]): mutable.Map[A, B] = mapAsScalaMap[A, B](m)
 
   /**
    * Implicitly converts a Java ConcurrentMap to a Scala mutable ConcurrentMap.
@@ -510,15 +468,14 @@ object JavaConversions {
     case cmw: ConcurrentMapWrapper[a, b] => cmw.underlying
     case _ => new JConcurrentMapWrapper(m)
   }
-  
-  @deprecated("use asScalaConcurrentMap instead", "2.8.1")
-  def asConcurrentMap[A, B](m: juc.ConcurrentMap[A, B]): mutable.ConcurrentMap[A, B] = asScalaConcurrentMap[A, B](m)
 
   /**
-   * Implicitly converts a Java Dictionary to a Scala mutable Map[String, String].
-   * The returned Scala Map[String, String] is backed by the provided Java
-   * Dictionary and any side-effects of using it via the Scala interface will
-   * be visible via the Java interface and vice versa.
+   * Implicitly converts a Java `Dictionary` to a Scala mutable
+   * `Map[String, String]`.
+   *
+   * The returned Scala `Map[String, String]` is backed by the provided Java
+   * `Dictionary` and any side-effects of using it via the Scala interface
+   * will be visible via the Java interface and vice versa.
    * 
    * @param m The Dictionary to be converted.
    * @return A Scala mutable Map[String, String] view of the argument.
@@ -528,14 +485,12 @@ object JavaConversions {
     case _ => new JDictionaryWrapper(p)
   }
 
-  @deprecated("use dictionaryAsScalaMap instead", "2.8.1")
-  def asMap[A, B](p: ju.Dictionary[A, B]): mutable.Map[A, B] = dictionaryAsScalaMap[A, B](p)
-
   /**
-   * Implicitly converts a Java Properties to a Scala mutable Map[String, String].
-   * The returned Scala Map[String, String] is backed by the provided Java
-   * Properties and any side-effects of using it via the Scala interface will
-   * be visible via the Java interface and vice versa.
+   * Implicitly converts a Java `Properties` to a Scala `mutable Map[String, String]`.
+   *
+   * The returned Scala `Map[String, String]` is backed by the provided Java
+   * `Properties` and any side-effects of using it via the Scala interface
+   * will be visible via the Java interface and vice versa.
    * 
    * @param m The Properties to be converted.
    * @return A Scala mutable Map[String, String] view of the argument.
@@ -546,11 +501,9 @@ object JavaConversions {
 
   @deprecated("use propertiesAsScalaMap instead", "2.9.0")
   def asScalaMap(p: ju.Properties): mutable.Map[String, String] = propertiesAsScalaMap(p)
-  @deprecated("use propertiesAsScalaMap instead", "2.8.1")
-  def asMap(p: ju.Properties): mutable.Map[String, String] = propertiesAsScalaMap(p)
 
   // Private implementations (shared by JavaConverters) ...
-  
+
   trait IterableWrapperTrait[A] extends ju.AbstractCollection[A] {
     val underlying: Iterable[A]
     def size = underlying.size
@@ -783,40 +736,40 @@ object JavaConversions {
       def hasNext = ui.hasNext
       def next() = { val e = ui.next ; (e.getKey, e.getValue) }
     }
-    
+
     override def clear() = underlying.clear()
-    
+
     override def empty: Repr = null.asInstanceOf[Repr]
   }
-  
+
   case class JMapWrapper[A, B](val underlying : ju.Map[A, B])
   extends JMapWrapperLike[A, B, JMapWrapper[A, B]] {
     override def empty = JMapWrapper(new ju.HashMap[A, B])
   }
-  
+
   class ConcurrentMapWrapper[A, B](override val underlying: mutable.ConcurrentMap[A, B])
   extends MutableMapWrapper[A, B](underlying) with juc.ConcurrentMap[A, B] {
-    
+
     def putIfAbsent(k: A, v: B) = underlying.putIfAbsent(k, v) match {
       case Some(v) => v
       case None => null.asInstanceOf[B]
     }
-    
+
     def remove(k: AnyRef, v: AnyRef) = try {
       underlying.remove(k.asInstanceOf[A], v.asInstanceOf[B])
     } catch {
       case ex: ClassCastException =>
         false
     }
-    
+
     def replace(k: A, v: B): B = underlying.replace(k, v) match {
       case Some(v) => v
       case None => null.asInstanceOf[B]
     }
-    
+
     def replace(k: A, oldval: B, newval: B) = underlying.replace(k, oldval, newval)
   }
-  
+
   case class JConcurrentMapWrapper[A, B](val underlying: juc.ConcurrentMap[A, B])
   extends JMapWrapperLike[A, B, JConcurrentMapWrapper[A, B]] with mutable.ConcurrentMap[A, B] {
     override def get(k: A) = {
@@ -930,18 +883,17 @@ object JavaConversions {
     def iterator = new Iterator[(String, String)] {
       val ui = underlying.entrySet.iterator
       def hasNext = ui.hasNext
-      def next() = { val e = ui.next ; (e.getKey.asInstanceOf[String], e.getValue.asInstanceOf[String]) }
+      def next() = { val e = ui.next; (e.getKey.asInstanceOf[String], e.getValue.asInstanceOf[String]) }
     }
-    
+
     override def clear() = underlying.clear()
-    
+
     override def empty = JPropertiesWrapper(new ju.Properties)
-    
+
     def getProperty(key: String) = underlying.getProperty(key)
-    
+
     def getProperty(key: String, defaultValue: String) = underlying.getProperty(key, defaultValue)
-    
+
     def setProperty(key: String, value: String) = underlying.setProperty(key, value)
   }
 }
-

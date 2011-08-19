@@ -39,8 +39,7 @@ import parallel.ParIterable
  *  a non-strict collection class may defer computation of some of their
  *  elements until after the instance is available as a value.
  *  A typical example of a non-strict collection class is a
- *  <a href="../immutable/Stream.html" target="ContentFrame">
- *  `scala.collection.immutable.Stream`</a>.
+ *  [[scala.collection.immutable/Stream]].
  *  A more general class of examples are `TraversableViews`.
  *  
  *  If a collection is an instance of an ordered collection class, traversing
@@ -74,10 +73,10 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
   self =>
 
   import Traversable.breaks._
-  
+
   /** The type implementing this traversable */
   protected type Self = Repr
-  
+
   /** The collection of type $coll underlying this `TraversableLike` object.
    *  By default this is implemented as the `TraversableLike` object itself,
    *  but this can be overridden.
@@ -132,15 +131,17 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     }
     result
   }
-  
+
   /** Tests whether this $coll is known to have a finite size.
-   *  All strict collections are known to have finite size. For a non-strict collection
-   *  such as `Stream`, the predicate returns `true` if all elements have been computed.
-   *  It returns `false` if the stream is not yet evaluated to the end.
+   *  All strict collections are known to have finite size. For a non-strict
+   *  collection such as `Stream`, the predicate returns `'''true'''` if all
+   *  elements have been computed. It returns `'''false'''` if the stream is
+   *  not yet evaluated to the end.
    *
    *  Note: many collection methods will not work on collections of infinite sizes. 
    *
-   *  @return  `true` if this collection is known to have finite size, `false` otherwise.
+   *  @return  `'''true'''` if this collection is known to have finite size,
+   *           `'''false'''` otherwise.
    */
   def hasDefiniteSize = true
 
@@ -151,15 +152,27 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     b ++= that.seq
     b.result
   }
-  
+
   @bridge
   def ++[B >: A, That](that: TraversableOnce[B])(implicit bf: CanBuildFrom[Repr, B, That]): That =
     ++(that: GenTraversableOnce[B])(bf)
 
-  /** Concatenates this $coll with the elements of a traversable collection.
-   *  It differs from ++ in that the right operand determines the type of the
-   *  resulting collection rather than the left one.
-   * 
+  /** As with `++`, returns a new collection containing the elements from the left operand followed by the
+   *  elements from the right operand.
+   *  It differs from `++` in that the right operand determines the type of
+   *  the resulting collection rather than the left one.
+   *
+   *  Example:
+   *  {{{
+   *     scala> val x = List(1)
+   *     x: List[Int] = List(1)
+   *
+   *     scala> val y = LinkedList(2)
+   *     y: scala.collection.mutable.LinkedList[Int] = LinkedList(2)
+   *
+   *     scala> val z = x ++: y
+   *     z: scala.collection.mutable.LinkedList[Int] = LinkedList(1, 2)
+   *  }}}
    *  @param that   the traversable to append.
    *  @tparam B     the element type of the returned collection. 
    *  @tparam That  $thatinfo
@@ -180,10 +193,39 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     b.result
   }
 
-  /** This overload exists because: for the implementation of ++: we should reuse
-   *  that of ++ because many collections override it with more efficient versions.
-   *  Since TraversableOnce has no '++' method, we have to implement that directly,
-   *  but Traversable and down can use the overload.
+  /** As with `++`, returns a new collection containing the elements from the left operand followed by the
+   *  elements from the right operand.
+   *  It differs from `++` in that the right operand determines the type of
+   *  the resulting collection rather than the left one.
+   *
+   *  Example:
+   *  {{{
+   *     scala> val x = List(1)
+   *     x: List[Int] = List(1)
+   *
+   *     scala> val y = LinkedList(2)
+   *     y: scala.collection.mutable.LinkedList[Int] = LinkedList(2)
+   *
+   *     scala> val z = x ++: y
+   *     z: scala.collection.mutable.LinkedList[Int] = LinkedList(1, 2)
+   *  }}}
+   *
+   * This overload exists because: for the implementation of `++:` we should
+   *  reuse that of `++` because many collections override it with more
+   *  efficient versions.
+   *
+   *  Since `TraversableOnce` has no `++` method, we have to implement that
+   *  directly, but `Traversable` and down can use the overload.
+   *
+   *  @param that   the traversable to append.
+   *  @tparam B     the element type of the returned collection.
+   *  @tparam That  $thatinfo
+   *  @param bf     $bfinfo
+   *  @return       a new collection of type `That` which contains all elements
+   *                of this $coll followed by all elements of `that`.
+   *
+   *  @return       a new $coll which contains all elements of this $coll
+   *                followed by all elements of `that`.
    */
   def ++:[B >: A, That](that: Traversable[B])(implicit bf: CanBuildFrom[Repr, B, That]): That =
     (that ++ seq)(breakOut)
@@ -200,7 +242,7 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     for (x <- this) b ++= f(x).seq
     b.result
   }
-  
+
   /** Selects all elements of this $coll which satisfy a predicate.
    *
    *  @param p     the predicate used to test elements.
@@ -213,7 +255,7 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
       if (p(x)) b += x
     b.result
   }
-  
+
   /** Selects all elements of this $coll which do not satisfy a predicate.
    *
    *  @param p     the predicate used to test elements.
@@ -335,9 +377,9 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     }
     result
   }
-  
+
   def scan[B >: A, That](z: B)(op: (B, B) => B)(implicit cbf: CanBuildFrom[Repr, B, That]): That = scanLeft(z)(op)
-  
+
   def scanLeft[B, That](z: B)(op: (B, A) => B)(implicit bf: CanBuildFrom[Repr, B, That]): That = {
     val b = bf(repr)
     b.sizeHint(this, 1)
@@ -346,7 +388,7 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     for (x <- this) { acc = op(acc, x); b += acc }
     b.result
   }
-  
+
   @migration(2, 9,
     "This scanRight definition has changed in 2.9.\n" +
     "The previous behavior can be reproduced with scanRight.reverse."
@@ -445,7 +487,7 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     else sliceWithKnownDelta(n, Int.MaxValue, -n)
 
   def slice(from: Int, until: Int): Repr = sliceWithKnownBound(math.max(from, 0), until)
-  
+
   // Precondition: from >= 0, until > 0, builder already configured for building.
   private[this] def sliceInternal(from: Int, until: Int, b: Builder[A, Repr]): Repr = {
     var i = 0
@@ -519,7 +561,7 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     }
     (l.result, r.result)
   }
-  
+
   /** Iterates over the tails of this $coll. The first value will be this
    *  $coll and the final one will be an empty $coll, with the intervening
    *  values the results of successive applications of `tail`.
@@ -528,7 +570,7 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
    *  @example  `List(1,2,3).tails = Iterator(List(1,2,3), List(2,3), List(3), Nil)`
    */  
   def tails: Iterator[Repr] = iterateUntilEmpty(_.tail)
-  
+
   /** Iterates over the inits of this $coll. The first value will be this
    *  $coll and the final one will be an empty $coll, with the intervening
    *  values the results of successive applications of `init`.
@@ -714,7 +756,7 @@ trait TraversableLike[+A, +Repr] extends HasNewBuilder[A, Repr]
     def withFilter(q: A => Boolean): WithFilter = 
       new WithFilter(x => p(x) && q(x))
   }
-  
+
   // A helper for tails and inits.
   private def iterateUntilEmpty(f: Traversable[A @uV] => Traversable[A @uV]): Iterator[Repr] = {
     val it = Iterator.iterate(thisCollection)(f) takeWhile (x => !x.isEmpty)

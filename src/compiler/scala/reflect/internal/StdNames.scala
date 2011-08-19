@@ -92,7 +92,7 @@ trait StdNames extends /*reflect.generic.StdNames with*/ NameManglers { self: Sy
     val ANON_FUN_NAME: NameType      = "$anonfun"
     val EMPTY_PACKAGE_NAME: NameType = "<empty>"
     val IMPORT: NameType             = "<import>"
-    val MODULE_SUFFIX: NameType      = "$module"
+    val MODULE_VAR_SUFFIX: NameType  = "$module"
     val ROOT: NameType               = "<root>"
       
     // value types are all used as terms as well
@@ -172,7 +172,7 @@ trait StdNames extends /*reflect.generic.StdNames with*/ NameManglers { self: Sy
     val FAKE_LOCAL_THIS: NameType       = "this$"
     val INITIALIZER: NameType           = CONSTRUCTOR // Is this buying us something?
     val MIXIN_CONSTRUCTOR: NameType     = "$init$"
-    val MODULE_INSTANCE_FIELD: NameType = "MODULE$"
+    val MODULE_INSTANCE_FIELD: NameType = NameTransformer.MODULE_INSTANCE_NAME  // "MODULE$"
     val OUTER: NameType                 = "$outer"
     val OUTER_LOCAL: NameType           = "$outer " // note the space
     val SELF: NameType                  = "$this"
@@ -189,6 +189,7 @@ trait StdNames extends /*reflect.generic.StdNames with*/ NameManglers { self: Sy
     // val productElementName: NameType = "productElementName"
     val TYPE_ : NameType           = "TYPE"
     val add_ : NameType            = "add"
+    val anyValClass: NameType      = "anyValClass"
     val apply: NameType            = "apply"
     val arrayValue: NameType       = "arrayValue"
     val arraycopy: NameType        = "arraycopy"
@@ -246,6 +247,7 @@ trait StdNames extends /*reflect.generic.StdNames with*/ NameManglers { self: Sy
     val ofDim: NameType            = "ofDim"
     val productArity: NameType     = "productArity"
     val productElement: NameType   = "productElement"
+    val productIterator: NameType  = "productIterator"
     val productPrefix: NameType    = "productPrefix"
     val readResolve: NameType      = "readResolve"
     val sameElements: NameType     = "sameElements"
@@ -378,12 +380,12 @@ trait StdNames extends /*reflect.generic.StdNames with*/ NameManglers { self: Sy
     /** The name of bitmaps for checkinit values that have transient flag*/
     def bitmapNameForCheckinitTransient(n: Int): TermName = bitmapName(n, "inittrans$")
     
-    /** The expanded name of `name' relative to this class `base` with given `separator` 
+    /** The expanded name of `name` relative to this class `base` with given `separator`
      */
     def expandedName(name: TermName, base: Symbol, separator: String = EXPAND_SEPARATOR_STRING): TermName = 
       newTermName(base.fullName('$') + separator + name)
       
-    def moduleVarName(name: TermName): TermName = newTermName("" + name + MODULE_SUFFIX)
+    def moduleVarName(name: TermName): TermName = newTermName("" + name + MODULE_VAR_SUFFIX)
     
     val EXPAND_SEPARATOR_STRING = "$$"
     val LOCAL_SUFFIX_STRING     = " "

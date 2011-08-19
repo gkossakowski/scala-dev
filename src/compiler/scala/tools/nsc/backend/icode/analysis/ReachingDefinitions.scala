@@ -75,12 +75,13 @@ abstract class ReachingDefinitions {
 
     def init(m: IMethod) {
       this.method = m
-      gen.clear;   kill.clear
-      drops.clear; outStack.clear
 
-      for (b <- m.code.blocks.toList;
-           (g, k) = genAndKill(b);
-           (d, st) = dropsAndGen(b)) {
+      gen.clear()
+      kill.clear()
+      drops.clear()
+      outStack.clear()
+
+      for (b <- m.code.blocks.toList; (g, k) = genAndKill(b); (d, st) = dropsAndGen(b)) {
         gen  += (b -> g)
         kill += (b -> k)
         drops += (b -> d)
@@ -96,7 +97,6 @@ abstract class ReachingDefinitions {
         m.exh foreach { e =>
           in(e.startBlock) = lattice.IState(new ListSet[Definition], List(new ListSet[(BasicBlock, Int)]))
         }
-        
       }
     }
     
@@ -241,12 +241,10 @@ abstract class ReachingDefinitions {
       findDefs(bb, idx, m, 0)
 
     override def toString: String = {
-      val sb = new StringBuilder
-      sb.append("rdef: \n")
-      for (b <- method.code.blocks)
-        sb.append("rdef_entry(" + b + ")= " + in(b)).append("\nrdef_exit(" + b + ")= " + out(b))
-      sb.toString()
+      method.code.blocks map { b =>
+        "  entry(%s) = %s\n".format(b, in(b)) +
+        "   exit(%s) = %s\n".format(b, out(b))
+      } mkString ("ReachingDefinitions {\n", "\n", "\n}")
     }
-
   }
 }

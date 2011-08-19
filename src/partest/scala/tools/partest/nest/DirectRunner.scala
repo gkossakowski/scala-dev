@@ -46,7 +46,7 @@ trait DirectRunner {
 
     if (PartestDefaults.poolSize.isEmpty) {
       scala.actors.Debug.info("actors.corePoolSize not defined")
-      setProp("actors.corePoolSize", "16")
+      setProp("actors.corePoolSize", "12")
     }
   }
 
@@ -60,7 +60,7 @@ trait DirectRunner {
     val scalaCheckParentClassLoader = ScalaClassLoader.fromURLs(
       List(scalacheckURL, latestCompFile.toURI.toURL, latestLibFile.toURI.toURL, latestPartestFile.toURI.toURL)
     )
-    Output.init
+    Output.init()
     
     val workers = kindFiles.grouped(groupSize).toList map { toTest =>
       val worker = new Worker(fileManager, TestRunParams(scalaCheckParentClassLoader))

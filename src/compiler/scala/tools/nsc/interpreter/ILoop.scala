@@ -19,6 +19,7 @@ import scala.concurrent.ops
 import util.{ ClassPath, Exceptional, stringFromWriter, stringFromStream }
 import interpreter._
 import io.{ File, Sources }
+import scala.reflect.NameTransformer._
 
 /** The Scala interactive shell.  It provides a read-eval-print loop
  *  around the Interpreter class.
@@ -44,10 +45,11 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
   var settings: Settings = _
   var intp: IMain = _
 
-  lazy val power = {
-    val g = intp.global
-    Power[g.type](this, g)
-  }
+  override def echoCommandMessage(msg: String): Unit =
+    intp.reporter.printMessage(msg)
+    
+  def isAsync = !settings.Yreplsync.value
+  lazy val power = Power(this)
   
   // TODO
   // object opt extends AestheticSettings
@@ -85,6 +87,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
     if (intp ne null) {
       intp.close
       intp = null
+      removeSigIntHandler()
       Thread.currentThread.setContextClassLoader(originalClassLoader)
     }
   }
@@ -223,7 +226,8 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
     nullary("replay", "reset execution and replay all previous commands", replay),
     shCommand,
     nullary("silent", "disable/enable automatic printing of results", verbosity),
-    cmd("type", "<expr>", "display the type of an expression without evaluating it", typeCommand)
+    cmd("type", "<expr>", "display the type of an expression without evaluating it", typeCommand),
+    nullary("warnings", "show the suppressed warnings from the most recent line which had any", warningsCommand)
   )
   
   /** Power user commands */
@@ -359,10 +363,10 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
       if (rest.nonEmpty) {
         intp optFlatName hd match {
           case Some(flat) =>
-            val clazz = flat :: rest mkString "$"
+            val clazz = flat :: rest mkString NAME_JOIN_STRING
             val bytes = super.tryClass(clazz)
             if (bytes.nonEmpty) bytes
-            else super.tryClass(clazz + "$")
+            else super.tryClass(clazz + MODULE_SUFFIX_STRING)
           case _          => super.tryClass(path)
         }
       }
@@ -371,7 +375,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
         // we have to drop the $ to find object Foo, then tack it back onto
         // the end of the flattened name.
         def className  = intp flatName path
-        def moduleName = (intp flatName path.stripSuffix("$")) + "$"
+        def moduleName = (intp flatName path.stripSuffix(MODULE_SUFFIX_STRING)) + MODULE_SUFFIX_STRING
 
         val bytes = super.tryClass(className)
         if (bytes.nonEmpty) bytes
@@ -390,6 +394,9 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
       case Some(tp) => intp.afterTyper(tp.toString)
       case _        => "" // the error message was already printed
     }
+  }
+  private def warningsCommand(): Result = {
+    intp.lastWarnings foreach { case (pos, msg) => intp.reporter.warning(pos, msg) }
   }
   
   private def javapCommand(line: String): Result = {
@@ -532,8 +539,10 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
     }
     // return false if repl should exit
     def processLine(line: String): Boolean = {
-      awaitInitialized()
-      runThunks()
+      if (isAsync) {
+        awaitInitialized()
+        runThunks()
+      }
       if (line eq null) false               // assume null means EOF
       else command(line) match {
         case Result(false, _)           => false
@@ -618,10 +627,11 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
     if (isReplPower) "Already in power mode."
     else enablePowerMode(false)
   }
-  def enablePowerMode(isAsync: Boolean) = {
+  def enablePowerMode(isDuringInit: Boolean) = {
     replProps.power setValue true
     power.unleash()
-    if (isAsync) asyncMessage(power.banner)
+    intp.beSilentDuring(phaseCommand("typer"))
+    if (isDuringInit) asyncMessage(power.banner)
     else echo(power.banner)
   }
   
@@ -669,11 +679,7 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
     }
     
     def transcript(start: String) = {
-      // Printing this message doesn't work very well because it's buried in the
-      // transcript they just pasted.  Todo: a short timer goes off when
-      // lines stop coming which tells them to hit ctrl-D.
-      //
-      // echo("// Detected repl transcript paste: ctrl-D to finish.")
+      echo("\n// Detected repl transcript paste: ctrl-D to finish.\n")
       apply(Iterator(start) ++ readWhile(_.trim != PromptString.trim))
     }
   }
@@ -808,7 +814,14 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
     // our best to look ready.  The interlocking lazy vals tend to
     // inter-deadlock, so we break the cycle with a single asynchronous
     // message to an actor.
-    intp initialize initializedCallback()
+    if (isAsync) {
+      intp initialize initializedCallback()
+      createAsyncListener() // listens for signal to run postInitialization
+    }
+    else {
+      intp.initializeSynchronous()
+      postInitialization()
+    }
     printWelcome()
 
     try loop()

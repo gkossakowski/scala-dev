@@ -15,7 +15,7 @@ import ClassPath.{ JavaContext, DefaultJavaContext, join, split }
 import PartialFunction.condOpt
 
 // Loosely based on the draft specification at:
-// https://lampsvn.epfl.ch/trac/scala/wiki/Classpath
+// https://wiki.scala-lang.org/display/SW/Classpath
 
 object PathResolver {
   def firstNonEmpty(xs: String*)            = xs find (_ != "") getOrElse ""
@@ -74,13 +74,7 @@ object PathResolver {
    *  to the path resolution specification.
    */
   object Defaults {    
-    /* Against my better judgment, giving in to martin here and allowing
-     * CLASSPATH as the default if no -cp is given.  Only if there is no
-     * command line option or environment variable is "." used.
-     */
-    def scalaUserClassPath  = firstNonEmpty(Environment.classPathEnv, ".")
-    def scalaSourcePath     = Environment.sourcePathEnv
-
+    def scalaSourcePath   = Environment.sourcePathEnv
     def javaBootClassPath = Environment.javaBootClassPath
     def javaUserClassPath = Environment.javaUserClassPath
     def javaExtDirs       = Environment.javaExtDirs
@@ -195,8 +189,24 @@ class PathResolver(settings: Settings, context: JavaContext) {
     def javaUserClassPath   = if (useJavaClassPath) Defaults.javaUserClassPath else ""
     def scalaBootClassPath  = cmdLineOrElse("bootclasspath", Defaults.scalaBootClassPath)
     def scalaExtDirs        = cmdLineOrElse("extdirs", Defaults.scalaExtDirs)
-    def userClassPath       = cmdLineOrElse("classpath", Defaults.scalaUserClassPath)
     def sourcePath          = cmdLineOrElse("sourcepath", Defaults.scalaSourcePath)
+
+    /** Against my better judgment, giving in to martin here and allowing
+     *  CLASSPATH to be used automatically.  So for the user-specified part
+     *  of the classpath:
+     *
+     *  - If -classpath or -cp is given, it is that
+     *  - Otherwise, if CLASSPATH is set, it is that
+     *  - If neither of those, then "." is used.
+     */
+    def userClassPath = (
+      if (!settings.classpath.isDefault)
+        settings.classpath.value
+      else sys.props("CLASSPATH") match {
+        case null   => "."
+        case cp     => cp
+      }
+    )
     
     import context._
 

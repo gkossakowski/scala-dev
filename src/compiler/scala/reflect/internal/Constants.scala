@@ -9,7 +9,7 @@ package internal
 import java.lang.Integer.toOctalString
 import annotation.switch
 
-trait Constants {
+trait Constants extends api.Constants {
   self: SymbolTable =>
 
   import definitions._
@@ -30,7 +30,7 @@ trait Constants {
   // For supporting java enumerations inside java annotations (see ClassfileParser)
   final val EnumTag    = 13
 
-  case class Constant(value: Any) {
+  case class Constant(value: Any) extends AbsConstant {
     val tag: Int = value match {
       case null         => NullTag
       case x: Unit      => UnitTag
@@ -211,21 +211,16 @@ trait Constants {
       case '"'  => "\\\""
       case '\'' => "\\\'"
       case '\\' => "\\\\"
-      case _    => String.valueOf(ch)
+      case _    => if (ch.isControl) "\\0" + toOctalString(ch) else String.valueOf(ch)
     }
 
     def escapedStringValue: String = {
-      def escape(text: String): String = {
-        text map { ch =>
-          if (ch.isControl) "\\0" + toOctalString(ch)
-          else escapedChar(ch)
-        } mkString ""        
-      }
+      def escape(text: String): String = (text map escapedChar) mkString ""
       tag match {
         case NullTag   => "null"
         case StringTag => "\"" + escape(stringValue) + "\""
         case ClassTag  => "classOf[" + signature(typeValue) + "]"
-        case CharTag   => escape("'" + escapedChar(charValue) + "'")
+        case CharTag   => "'" + escapedChar(charValue) + "'"
         case LongTag   => longValue.toString() + "L"
         case _         => String.valueOf(value)
       }
@@ -235,4 +230,6 @@ trait Constants {
 
     override def hashCode: Int = value.## * 41 + 17
   }
+  
+  object Constant extends ConstantExtractor
 }

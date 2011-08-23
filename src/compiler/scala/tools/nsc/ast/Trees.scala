@@ -15,7 +15,6 @@ import scala.reflect.internal.Flags.PRESUPER
 import scala.reflect.internal.Flags.TRAIT
 
 trait Trees extends reflect.internal.Trees { self: Global =>
-  
   // --- additional cases --------------------------------------------------------
   
   /** Only used during parsing */
@@ -290,5 +289,4 @@ trait Trees extends reflect.internal.Trees { self: Global =>
    case SelectFromArray(_, _, _) =>                                (created and eliminated by erasure)
 
   */
-  
 }

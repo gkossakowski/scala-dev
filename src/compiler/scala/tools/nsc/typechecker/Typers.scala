@@ -3686,7 +3686,9 @@ trait Typers extends Modes with Adaptations {
                 else res
               } else if (fun2.symbol == EmbeddedControls_equal) {
                 val List(lhs, rhs) = args
-                typedApply(Select(lhs, nme.EQ) setPos lhs.pos, List(rhs))
+                // without resetAllAttrs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
+                // probable cause: re-rooting a tree from an argument position to the target position requires changes to the tree's symbols
+                typedApply(Select(resetAllAttrs(lhs), nme.EQ) setPos lhs.pos, List(resetAllAttrs(rhs)))
               } else res
             case ex: TypeError =>
               fun match {

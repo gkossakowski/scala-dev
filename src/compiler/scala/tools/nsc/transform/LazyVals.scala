@@ -37,8 +37,9 @@ abstract class LazyVals extends Transform with TypingTransformers with ast.TreeD
               
           case ClassDef(_, _, _, _) | DefDef(_, _, _, _, _, _) | ModuleDef(_, _, _) =>
               
-          case LabelDef(name, _, _) if nme.isLoopHeaderLabel(name) =>
-              
+          // case LabelDef(name, _, _) if nme.isLoopHeaderLabel(name) =>
+          case Apply(fun, _) if fun.symbol == EmbeddedControls_doWhile || fun.symbol == EmbeddedControls_whileDo =>
+
           case _ =>
             super.traverse(t)
         }
@@ -132,23 +133,31 @@ abstract class LazyVals extends Transform with TypingTransformers with ast.TreeD
           treeCopy.ValDef(tree, mods, name, tpt,
                   if (LocalLazyValFinder.find(rhs)) typed(addBitmapDefs(sym, rhs)) else rhs)
 
-        case l@LabelDef(name0, params0, ifp0@If(_, _, _)) if name0.startsWith(nme.WHILE_PREFIX) =>
-          val ifp1 = super.transform(ifp0)
-          val If(cond0, thenp0, elsep0) = ifp1 
-          if (LocalLazyValFinder.find(thenp0))
-            treeCopy.LabelDef(l, name0, params0,
-                    treeCopy.If(ifp1, cond0, typed(addBitmapDefs(sym.owner, thenp0)), elsep0))
-          else
-            l
+        // case l@LabelDef(name0, params0, ifp0@If(_, _, _)) if name0.startsWith(nme.WHILE_PREFIX) =>
+        //   val ifp1 = super.transform(ifp0)
+        //   val If(cond0, thenp0, elsep0) = ifp1 
+        //   if (LocalLazyValFinder.find(thenp0)) // no need to check else since it's just a jump that skips the loop
+        //     treeCopy.LabelDef(l, name0, params0,
+        //             treeCopy.If(ifp1, cond0, typed(addBitmapDefs(sym.owner, thenp0)), elsep0))
+        //   else
+        //     l
+        // 
+        // case l@LabelDef(name0, params0, block@Block(stats0, _)) if nme.isLoopHeaderLabel(name0) =>
+        //   val stats1 = super.transformTrees(stats0)
+        //   if (LocalLazyValFinder.find(stats1))
+        //     treeCopy.LabelDef(l, name0, params0,
+        //             treeCopy.Block(block, typed(addBitmapDefs(sym.owner, stats1.head))::stats1.tail, block.expr))
+        //   else
+        //     l
 
-        case l@LabelDef(name0, params0, block@Block(stats0, _))
-          if name0.startsWith(nme.WHILE_PREFIX) || name0.startsWith(nme.DO_WHILE_PREFIX) =>
-          val stats1 = super.transformTrees(stats0)
-          if (LocalLazyValFinder.find(stats1))
-            treeCopy.LabelDef(l, name0, params0,
-                    treeCopy.Block(block, typed(addBitmapDefs(sym.owner, stats1.head))::stats1.tail, block.expr))
-          else
-            l
+        case w@Apply(fun, args) if fun.symbol == EmbeddedControls_doWhile || fun.symbol == EmbeddedControls_whileDo =>
+          val args1 = super.transformTrees(args)
+          val List(body, cond) = if (fun.symbol == EmbeddedControls_doWhile) args else args.reverse
+          if (!LocalLazyValFinder.find(body)) w // TODO: check cond as well??
+          else {
+            val body1 = typed(addBitmapDefs(sym.owner, body))
+            treeCopy.Apply(w, fun, if (fun.symbol == EmbeddedControls_doWhile) List(body1, cond) else List(cond, body1))
+          }
 
         case _ => super.transform(tree)
       }

@@ -11,7 +11,7 @@
 
 package scala
 
-/** The <code>StandardEmbeddings</code> object provides method definitions
+/** The <code>EmbeddedControls</code> object provides method definitions
  *  where calls to the methods are treated by the compiler in a special way.
  *  The reason to express these calls as methods is to give embedded DSLs a chance
  *  to provide their own definitions and thereby override the standard

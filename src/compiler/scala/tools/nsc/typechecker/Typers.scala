@@ -3638,6 +3638,7 @@ trait Typers extends Modes with Adaptations {
                   case tv: TypeVar => tv.origin.typeSymbol.owner != fun1.symbol
                   case _ => false
                 }
+              // if we resolve to the methods in EmbeddedControls, undo rewrite
               val res = 
                 if (fun1.symbol == EmbeddedControls_ifThenElse) {
                   removeFunUndets()
@@ -3659,11 +3660,20 @@ trait Typers extends Modes with Adaptations {
                 } else if (fun1.symbol == EmbeddedControls_assign) {
                   val List(lhs, rhs) = args
                   typedAssign(lhs, rhs)
+                } else if (fun1.symbol == EmbeddedControls_equal) {
+                  val lhs = args.head
+                  // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
+                  // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
+                  val rhs = args.tail
+                  // without resetAllAttrs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
+                  // probable cause: re-rooting a tree from an argument position to the target position requires changes to the tree's symbols
+                  val res = typed(Apply(Select(resetAllAttrs(lhs), nme.EQ) setPos lhs.pos, rhs map (resetAllAttrs(_))))
+                  res
                 } else if (phase.id <= currentRun.typerPhase.id &&
-                    fun2.isInstanceOf[Select] && 
+                    fun2.isInstanceOf[Select] &&
                     !isImplicitMethod(fun2.tpe) &&
                     ((fun2.symbol eq null) || !fun2.symbol.isConstructor) &&
-                    (mode & (EXPRmode | SNDTRYmode)) == EXPRmode) 
+                    (mode & (EXPRmode | SNDTRYmode)) == EXPRmode)
                 {
                   tryTypedApply(fun2, args)
                 } else {
@@ -3684,11 +3694,6 @@ trait Typers extends Modes with Adaptations {
                 // (calling typed1 more than once for the same tree)
                 if (checked ne res) typed { atPos(tree.pos)(checked) }
                 else res
-              } else if (fun2.symbol == EmbeddedControls_equal) {
-                val List(lhs, rhs) = args
-                // without resetAllAttrs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
-                // probable cause: re-rooting a tree from an argument position to the target position requires changes to the tree's symbols
-                typedApply(Select(resetAllAttrs(lhs), nme.EQ) setPos lhs.pos, List(resetAllAttrs(rhs)))
               } else res
             case ex: TypeError =>
               fun match {

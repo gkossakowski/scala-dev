@@ -263,8 +263,10 @@ abstract class TreeBuilder {
   /** Create a tree making an application node; treating == specially
    */
   def makeApply(sel: Tree, exprs: List[Tree]) = sel match {
-    case Select(qual, nme.EQ) =>
-      Apply(Ident(nme._equal), qual :: List(makeTupleTerm(exprs, true))) // tuple multiple arguments on the right of ==
+    case Select(qual, nme.EQ) => // reroute == to __equal
+      // don't tuple exprs, as we can't (easily) undo it when it turns out 
+      // there was a regular == method that takes this number of args (see t3736 in pos/ and neg/)
+      Apply(Ident(nme._equal), qual :: exprs) 
     case _ =>
       Apply(sel, exprs)
   }

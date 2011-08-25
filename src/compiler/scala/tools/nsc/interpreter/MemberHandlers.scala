@@ -54,7 +54,7 @@ trait MemberHandlers {
   def chooseHandler(member: Tree): MemberHandler = member match {
     case member: DefDef        => new DefHandler(member)
     case member: ValDef        => new ValHandler(member)
-    case member@LiftedAssign(lhs@Ident(_), rhs)     => new AssignHandler(member, lhs, rhs)
+    case member@LiftedAssign(lhs, rhs)     => new AssignHandler(member, lhs, rhs)
     case member: ModuleDef     => new ModuleHandler(member)
     case member: ClassDef      => new ClassHandler(member)
     case member: TypeDef       => new TypeAliasHandler(member)
@@ -125,7 +125,7 @@ trait MemberHandlers {
       if (mods.isPublic) codegenln(name, ": ", req.typeOf(name)) else ""
   }
 
-  class AssignHandler(member: Tree, lhs: Ident, rhs: Tree) extends MemberHandler(member) {
+  class AssignHandler(member: Tree, lhs: Tree, rhs: Tree) extends MemberHandler(member) {
     val name = newTermName(freshInternalVarName())
 
     override def definesTerm = Some(name)

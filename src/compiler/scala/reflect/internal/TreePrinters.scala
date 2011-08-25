@@ -327,7 +327,7 @@ trait TreePrinters { self: SymbolTable =>
         case TypeApply(fun, targs) =>
           print(fun); printRow(targs, "[", ", ", "]")
 
-        case Apply(fun, vargs) =>
+        case Apply(fun, vargs) => // TODO: do same rewriting as in typedApply1?
           print(fun); printRow(vargs, "(", ", ", ")")
 
         case ApplyDynamic(qual, vargs) =>

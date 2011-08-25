@@ -3565,7 +3565,7 @@ trait Typers extends Modes with Adaptations {
                 // PROBLEM: result type can be Proxy[Nothing]
                 // use result.tpe as expected type 
                 assert(res.tpe <:< pt)
-                typed(Apply(Ident("__forward").setPos(fun.pos), qual1::Literal(name.toString)::args).setPos(tree.pos),
+                typed(Apply(Ident("__forward").setPos(fun.pos), qual1::Literal(Constant(name.toString))::args).setPos(tree.pos),
                   mode, res.tpe).setType(res.tpe)
               case res: Tree if ealts.contains(res.symbol) =>
                 // picked external one

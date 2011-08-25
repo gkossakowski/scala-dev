@@ -1116,7 +1116,7 @@ trait Implicits {
 
     def sourceInfoTree(chain: List[(String, Int)]): Tree = chain match {
       case (name, line) :: rest =>
-        val pairTree = gen.mkTuple(List(Literal(name), Literal(line)))
+        val pairTree = gen.mkTuple(List(Literal(Constant(name)), Literal(Constant(line))))
         Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), List(pairTree))
       case List() =>
         gen.mkNil
@@ -1151,7 +1151,7 @@ trait Implicits {
         val position = tree.pos.focus
         val fileName = if (position.isDefined) position.source.file.absolute.path
                        else "<unknown file>"
-        sourceInfoFactoryCall("apply", Literal(fileName), Literal(methodName.toString), sourceInfoTree(contextInfoChain))
+        sourceInfoFactoryCall("apply", Literal(Constant(fileName)), Literal(Constant(methodName.toString)), sourceInfoTree(contextInfoChain))
       }
 
       srcInfo()
@@ -1175,7 +1175,7 @@ trait Implicits {
         val position = tree.pos.focus
         val fileName = if (position.isDefined) position.source.file.absolute.path
                        else "<unknown file>"
-        sourceLocationFactoryCall("apply", Literal(position.line), Literal(position.point), Literal(fileName))
+        sourceLocationFactoryCall("apply", Literal(Constant(position.line)), Literal(Constant(position.point)), Literal(Constant(fileName)))
       }
 
       srcLocation()
@@ -1254,7 +1254,7 @@ trait Implicits {
                 !entry.isConstructor && entry.allOverriddenSymbols.isEmpty && !entry.isPrivate
               })
               val names: List[String] = entries map { _.name.toString }
-              val namesTrees: List[Tree] = names map { name => Literal(name) }
+              val namesTrees: List[Tree] = names map { name => Literal(Constant(name)) }
               val namesTree: Tree = Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), namesTrees)
               val maniTrees: List[Tree] = entries map { sym => findManifest(sym.tpe) }
               val maniTree: Tree = Apply(Select(gen.mkAttributedRef(ListModule), nme.apply), maniTrees)
@@ -1352,7 +1352,7 @@ trait Implicits {
           }
           new SearchResult(typedPos(position) {
             // use sourceInfoFactoryCall to construct SourceContext
-            Apply(Select(result.tree, "update"), List(sourceInfoFactoryCall("apply", Literal(fileName), Literal(methodName.toString), sourceInfoTree(contextInfoChain))))
+            Apply(Select(result.tree, "update"), List(sourceInfoFactoryCall("apply", Literal(Constant(fileName)), Literal(Constant(methodName.toString)), sourceInfoTree(contextInfoChain))))
           }, result.subst)
         case TypeRef(_, SourceLocationClass, _) =>
           val position = tree.pos.focus

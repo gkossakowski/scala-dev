@@ -596,7 +596,7 @@ trait Implicits {
               case t                              => t
             }
 
-            // #3340
+            // #3340 -- TODO: rethink this
             object MethodTypeWithImplicits {
               def unapply(tp: Type): Option[(List[Symbol])] = tp match {
                 case mt@MethodType(params, res) => if(mt.isImplicit) Some(params) else unapply(res)

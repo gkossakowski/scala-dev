@@ -3667,7 +3667,7 @@ trait Typers extends Modes with Adaptations {
                   val rhs = args.tail
                   // without resetAllAttrs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
                   // probable cause: re-rooting a tree from an argument position to the target position requires changes to the tree's symbols
-                  val res = typed(Apply(Select(resetAllAttrs(lhs), nme.EQ) setPos lhs.pos, rhs map (resetAllAttrs(_))))
+                  val res = typed(Apply(Select(resetAllAttrs(lhs) setPos lhs.pos, nme.EQ) setPos fun.pos, rhs map (resetAllAttrs(_))))
                   res
                 } else if (phase.id <= currentRun.typerPhase.id &&
                     fun2.isInstanceOf[Select] &&

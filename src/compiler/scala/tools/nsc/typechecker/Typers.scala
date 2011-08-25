@@ -3608,7 +3608,10 @@ trait Typers extends Modes with Adaptations {
       
       def typedApply(fun: Tree, args: List[Tree]): Tree = fun match {
         case fun@Select(qual, name) if ((mode & EXPRmode) != 0) && 
-              !treeInfo.isSelfOrSuperConstrCall(fun) && fun.symbol == NoSymbol && phase.id <= currentRun.typerPhase.id =>//!phase.erasedTypes =>
+              !treeInfo.isSelfOrSuperConstrCall(fun) &&  // [this|super].<init>(...) -- don't intercept
+              !qual.isInstanceOf[New] &&  // TODO: applyExternal does not intercept constructor calls, right?
+              fun.symbol == NoSymbol && // unresolved, so far
+              phase.id <= currentRun.typerPhase.id => //!phase.erasedTypes =>
           typedApplyExternal(fun, args, true)
         case _ =>
           typedApply1(fun, args)

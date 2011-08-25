@@ -500,7 +500,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     // AST node position and snap the line off there.  Rewrite the code embodied
     // by the last tree as a ValDef instead, so we can access the value.
     trees.last match {
-      case LiftedAssign(_,_)                => // we don't want to include assignments
+      // disabled exclusion of LiftedAssign because run/repl-bare-expr fails (suppresses output of an assign that has been rewritten to an update)
+      // .... and I can't figure out what changed due to virtualisation
+      // case LiftedAssign(_, _)                        => // we don't want to include assignments
       case _:TermTree | _:Ident | _:Select => // ... but do want other unnamed terms.
         val varName  = if (synthetic) freshInternalVarName() else freshUserVarName()
         val rewrittenLine = (

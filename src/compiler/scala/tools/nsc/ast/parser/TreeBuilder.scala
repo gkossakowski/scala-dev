@@ -266,7 +266,7 @@ abstract class TreeBuilder {
     case Select(qual, nme.EQ) => // reroute == to __equal
       // don't tuple exprs, as we can't (easily) undo it when it turns out 
       // there was a regular == method that takes this number of args (see t3736 in pos/ and neg/)
-      Apply(Ident(nme._equal) setPos sel.pos, qual :: exprs)
+      Apply(Ident(nme._equal), qual :: exprs)
     case _ =>
       Apply(sel, exprs)
   }

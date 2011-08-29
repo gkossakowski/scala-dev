@@ -45,6 +45,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
   import global._
   import definitions._
 
+  // TODO handle nested matches:  a match { case p => b match { case p => ... } }
+  // note that the matching strategy may change -- need to defer to type checker to set up context
   def typedMatch(typer: Typer, tree: Tree, selector: Tree, cases: List[CaseDef], mode: Int, pt: Type): Tree = {
     import typer._
     def solveImplicit(contextBoundTp: Type, tree: Tree): (Tree, Type) = {
@@ -160,9 +162,12 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       *      `Xpat_1(x_scrut).flatMap((x_1) => {y_i -> x_1._i}Xpat_2)`
       *
       *    `x_1` references the result (inside the monad) of the extractor corresponding to `pat_1`,
-      *    this result is a tuple consisting of the values for the constructor arguments that Xpat_1
-      *    has extracted from the object pointed to by `x_scrut`. The `y_i` are the symbols bound by `pat_1` (in order)
-      *    in the scope of the remainder of the pattern, and they must thus be replaced by tuple selection calls on `x_1` (corresponding by position).
+      *    this result holds the values for the constructor arguments, which Xpat_1 has extracted
+      *    from the object pointed to by `x_scrut`. The `y_i` are the symbols bound by `pat_1` (in order)
+      *    in the scope of the remainder of the pattern, and they must thus be replaced by:
+      *      - (for 1-ary unapply) x_1
+      *      - (for n-ary unapply, n > 1) selection of the i'th tuple component of `x_1`
+      *      - (for unapplySeq) x_1.apply(i)
       *
       *    in the proto-treemakers,
       *
@@ -183,43 +188,79 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       }
     }
 
+    def extractorResultInMonad(extractorTp: Type): Type = {
+      val res = extractorTp.finalResultType
+      if(res.typeSymbol == BooleanClass) UnitClass.tpe
+      else {
+        val monadArgs = res.baseType(matchingMonadType.typeSymbol).typeArgs
+        if(monadArgs.length == 1) monadArgs(0)
+        else {println("unhandled extractor: "+ extractorTp); NoType}
+      }
+    }
+
+    def monadTypeToSubPatTypes(typeInMonad: Type, isSeq: Boolean, nbArgs: Int): List[Type] = {
+      val ts = 
+        if(typeInMonad.typeSymbol eq UnitClass) Nil
+        else getProductArgs(typeInMonad) getOrElse List(typeInMonad)
+
+      // replace last type (of shape Seq[A]) with RepeatedParam[A] so that formalTypes will
+      // repeat the last argument type to align the formals with the number of arguments
+      if(isSeq) { 
+        val TypeRef(pre, SeqClass, args) = (ts.last baseType SeqClass) 
+        formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbArgs)
+      } else ts
+    }
+
+    // assert(patBinders.nonEmpty)
+    def subPatRefs(binder: Symbol, patBinders: List[Symbol], isSeq: Boolean, untupledSolo: Boolean): List[Tree] =
+      if(isSeq) ((0 to patBinders.length-1) map mkIndex(binder)).toList
+      else if(untupledSolo) List(CODE.REF(binder))
+      else ((1 to patBinders.length) map mkTupleSel(binder)).toList
+      // else List() -- never called when patBinders are empty
+
+    def caseClassApplyToUnapplyTp(tp: Type) = {
+      val dummyMethod = new TermSymbol(NoSymbol, NoPosition, "$dummy")
+      MethodType(List(dummyMethod newSyntheticValueParam(tp.finalResultType)), if(tp.paramTypes nonEmpty) optionType(tupleType(tp.paramTypes)) else BooleanClass.tpe)
+    }
     def Xpat(scrutSym: Symbol)(pattern: Tree): List[ProtoTreeMaker] = {
-      // TODO: get rid of realUnapply flag... the whole point was that we should be able to handle Apply and UnApply patterns similarly
-      def doUnapply(args: List[Tree], extractorType: Type, extractorCall: Tree, prevBinder: Symbol, pos: Position, realUnapply: Boolean = true, isSeq: Boolean = false)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
-        lazy val extractorResType0
-          = /* assert(realUnapply) */ extractorType.finalResultType.baseType(matchingMonadType.typeSymbol).typeArgs(0)
+      def doUnapply(args: List[Tree], extractorCall: Tree, prevBinder: Symbol, pos: Position)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
+        assert((extractorCall.tpe ne null) && (extractorCall.tpe ne NoType) && (extractorCall.tpe ne ErrorType), "args: "+ args +" extractorCall: "+ extractorCall) 
+        val extractorType = extractorCall.tpe
+        val isSeq = extractorCall.symbol.name == nme.unapplySeq
+
+        // what's the extractor's result type in the monad?
+        val typeInMonad = extractorResultInMonad(extractorType)
 
         // the types for the binders corresponding to my subpatterns
-        val binderTypes =
-          if (realUnapply) {
-            if(isSeq) {
-              val seqElementType = extractorResType0.baseType(SeqClass).typeArgs(0)
-              args map (x => seqElementType)
-            }
-            else unapplyTypeListFromReturnType(extractorType)
-          } else { // extractorType is actually the constructor's type
-            extractorType.paramTypes // not `args map (_.tpe)`, that's too strict
-          }
-//        assert(sameLength(args, binderTypes))
+        val subPatTypes = monadTypeToSubPatTypes(typeInMonad, isSeq, args.length)
 
         // `patBinders` are the variables bound by this pattern in the following patterns --> must become tuple selections on extractor's result
-        // binderTypes != args map (_.tpe) since the args may have more specific types than the constructor's parameter types
+        // subPatTypes != args map (_.tpe) since the args may have more specific types than the constructor's parameter types
         val sub@(patBinders, _) =
-            (args, binderTypes).zipped map {
+            (args, subPatTypes).zipped map {
               case (BoundSym(b, p), _) => (b, p)
               case (p, tp) => (freshSym(currentOwner, pos, "p") setInfo tp, p)
             } unzip
 
-        // what's the extractor's resulttype, minus the monad?
-        val extractorResType =
-          if (realUnapply) extractorResType0
-          else tupleType(patBinders map (_.info.widen)) // TODO: simply use widened binderTypes?
+        val untupledSolo = (patBinders.length == 1) && getProductArgs(typeInMonad).isEmpty // typeInMonad is not a tuple
 
-        val extractorParamType =
-          if (realUnapply) extractorType.paramTypes.head
-          else extractorType.finalResultType
+        // TODO: sanity check
+        // def binderTypeFromSubPatTypes(tps: List[Type]): Type = {
+        //   tps.length match {
+        //     case 0 => UnitClass.tpe
+        //     case 1 => tps.head
+        //     case _ => tupleType(tps)
+        //   }
+        // }
 
-        // println("doUnapply (binderTypes, extractorResType, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType) = "+(binderTypes, extractorResType, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType))
+        // val typeInMonadFromBinders =
+        //   binderTypeFromSubPatTypes(patBinders map (_.info.widen)) // TODO: simply use widened subPatTypes?
+
+        // assert(typeInMonad <:< typeInMonadFromBinders, typeInMonad +"</:<"+ typeInMonadFromBinders +" for "+ extractorCall + " with args "+ args)
+
+        val extractorParamType = extractorType.paramTypes.head
+
+        // println("doUnapply (subPatTypes, typeInMonad, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType) =\n"+(subPatTypes, typeInMonad, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType))
 
         // example check: List[Int] <:< ::[Int]
         val prevBinderOrCasted =
@@ -237,8 +278,23 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           } else prevBinder
 
 
+        /* TODO: check length of sequence for an unapplySeq
+          if(isSeq) {
+            if(isSequenceWildCard(args.last)) {
+              if (args.length > 1) // avoid redundent check: length is always > 0
+                res += Xguard(`binder`.length >= args.length - 1)
+            } else
+              res += Xguard(`binder`.length == args.length)
+          }*/
+
+
         // the extractor call (applied to the binder bound by the flatMap corresponding to the previous (i.e., enclosing/outer) pattern)
-        val patTree = atPos(pos)(mkApply(extractorCall, prevBinderOrCasted))
+        val extractorApply = atPos(pos)(mkApply(extractorCall, prevBinderOrCasted))
+        val patTree =
+          if(extractorType.finalResultType.typeSymbol == BooleanClass) mkGuard(extractorApply)
+          else extractorApply
+
+        // println("patTree= "+ patTree)
 
         res += Pair(List(patTree),
           if(patBinders isEmpty)
@@ -248,10 +304,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             }
           else
             { outerSubst: TreeXForm =>
-                val binder = freshSym(currentOwner, patTree.pos) setInfo extractorResType
-                val sels = if(isSeq) (0 to patBinders.length-1) map mkIndex(binder)
-                           else      (1 to patBinders.length)   map mkTupleSel(binder)
-                val theSubst = mkTypedSubst(patBinders, sels.toList)
+                val binder = freshSym(currentOwner, patTree.pos) setInfo typeInMonad
+                val theSubst = mkTypedSubst(patBinders, subPatRefs(binder, patBinders, isSeq, untupledSolo))
                 def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
                 (nestedTree => mkFun(binder, nextSubst(nestedTree)), nextSubst)
             })
@@ -282,17 +336,15 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // TODO: check unargs == args
           // println("unfun: "+ (unfun.tpe, unfun.symbol.ownerChain, unfun.symbol.info, prevBinder.info))
 
-          doUnapply(args, unfun.tpe, unfun, prevBinder, patTree.pos,
-              realUnapply = true,
-              isSeq = (unfun.symbol.name == nme.unapplySeq))
+          doUnapply(args, unfun, prevBinder, patTree.pos)
 
         case Apply(fun, args)     =>
           val origSym = fun.asInstanceOf[TypeTree].original.symbol // undo rewrite performed in (5) of adapt
           val extractor = unapplyMember(origSym.filter(sym => reallyExists(unapplyMember(sym.tpe))).tpe)
+          val extractorCall = CODE.REF(extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+          // println("apply extractor: "+ (extractor, extractorCall.tpe, fun.tpe, fun.asInstanceOf[TypeTree].original.tpe, origSym))
 
-          doUnapply(args, fun.tpe, CODE.REF(extractor) /*TODO*/, prevBinder, patTree.pos,
-              realUnapply = false,
-              isSeq = (extractor.name == nme.unapplySeq))
+          doUnapply(args, extractorCall, prevBinder, patTree.pos)
 
 
         case BoundSym(patBinder, p)          =>

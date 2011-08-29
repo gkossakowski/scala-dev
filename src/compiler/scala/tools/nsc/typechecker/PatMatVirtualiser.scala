@@ -188,40 +188,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       }
     }
 
-    def extractorResultInMonad(extractorTp: Type): Type = {
-      val res = extractorTp.finalResultType
-      if(res.typeSymbol == BooleanClass) UnitClass.tpe
-      else {
-        val monadArgs = res.baseType(matchingMonadType.typeSymbol).typeArgs
-        if(monadArgs.length == 1) monadArgs(0)
-        else {println("unhandled extractor: "+ extractorTp); NoType}
-      }
-    }
-
-    def monadTypeToSubPatTypes(typeInMonad: Type, isSeq: Boolean, nbArgs: Int): List[Type] = {
-      val ts = 
-        if(typeInMonad.typeSymbol eq UnitClass) Nil
-        else getProductArgs(typeInMonad) getOrElse List(typeInMonad)
-
-      // replace last type (of shape Seq[A]) with RepeatedParam[A] so that formalTypes will
-      // repeat the last argument type to align the formals with the number of arguments
-      if(isSeq) { 
-        val TypeRef(pre, SeqClass, args) = (ts.last baseType SeqClass) 
-        formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbArgs)
-      } else ts
-    }
-
-    // assert(patBinders.nonEmpty)
-    def subPatRefs(binder: Symbol, patBinders: List[Symbol], isSeq: Boolean, untupledSolo: Boolean): List[Tree] =
-      if(isSeq) ((0 to patBinders.length-1) map mkIndex(binder)).toList
-      else if(untupledSolo) List(CODE.REF(binder))
-      else ((1 to patBinders.length) map mkTupleSel(binder)).toList
-      // else List() -- never called when patBinders are empty
-
-    def caseClassApplyToUnapplyTp(tp: Type) = {
-      val dummyMethod = new TermSymbol(NoSymbol, NoPosition, "$dummy")
-      MethodType(List(dummyMethod newSyntheticValueParam(tp.finalResultType)), if(tp.paramTypes nonEmpty) optionType(tupleType(tp.paramTypes)) else BooleanClass.tpe)
-    }
     def Xpat(scrutSym: Symbol)(pattern: Tree): List[ProtoTreeMaker] = {
       def doUnapply(args: List[Tree], extractorCall: Tree, prevBinder: Symbol, pos: Position)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
         assert((extractorCall.tpe ne null) && (extractorCall.tpe ne NoType) && (extractorCall.tpe ne ErrorType), "args: "+ args +" extractorCall: "+ extractorCall) 
@@ -232,35 +198,22 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         val typeInMonad = extractorResultInMonad(extractorType)
 
         // the types for the binders corresponding to my subpatterns
+        // subPatTypes != args map (_.tpe) since the args may have more specific types than the constructor's parameter types
         val subPatTypes = monadTypeToSubPatTypes(typeInMonad, isSeq, args.length)
 
-        // `patBinders` are the variables bound by this pattern in the following patterns --> must become tuple selections on extractor's result
-        // subPatTypes != args map (_.tpe) since the args may have more specific types than the constructor's parameter types
+        // `patBinders` are the variables bound by this pattern in the following patterns
+        // patBinders are replaced by references to the relevant part of the extractor's result (tuple component, seq element, the result as-is)
         val sub@(patBinders, _) =
             (args, subPatTypes).zipped map {
               case (BoundSym(b, p), tp) =>
                 // must use type `tp`, which is provided by extractor's result, not the type expected by binder,
-                // as b.info may be based on a Typed type ascription, which is not relevant yet
-                // (it will later result in a type test later)
+                // as b.info may be based on a Typed type ascription, which has not been taken into account yet by the translation
+                // (it will later result in a type test when `tp` is not a subtype of `b.info`)
                 (b setInfo tp, p) 
               case (p, tp) => (freshSym(currentOwner, pos, "p") setInfo tp, p)
             } unzip
 
         val untupledSolo = (patBinders.length == 1) && getProductArgs(typeInMonad).isEmpty // typeInMonad is not a tuple
-
-        // TODO: sanity check
-        // def binderTypeFromSubPatTypes(tps: List[Type]): Type = {
-        //   tps.length match {
-        //     case 0 => UnitClass.tpe
-        //     case 1 => tps.head
-        //     case _ => tupleType(tps)
-        //   }
-        // }
-
-        // val typeInMonadFromBinders =
-        //   binderTypeFromSubPatTypes(patBinders map (_.info.widen)) // TODO: simply use widened subPatTypes?
-
-        // assert(typeInMonad <:< typeInMonadFromBinders, typeInMonad +"</:<"+ typeInMonadFromBinders +" for "+ extractorCall + " with args "+ args)
 
         val extractorParamType = extractorType.paramTypes.head
 
@@ -431,6 +384,41 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
 // tree exegesis, rephrasing everything in terms of extractors
+
+    def extractorResultInMonad(extractorTp: Type): Type = {
+      val res = extractorTp.finalResultType
+      if(res.typeSymbol == BooleanClass) UnitClass.tpe
+      else {
+        val monadArgs = res.baseType(matchingMonadType.typeSymbol).typeArgs
+        if(monadArgs.length == 1) monadArgs(0)
+        else {println("unhandled extractor: "+ extractorTp); NoType}
+      }
+    }
+
+    def monadTypeToSubPatTypes(typeInMonad: Type, isSeq: Boolean, nbArgs: Int): List[Type] = {
+      val ts = 
+        if(typeInMonad.typeSymbol eq UnitClass) Nil
+        else getProductArgs(typeInMonad) getOrElse List(typeInMonad)
+
+      // replace last type (of shape Seq[A]) with RepeatedParam[A] so that formalTypes will
+      // repeat the last argument type to align the formals with the number of arguments
+      if(isSeq) { 
+        val TypeRef(pre, SeqClass, args) = (ts.last baseType SeqClass) 
+        formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbArgs)
+      } else ts
+    }
+
+    // require(patBinders.nonEmpty)
+    def subPatRefs(binder: Symbol, patBinders: List[Symbol], isSeq: Boolean, untupledSolo: Boolean): List[Tree] =
+      if(isSeq) ((0 to patBinders.length-1) map mkIndex(binder)).toList
+      else if(untupledSolo) List(CODE.REF(binder))
+      else ((1 to patBinders.length) map mkTupleSel(binder)).toList
+      // else List() -- never called when patBinders are empty
+
+    def caseClassApplyToUnapplyTp(tp: Type) = {
+      val dummyMethod = new TermSymbol(NoSymbol, NoPosition, "$dummy")
+      MethodType(List(dummyMethod newSyntheticValueParam(tp.finalResultType)), if(tp.paramTypes nonEmpty) optionType(tupleType(tp.paramTypes)) else BooleanClass.tpe)
+    }
 
     /** A conservative approximation of which patterns do not discern anything.
       * A corrolary of this is that they do not entail any variable binding.

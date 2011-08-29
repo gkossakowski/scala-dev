@@ -238,7 +238,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // subPatTypes != args map (_.tpe) since the args may have more specific types than the constructor's parameter types
         val sub@(patBinders, _) =
             (args, subPatTypes).zipped map {
-              case (BoundSym(b, p), _) => (b, p)
+              case (BoundSym(b, p), tp) =>
+                // must use type `tp`, which is provided by extractor's result, not the type expected by binder,
+                // as b.info may be based on a Typed type ascription, which is not relevant yet
+                // (it will later result in a type test later)
+                (b setInfo tp, p) 
               case (p, tp) => (freshSym(currentOwner, pos, "p") setInfo tp, p)
             } unzip
 
@@ -313,13 +317,14 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         sub
       }
 
-      def singleBinderProtoTreeMaker(binderToSubst: Symbol, patTrees: Tree*): ProtoTreeMaker = {
+      def singleBinderProtoTreeMaker(binderToSubst: Symbol, patTrees: Tree*): ProtoTreeMaker = singleBinderProtoTreeMakerWithTp(binderToSubst, binderToSubst.info.widen, false, patTrees : _*)
+      def singleBinderProtoTreeMakerWithTp(binderToSubst: Symbol, binderType: Type, unsafe: Boolean, patTrees: Tree*): ProtoTreeMaker = {
         assert(patTrees.head.pos != NoPosition, "proto-tree for "+(binderToSubst, patTrees.toList))
 
         (patTrees.toList,
             { outerSubst: TreeXForm =>
-                val binder = freshSym(currentOwner, patTrees.head.pos) setInfo binderToSubst.info.widen
-                val theSubst = mkTypedSubst(List(binderToSubst), List(CODE.REF(binder)))
+                val binder = freshSym(currentOwner, patTrees.head.pos) setInfo binderType
+                val theSubst = mkTypedSubst(List(binderToSubst), List(CODE.REF(binder)), unsafe)
                 // println("theSubst: "+ theSubst)
                 def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
                 (nestedTree => mkFun(binder, nextSubst(nestedTree)), nextSubst)
@@ -361,8 +366,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           (List(patBinder), List(p))
 
         case Typed(expr, tpt)                 =>
-          // println("Typed: expr is wildcard, right? "+ expr)
-          res += singleBinderProtoTreeMaker(prevBinder, atPos(patTree.pos)(mkCast(tpt.tpe, prevBinder)))
+          // println("Typed: expr is wildcard, right? "+ (expr, tpt.tpe, prevBinder, prevBinder.info))
+          res += singleBinderProtoTreeMakerWithTp(prevBinder, tpt.tpe, unsafe = true, atPos(patTree.pos)(mkCast(tpt.tpe, prevBinder)))
 
           (Nil, Nil) // a typed pattern never has any subtrees
 

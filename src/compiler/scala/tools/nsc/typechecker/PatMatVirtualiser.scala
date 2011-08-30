@@ -347,7 +347,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           val orig = fun.asInstanceOf[TypeTree].original
           val origSym = orig.symbol // undo rewrite performed in (5) of adapt
           val extractor = unapplyMember(origSym.filter(sym => reallyExists(unapplyMember(sym.tpe))).tpe)
-          val extractorCall = typed(mkSelect(orig, extractor), FUNmode, WildcardType) // mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+          val extractorCall = typed(mkSelect(orig, extractor), POLYmode | FUNmode, WildcardType) // can't infer types yet -- must use POLYmode (check run/virtpatmat_alts.scala) 
+          // mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+
           // println("orig: "+ (orig, extractor, mkSelect(orig, extractor), typed(mkSelect(orig, extractor), FUNmode, WildcardType).tpe, caseClassApplyToUnapplyTp(fun.tpe)))
           // println("apply extractor: "+ (extractor, extractorCall.tpe, fun.tpe, fun.asInstanceOf[TypeTree].original.tpe, origSym))
 

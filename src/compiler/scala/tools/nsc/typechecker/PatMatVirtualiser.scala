@@ -309,7 +309,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           else
             { outerSubst: TreeXForm =>
                 val binder = freshSym(patTree.pos) setInfo typeInMonad
-                val theSubst = mkTypedSubst(patBinders, subPatRefs(binder, patBinders, isSeq, untupledSolo))
+                val theSubst = mkTypedSubst(patBinders, subPatRefs(binder, patBinders, isSeq, isSeq && treeInfo.isStar(args.last)))
                 def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
                 (nestedTree => mkFun(binder, nextSubst(nestedTree)), nextSubst)
             })
@@ -468,22 +468,25 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
     def monadTypeToSubPatTypes(typeInMonad: Type, isSeq: Boolean, nbArgs: Int): List[Type] = {
-      val ts = 
+      val ts =
         if(typeInMonad.typeSymbol eq UnitClass) Nil
         else getProductArgs(typeInMonad) getOrElse List(typeInMonad)
 
       // replace last type (of shape Seq[A]) with RepeatedParam[A] so that formalTypes will
       // repeat the last argument type to align the formals with the number of arguments
-      if(isSeq) { 
-        val TypeRef(pre, SeqClass, args) = (ts.last baseType SeqClass) 
+      if(isSeq) {
+        val TypeRef(pre, SeqClass, args) = (ts.last baseType SeqClass)
         formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbArgs)
       } else ts
     }
 
     // require(patBinders.nonEmpty)
-    def subPatRefs(binder: Symbol, patBinders: List[Symbol], isSeq: Boolean, untupledSolo: Boolean): List[Tree] =
-      if(isSeq) ((0 to patBinders.length-1) map mkIndex(binder)).toList
-      else if(untupledSolo) List(CODE.REF(binder))
+    def subPatRefs(binder: Symbol, patBinders: List[Symbol], isSeq: Boolean, lastIsStar: Boolean): List[Tree] =
+      if(lastIsStar) // isSeq is implied
+        ((0 to patBinders.length-2) map mkIndex(binder)).toList ++ List(mkDrop(binder, patBinders.length-1))
+      else if(isSeq)
+        ((0 to patBinders.length-1) map mkIndex(binder)).toList
+      else if(patBinders.length == 1) List(CODE.REF(binder))
       else ((1 to patBinders.length) map mkTupleSel(binder)).toList
       // else List() -- never called when patBinders are empty
 
@@ -509,6 +512,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def isWildcardPattern(pat: Tree): Boolean = pat match {
       case Bind(nme.WILDCARD, body) => isWildcardPattern(body) // don't skip when binding an interesting symbol!
       case Ident(nme.WILDCARD)  => true
+      case Star(x)              => isWildcardPattern(x)
       case x: Ident             => treeInfo.isVarPattern(x)
       case Alternative(ps)      => ps forall isWildcardPattern
       case EmptyTree            => true
@@ -574,6 +578,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def mkSelect(tgt: Tree, mem: Symbol): Tree = tgt DOT mem
     def mkFun(arg: Symbol, body: Tree): Tree = Function(List(ValDef(arg)), body)
     def mkIndex(binder: Symbol)(i: Int): Tree = REF(binder) APPLY (LIT(i))
+    def mkDrop(binder: Symbol, n: Int): Tree = (REF(binder) DOT "drop".toTermName) (LIT(n))
     def mkTupleSel(binder: Symbol)(i: Int): Tree = (REF(binder) DOT ("_"+i).toTermName) // make tree that accesses the i'th component of the tuple referenced by binder
     def mkEquals(binder: Symbol, other: Tree): Tree = REF(binder) MEMBER_== other
   }

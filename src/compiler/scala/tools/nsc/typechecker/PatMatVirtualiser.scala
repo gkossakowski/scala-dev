@@ -340,7 +340,25 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
         case Typed(expr, tpt)                 =>
           // println("Typed: expr is wildcard, right? "+ (expr, tpt.tpe, prevBinder, prevBinder.info))
-          res += singleBinderProtoTreeMakerWithTp(prevBinder, tpt.tpe, unsafe = true, atPos(patTree.pos)(mkCast(tpt.tpe, prevBinder)))
+          val tpe = tpt.tpe
+          val prevTp = prevBinder.info
+          def isMatchUnlessNull = prevTp <:< tpe && (tpe <:< AnyRefClass.tpe)
+          def isRef             = prevTp <:< AnyRefClass.tpe
+
+          val extractor = { import CODE._
+            def genEquals(sym: Symbol): Tree = (REF(sym) MEMBER_== REF(prevBinder)) AND gen.mkIsInstanceOf(REF(prevBinder), tpe.widen, true, false)
+            atPos(patTree.pos)( 
+              mkTypeTest(tpe, prevBinder, tpe match {
+                case ConstantType(Constant(null)) if isRef  => REF(prevBinder) OBJ_EQ NULL
+                case ConstantType(const)                    => REF(prevBinder) MEMBER_== Literal(const)
+                case SingleType(NoPrefix, sym)              => genEquals(sym)
+                case SingleType(pre, sym) if sym.isStable   => genEquals(sym) // TODO: why is pre ignored?
+                case ThisType(sym) if sym.isModule          => genEquals(sym)
+                case _ if isMatchUnlessNull                 => REF(prevBinder) OBJ_NE NULL
+                case _                                      => gen.mkIsInstanceOf(REF(prevBinder), tpe, true, false)
+              }))}
+
+          res += singleBinderProtoTreeMakerWithTp(prevBinder, tpt.tpe, unsafe = true, extractor)
 
           (Nil, Nil) // a typed pattern never has any subtrees
 
@@ -508,8 +526,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def mkOr(as: List[Tree], f: Tree): Tree = (matchStrategy DOT "or".toTermName)((f :: as): _*)    // matchStrategy.or(f, as)
     def mkGuard(t: Tree, then: Tree = UNIT): Tree = (matchStrategy DOT "guard".toTermName)(t, then) // matchStrategy.guard(t, then)
     def mkRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchStrategy.runOrElse(scrut)(matcher)
-    def mkCast(expectedTp: Type, binder: Symbol): Tree =
-      mkGuard(gen.mkIsInstanceOf(REF(binder), expectedTp, true, false), gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
+    def mkCast(expectedTp: Type, binder: Symbol): Tree = mkTypeTest(expectedTp, binder, gen.mkIsInstanceOf(REF(binder), expectedTp, true, false))
+    def mkTypeTest(expectedTp: Type, binder: Symbol, check: Tree): Tree =
+      mkGuard(check, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
 
 
     // methods in the monad instance

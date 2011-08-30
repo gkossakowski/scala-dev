@@ -84,9 +84,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               t.symbol = currentOwner.newValue(t.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
               // println("new symbol for "+ (t, t.symbol.ownerChain))
             }
-          case d : DefTree => 
+          case d : DefTree if d.symbol.owner == NoSymbol => // don't change existing owners! (see e.g., pos/t3440, pos/t3534)
             // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
-            assert(d.symbol.owner == NoSymbol || currentOwner.hasTransOwner(d.symbol.owner)) // don't uproot anything, goal is to nest deeper
             d.symbol.owner = currentOwner
           case _ => 
         }
@@ -109,7 +108,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       * into the corresponding (monadic) extractors, and combining them with the `orElse` combinator.
       *
       * For `scrutinee match { case1 ... caseN }`, the resulting tree has the shape
-      * `runOrElse(scrutinee, x => Xcase1(x).orElse(Xcase2(x)).....orElse(zero))`
+      * `runOrElse(scrutinee)(x => Xcase1(x).orElse(Xcase2(x)).....orElse(zero))`
       */
     def X(tree: Tree): Tree = {
       tree match {

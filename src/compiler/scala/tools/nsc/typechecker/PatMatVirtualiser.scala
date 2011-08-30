@@ -68,23 +68,41 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     val xTree = new MatchTranslator(typer, matchingStrategy, matchingMonadType).X(treeCopy.Match(tree, selector1, typedCases(tree, cases, selector1.tpe.widen, pt)))
     // println("xformed patmat: "+ xTree)
 
+    // TODO: do this during tree construction, but that will require tracking the current owner in proto treemakers
     // TODO: assign more fine-grained positions
-    object deepPosAssigner extends Traverser {
+    // fixes symbol nesting, assigns positions
+    object fixerUpper extends Traverser {
+      currentOwner = context.owner
+
       override def traverse(t: Tree) {
         if (t != EmptyTree && t.pos == NoPosition) {
           t.setPos(tree.pos)
         }
-
+        t match {
+          case Function(_, _) => 
+            if (t.symbol == NoSymbol) {
+              t.symbol = currentOwner.newValue(t.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
+              // println("new symbol for "+ (t, t.symbol.ownerChain))
+            }
+          case d : DefTree => 
+            // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
+            assert(d.symbol.owner == NoSymbol || currentOwner.hasTransOwner(d.symbol.owner)) // don't uproot anything, goal is to nest deeper
+            d.symbol.owner = currentOwner
+          case _ => 
+        }
         super.traverse(t)
       }
     }
-    deepPosAssigner(xTree) // atPos(tree.pos)(xTree) does not achieve the same effect
-    typed(xTree, mode, pt)
+    
+    fixerUpper(xTree) // atPos(tree.pos)(xTree) does not achieve the same effect
+    // printTypings = true
+    val res = typed(xTree, mode, pt)
+    // printTypings = false
+    res
   }
 
   private class MatchTranslator(typer: Typer, matchStrategy: Tree, matchingMonadType: Type) { translator =>
     import typer._
-    val currentOwner: Symbol = context.owner
     import typeDebug.{ ptTree, ptBlock, ptLine }
 
     /** Implement a pattern match by turning its cases (including the implicit failure case)
@@ -96,7 +114,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def X(tree: Tree): Tree = {
       tree match {
         case Match(scrut, cases) =>
-          val scrutSym = freshSym(currentOwner, tree.pos) setInfo scrut.tpe.widen // TODO: deal with scrut == EmptyTree
+          val scrutSym = freshSym(tree.pos) setInfo scrut.tpe.widen // TODO: deal with scrut == EmptyTree
           mkRunOrElse(scrut,
                       mkFun(scrutSym,
                             ((cases map Xcase(scrutSym)) ++ List(mkZero)) reduceLeft mkOrElse))
@@ -210,7 +228,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                 // as b.info may be based on a Typed type ascription, which has not been taken into account yet by the translation
                 // (it will later result in a type test when `tp` is not a subtype of `b.info`)
                 (b setInfo tp, p) 
-              case (p, tp) => (freshSym(currentOwner, pos, "p") setInfo tp, p)
+              case (p, tp) => (freshSym(pos, "p") setInfo tp, p)
             } unzip
 
         val untupledSolo = (patBinders.length == 1) && getProductArgs(typeInMonad).isEmpty // typeInMonad is not a tuple
@@ -222,7 +240,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // example check: List[Int] <:< ::[Int]
         val prevBinderOrCasted =
           if(!(prevBinder.info.widen <:< extractorParamType)) {
-            val castedBinder = freshSym(currentOwner, pos, "cp") setInfo extractorParamType
+            val castedBinder = freshSym(pos, "cp") setInfo extractorParamType
             val castTree = mkCast(extractorParamType, prevBinder) // cast (with failure expressed using the monad)
             // chain a cast before the actual extractor call
             // we control which binder is used in the nested tree (patTree -- created below), so no need to substitute
@@ -256,12 +274,12 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         res += Pair(List(patTree),
           if(patBinders isEmpty)
             { outerSubst: TreeXForm =>
-                val binder = freshSym(currentOwner, patTree.pos) setInfo UnitClass.tpe
+                val binder = freshSym(patTree.pos) setInfo UnitClass.tpe
                 (nestedTree => mkFun(binder, outerSubst(nestedTree)), outerSubst)
             }
           else
             { outerSubst: TreeXForm =>
-                val binder = freshSym(currentOwner, patTree.pos) setInfo typeInMonad
+                val binder = freshSym(patTree.pos) setInfo typeInMonad
                 val theSubst = mkTypedSubst(patBinders, subPatRefs(binder, patBinders, isSeq, untupledSolo))
                 def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
                 (nestedTree => mkFun(binder, nextSubst(nestedTree)), nextSubst)
@@ -276,7 +294,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
         (patTrees.toList,
             { outerSubst: TreeXForm =>
-                val binder = freshSym(currentOwner, patTrees.head.pos) setInfo binderType
+                val binder = freshSym(patTrees.head.pos) setInfo binderType
                 val theSubst = mkTypedSubst(List(binderToSubst), List(CODE.REF(binder)), unsafe)
                 // println("theSubst: "+ theSubst)
                 def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
@@ -378,7 +396,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       else List(
         (List(mkGuard(X(guard))),
           { outerSubst =>
-            val binder = freshSym(currentOwner, guard.pos) setInfo UnitClass.tpe
+            val binder = freshSym(guard.pos) setInfo UnitClass.tpe
             (nestedTree => mkFun(binder, outerSubst(nestedTree)), outerSubst) // guard does not bind any variables, so next subst is the current one
           }))
     }
@@ -446,10 +464,10 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 // code gen
 
     var ctr = 0
-    def freshSym(owner: Symbol, pos: Position, prefix: String = "x") = {ctr += 1;
-      assert(owner ne null)
-      assert(owner ne NoSymbol)
-      new TermSymbol(owner, pos, (prefix+ctr).toTermName)
+    def freshSym(pos: Position, prefix: String = "x") = {ctr += 1;
+      // assert(owner ne null)
+      // assert(owner ne NoSymbol)
+      new TermSymbol(NoSymbol, pos, (prefix+ctr).toTermName)
     }
 
     // we must explicitly type the trees that we replace inside some other tree, since the latter may already have been typed, and will thus not be retyped

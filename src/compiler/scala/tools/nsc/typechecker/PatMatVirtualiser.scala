@@ -36,6 +36,15 @@ import scala.collection.mutable.ListBuffer
         c => check(c._2 == b._2).>>(
           d => body)))))(scrut)
 
+TODO:
+ - PartialFunction support (see uncurry/transformFunction/isDefinedAtMethodDef
+    -- replace the runOrElse call by something that returns true if the function is successful, false if returns zero,
+       note that the monad's `one` should be CBN for this purpose, since otherwise the case is evaluated when all we want to do is check if it is defined)
+ - exceptions
+ - missing selector
+ - nested matches
+ - unapplySeq length
+ - UNHANDLED: (_*)
 
   * (longer-term) TODO:
   *  - recover exhaustivity and unreachability checking using a variation on the type-safe builder pattern
@@ -79,7 +88,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           t.setPos(tree.pos)
         }
         t match {
-          case Function(_, _) => 
+          case Function(_, _) =>
             if (t.symbol == NoSymbol) {
               t.symbol = currentOwner.newValue(t.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
               // println("new symbol for "+ (t, t.symbol.ownerChain))
@@ -87,12 +96,12 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           case d : DefTree if d.symbol.owner == NoSymbol => // don't change existing owners! (see e.g., pos/t3440, pos/t3534)
             // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
             d.symbol.owner = currentOwner
-          case _ => 
+          case _ =>
         }
         super.traverse(t)
       }
     }
-    
+
     fixerUpper(xTree) // atPos(tree.pos)(xTree) does not achieve the same effect
     // printTypings = true
     val res = typed(xTree, mode, pt)
@@ -207,7 +216,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     def Xpat(scrutSym: Symbol)(pattern: Tree): List[ProtoTreeMaker] = {
       def doUnapply(args: List[Tree], extractorCall: Tree, prevBinder: Symbol, pos: Position)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
-        assert((extractorCall.tpe ne null) && (extractorCall.tpe ne NoType) && (extractorCall.tpe ne ErrorType), "args: "+ args +" extractorCall: "+ extractorCall) 
+        assert((extractorCall.tpe ne null) && (extractorCall.tpe ne NoType) && (extractorCall.tpe ne ErrorType), "args: "+ args +" extractorCall: "+ extractorCall)
         val extractorType = extractorCall.tpe
         val isSeq = extractorCall.symbol.name == nme.unapplySeq
 
@@ -226,11 +235,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                 // must use type `tp`, which is provided by extractor's result, not the type expected by binder,
                 // as b.info may be based on a Typed type ascription, which has not been taken into account yet by the translation
                 // (it will later result in a type test when `tp` is not a subtype of `b.info`)
-                (b setInfo tp, p) 
+                (b setInfo tp, p)
               case (p, tp) => (freshSym(pos, "p") setInfo tp, p)
             } unzip
 
-        val untupledSolo = (patBinders.length == 1) && getProductArgs(typeInMonad).isEmpty // typeInMonad is not a tuple
+        // val untupledSolo = (patBinders.length == 1) && getProductArgs(typeInMonad).isEmpty // typeInMonad is not a tuple
 
         val extractorParamType = extractorType.paramTypes.head
 
@@ -259,7 +268,28 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                 res += Xguard(`binder`.length >= args.length - 1)
             } else
               res += Xguard(`binder`.length == args.length)
-          }*/
+          }
+
+      // the discrimination test for sequences is a call to lengthCompare.  Note that
+      // this logic must be fully consistent wiith successMatrixFn and failureMatrixFn above:
+      // any inconsistency will (and frequently has) manifested as pattern matcher crashes.
+      lazy val cond = {
+        // the method call symbol
+        val methodOp: Symbol                = head.tpe member nme.lengthCompare
+
+        // the comparison to perform.  If the pivot is right ignoring, then a scrutinee sequence
+        // of >= pivot length could match it; otherwise it must be exactly equal.
+        val compareOp: (Tree, Tree) => Tree = if (hasStar) _ INT_>= _ else _ INT_== _
+
+        // scrutinee.lengthCompare(pivotLength) [== | >=] 0
+        val compareFn: Tree => Tree         = (t: Tree) => compareOp((t DOT methodOp)(LIT(pivotLen)), ZERO)
+
+        // wrapping in a null check on the scrutinee
+        // XXX this needs to use the logic in "def condition"
+        nullSafe(compareFn, FALSE)(scrut.id)
+        // condition(head.tpe, scrut.id, head.boundVariables.nonEmpty)
+      }
+          */
 
 
         // the extractor call (applied to the binder bound by the flatMap corresponding to the previous (i.e., enclosing/outer) pattern)
@@ -347,7 +377,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
           val extractor = { import CODE._
             def genEquals(sym: Symbol): Tree = (REF(sym) MEMBER_== REF(prevBinder)) AND gen.mkIsInstanceOf(REF(prevBinder), tpe.widen, true, false)
-            atPos(patTree.pos)( 
+            atPos(patTree.pos)(
               mkTypeTest(tpe, prevBinder, tpe match {
                 case ConstantType(Constant(null)) if isRef  => REF(prevBinder) OBJ_EQ NULL
                 case ConstantType(const)                    => REF(prevBinder) MEMBER_== Literal(const)
@@ -368,6 +398,10 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                             CODE.REF(prevBinder) setType prevBinder.info)))
 
           (Nil, Nil)
+
+        // case Star(x)              => // no need to handle this because it's always a wildcard nested in a bind (?)
+        //   println("star: "+ (x, x.getClass))
+        //   (Nil, Nil)
 
         case Alternative(alts)    =>
           val altTrees = alts map { alt =>
@@ -397,7 +431,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // case x: This              =>
 
         case _                       =>  // TODO
-          println("UNHANDLED: "+ (prevBinder, patTree))
+          println("UNHANDLED: "+ (prevBinder, patTree, patTree.getClass))
           (Nil, Nil)
       }
 

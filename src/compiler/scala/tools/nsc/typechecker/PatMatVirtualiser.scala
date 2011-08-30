@@ -330,6 +330,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           res += (List(),
                     { outerSubst: TreeXForm =>
                         val theSubst = mkTypedSubst(List(patBinder), List(CODE.REF(prevBinder)), unsafe = true)
+                        // println("proto subst of: "+ patBinder)
                         def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
                         (nestedTree => nextSubst(nestedTree), nextSubst)
                     })
@@ -455,7 +456,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       * A corrolary of this is that they do not entail any variable binding.
       */
     def isWildcardPattern(pat: Tree): Boolean = pat match {
-      case Bind(_, body)        => isWildcardPattern(body)
+      case Bind(nme.WILDCARD, body) => isWildcardPattern(body) // don't skip when binding an interesting symbol!
       case Ident(nme.WILDCARD)  => true
       case x: Ident             => treeInfo.isVarPattern(x)
       case Alternative(ps)      => ps forall isWildcardPattern

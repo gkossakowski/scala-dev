@@ -315,9 +315,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           doUnapply(args, unfun, prevBinder, patTree.pos)
 
         case Apply(fun, args)     =>
-          val origSym = fun.asInstanceOf[TypeTree].original.symbol // undo rewrite performed in (5) of adapt
+          val orig = fun.asInstanceOf[TypeTree].original
+          val origSym = orig.symbol // undo rewrite performed in (5) of adapt
           val extractor = unapplyMember(origSym.filter(sym => reallyExists(unapplyMember(sym.tpe))).tpe)
-          val extractorCall = CODE.REF(extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+          val extractorCall = typed(mkSelect(orig, extractor), FUNmode, WildcardType) // mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+          // println("orig: "+ (orig, extractor, mkSelect(orig, extractor), typed(mkSelect(orig, extractor), FUNmode, WildcardType).tpe, caseClassApplyToUnapplyTp(fun.tpe)))
           // println("apply extractor: "+ (extractor, extractorCall.tpe, fun.tpe, fun.asInstanceOf[TypeTree].original.tpe, origSym))
 
           doUnapply(args, extractorCall, prevBinder, patTree.pos)
@@ -433,10 +435,21 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       else ((1 to patBinders.length) map mkTupleSel(binder)).toList
       // else List() -- never called when patBinders are empty
 
-    def caseClassApplyToUnapplyTp(tp: Type) = {
-      val dummyMethod = new TermSymbol(NoSymbol, NoPosition, "$dummy")
-      MethodType(List(dummyMethod newSyntheticValueParam(tp.finalResultType)), if(tp.paramTypes nonEmpty) optionType(tupleType(tp.paramTypes)) else BooleanClass.tpe)
-    }
+    // not needed: now typing the unapply call
+    // inverse of monadTypeToSubPatTypes(extractorResultInMonad(_))
+    // minus the padding of repeated args for unapplySeq (TODO?)
+    // def subPatTypesToExtractorResultType(tps: List[Type]): Type = {
+    //   tps match {
+    //     case Nil => BooleanClass.tpe
+    //     case List(x) => optionType(x)
+    //     case xs => optionType(tupleType(xs))
+    //   }
+    // }
+    // def caseClassApplyToUnapplyTp(tp: Type) = {
+    //   val dummyMethod = new TermSymbol(NoSymbol, NoPosition, "$dummy")
+    //   val resTp = subPatTypesToExtractorResultType(tp.paramTypes)
+    //   MethodType(List(dummyMethod newSyntheticValueParam(tp.finalResultType)), if(tp.paramTypes nonEmpty) resTp else BooleanClass.tpe)
+    // }
 
     /** A conservative approximation of which patterns do not discern anything.
       * A corrolary of this is that they do not entail any variable binding.
@@ -505,6 +518,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     // misc
     def mkApply(fun: Tree, arg: Symbol): Tree = fun APPLY REF(arg)
+    def mkSelect(tgt: Tree, mem: Symbol): Tree = tgt DOT mem
     def mkFun(arg: Symbol, body: Tree): Tree = Function(List(ValDef(arg)), body)
     def mkIndex(binder: Symbol)(i: Int): Tree = REF(binder) APPLY (LIT(i))
     def mkTupleSel(binder: Symbol)(i: Int): Tree = (REF(binder) DOT ("_"+i).toTermName) // make tree that accesses the i'th component of the tuple referenced by binder

@@ -464,16 +464,17 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       if(res.typeSymbol == BooleanClass) UnitClass.tpe
       else {
         val monadArgs = res.baseType(matchingMonadType.typeSymbol).typeArgs
-        if(monadArgs.length == 1) monadArgs(0)
-        else {println("unhandled extractor: "+ extractorTp); NoType}
+        assert(monadArgs.length == 1, "unhandled extractor type: "+ extractorTp)
+        monadArgs(0)
       }
     }
 
     // require(patBinders.nonEmpty)
-    def monadTypeToSubPatTypesAndRefs(typeInMonad: Type, isSeq: Boolean, args: List[Tree], patBinders: List[Symbol]): (List[Type], Symbol => List[Tree]) = {
-      val nbArgs = args.length
-      val lastIsStar = treeInfo.isStar(args.last)
-      
+    def monadTypeToSubPatTypesAndRefs(typeInMonad: Type, isSeq: Boolean, subPats: List[Tree], subPatBinders: List[Symbol]): (List[Type], Symbol => List[Tree]) = {
+      val nbSubPatBinders = subPatBinders.length
+      val lastIsStar = treeInfo.isStar(subPats.last)
+      val nbSubPats = subPats.length
+
       val ts =
         if(typeInMonad.typeSymbol eq UnitClass) Nil
         else getProductArgs(typeInMonad) getOrElse List(typeInMonad)
@@ -482,24 +483,22 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       // repeat the last argument type to align the formals with the number of arguments
       val subPatTypes = if(isSeq) {
         val TypeRef(pre, SeqClass, args) = (ts.last baseType SeqClass)
-        val res = formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbArgs)
-        println("seq subpat types: "+ (ts, nbArgs, res))
-        res
+        formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbSubPats)
       } else ts
 
+      // only relevant if isSeq: (here to avoid capturing too much in the returned closure)
       val firstIndexingBinder = ts.length - 1 // ts.last is the Seq, thus there are `ts.length - 1` non-seq elements in the tuple
-      val lastIndexingBinder = if(lastIsStar) patBinders.length-2 else patBinders.length-1
-      val nbPatBinders = patBinders.length
+      val lastIndexingBinder = if(lastIsStar) nbSubPatBinders-2 else nbSubPatBinders-1
 
       def subPatRefs(binder: Symbol): List[Tree] =
         (if(isSeq) {
           val seqTree: Tree = if(firstIndexingBinder == 0) CODE.REF(binder) else mkTupleSel(binder)(firstIndexingBinder+1)
           ((1 to firstIndexingBinder) map mkTupleSel(binder)) ++  // there are `firstIndexingBinder` non-seq tuple elements preceding the Seq
-          ((firstIndexingBinder to lastIndexingBinder) map mkIndex(seqTree)) ++  //
-          ((lastIndexingBinder+1 to nbPatBinders-1) map mkDrop(seqTree))
+          ((firstIndexingBinder to lastIndexingBinder) map mkIndex(seqTree)) ++  // then we have to index the binder that represents the sequence for the remaining subpatterns, except for...
+          ((lastIndexingBinder+1 to nbSubPatBinders-1) map mkDrop(seqTree)) // the last one -- if the last subpattern is a sequence wildcard: drop the prefix (indexed by the refs on the line above), return the remainder
         }
-        else if(nbPatBinders == 1) List(CODE.REF(binder))
-        else ((1 to nbPatBinders) map mkTupleSel(binder))).toList
+        else if(nbSubPatBinders == 1) List(CODE.REF(binder))
+        else ((1 to nbSubPatBinders) map mkTupleSel(binder))).toList
 
       (subPatTypes, subPatRefs)
     }

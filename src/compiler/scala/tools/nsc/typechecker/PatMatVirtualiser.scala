@@ -223,23 +223,23 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // what's the extractor's result type in the monad?
         val typeInMonad = extractorResultInMonad(extractorType)
 
-        // the types for the binders corresponding to my subpatterns
-        // subPatTypes != args map (_.tpe) since the args may have more specific types than the constructor's parameter types
-        val subPatTypes = monadTypeToSubPatTypes(typeInMonad, isSeq, args.length)
 
         // `patBinders` are the variables bound by this pattern in the following patterns
         // patBinders are replaced by references to the relevant part of the extractor's result (tuple component, seq element, the result as-is)
-        val sub@(patBinders, _) =
-            (args, subPatTypes).zipped map {
-              case (BoundSym(b, p), tp) =>
-                // must use type `tp`, which is provided by extractor's result, not the type expected by binder,
-                // as b.info may be based on a Typed type ascription, which has not been taken into account yet by the translation
-                // (it will later result in a type test when `tp` is not a subtype of `b.info`)
-                (b setInfo tp, p)
-              case (p, tp) => (freshSym(pos, "p") setInfo tp, p)
-            } unzip
+        val sub@(patBinders, _) = args map {
+          case BoundSym(b, p) => (b, p)
+          case p => (freshSym(pos, "p"), p)
+        } unzip
 
-        // val untupledSolo = (patBinders.length == 1) && getProductArgs(typeInMonad).isEmpty // typeInMonad is not a tuple
+        // the types for the binders corresponding to my subpatterns
+        // subPatTypes != args map (_.tpe) since the args may have more specific types than the constructor's parameter types
+        val (subPatTypes, subPatRefs) = monadTypeToSubPatTypesAndRefs(typeInMonad, isSeq, args, patBinders)
+
+        // TODO: think this through again -- are casts really inserted?
+        // must use type `tp`, which is provided by extractor's result, not the type expected by binder,
+        // as b.info may be based on a Typed type ascription, which has not been taken into account yet by the translation
+        // (it will later result in a type test when `tp` is not a subtype of `b.info`)
+        (patBinders, subPatTypes).zipped foreach { case (b, tp) => b setInfo tp }
 
         val extractorParamType = extractorType.paramTypes.head
 
@@ -309,7 +309,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           else
             { outerSubst: TreeXForm =>
                 val binder = freshSym(patTree.pos) setInfo typeInMonad
-                val theSubst = mkTypedSubst(patBinders, subPatRefs(binder, patBinders, isSeq, isSeq && treeInfo.isStar(args.last)))
+                val theSubst = mkTypedSubst(patBinders, subPatRefs(binder))
                 def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
                 (nestedTree => mkFun(binder, nextSubst(nestedTree)), nextSubst)
             })
@@ -469,28 +469,41 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       }
     }
 
-    def monadTypeToSubPatTypes(typeInMonad: Type, isSeq: Boolean, nbArgs: Int): List[Type] = {
+    // require(patBinders.nonEmpty)
+    def monadTypeToSubPatTypesAndRefs(typeInMonad: Type, isSeq: Boolean, args: List[Tree], patBinders: List[Symbol]): (List[Type], Symbol => List[Tree]) = {
+      val nbArgs = args.length
+      val lastIsStar = treeInfo.isStar(args.last)
+      
       val ts =
         if(typeInMonad.typeSymbol eq UnitClass) Nil
         else getProductArgs(typeInMonad) getOrElse List(typeInMonad)
 
       // replace last type (of shape Seq[A]) with RepeatedParam[A] so that formalTypes will
       // repeat the last argument type to align the formals with the number of arguments
-      if(isSeq) {
+      val subPatTypes = if(isSeq) {
         val TypeRef(pre, SeqClass, args) = (ts.last baseType SeqClass)
-        formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbArgs)
+        val res = formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbArgs)
+        println("seq subpat types: "+ (ts, nbArgs, res))
+        res
       } else ts
+
+      val firstIndexingBinder = ts.length - 1 // ts.last is the Seq, thus there are `ts.length - 1` non-seq elements in the tuple
+      val lastIndexingBinder = if(lastIsStar) patBinders.length-2 else patBinders.length-1
+      val nbPatBinders = patBinders.length
+
+      def subPatRefs(binder: Symbol): List[Tree] =
+        (if(isSeq) {
+          val seqTree: Tree = if(firstIndexingBinder == 0) CODE.REF(binder) else mkTupleSel(binder)(firstIndexingBinder+1)
+          ((1 to firstIndexingBinder) map mkTupleSel(binder)) ++  // there are `firstIndexingBinder` non-seq tuple elements preceding the Seq
+          ((firstIndexingBinder to lastIndexingBinder) map mkIndex(seqTree)) ++  //
+          ((lastIndexingBinder+1 to nbPatBinders-1) map mkDrop(seqTree))
+        }
+        else if(nbPatBinders == 1) List(CODE.REF(binder))
+        else ((1 to nbPatBinders) map mkTupleSel(binder))).toList
+
+      (subPatTypes, subPatRefs)
     }
 
-    // require(patBinders.nonEmpty)
-    def subPatRefs(binder: Symbol, patBinders: List[Symbol], isSeq: Boolean, lastIsStar: Boolean): List[Tree] =
-      if(lastIsStar) // isSeq is implied
-        ((0 to patBinders.length-2) map mkIndex(binder)).toList ++ List(mkDrop(binder, patBinders.length-1))
-      else if(isSeq)
-        ((0 to patBinders.length-1) map mkIndex(binder)).toList
-      else if(patBinders.length == 1) List(CODE.REF(binder))
-      else ((1 to patBinders.length) map mkTupleSel(binder)).toList
-      // else List() -- never called when patBinders are empty
 
     // not needed: now typing the unapply call
     // inverse of monadTypeToSubPatTypes(extractorResultInMonad(_))
@@ -579,8 +592,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def mkApply(fun: Tree, arg: Symbol): Tree = fun APPLY REF(arg)
     def mkSelect(tgt: Tree, mem: Symbol): Tree = tgt DOT mem
     def mkFun(arg: Symbol, body: Tree): Tree = Function(List(ValDef(arg)), body)
-    def mkIndex(binder: Symbol)(i: Int): Tree = REF(binder) APPLY (LIT(i))
-    def mkDrop(binder: Symbol, n: Int): Tree = (REF(binder) DOT "drop".toTermName) (LIT(n))
+    def mkIndex(tgt: Tree)(i: Int): Tree = tgt APPLY (LIT(i))
+    def mkDrop(tgt: Tree)(n: Int): Tree = (tgt DOT "drop".toTermName) (LIT(n))
     def mkTupleSel(binder: Symbol)(i: Int): Tree = (REF(binder) DOT ("_"+i).toTermName) // make tree that accesses the i'th component of the tuple referenced by binder
     def mkEquals(binder: Symbol, other: Tree): Tree = REF(binder) MEMBER_== other
   }

@@ -93,7 +93,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               t.symbol = currentOwner.newValue(t.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
               // println("new symbol for "+ (t, t.symbol.ownerChain))
             }
-          case d : DefTree if d.symbol.owner == NoSymbol => // don't change existing owners! (see e.g., pos/t3440, pos/t3534)
+          case d : DefTree if (d.symbol.owner == NoSymbol) || (d.symbol.owner == context.owner) => // don't indiscriminately change existing owners! (see e.g., pos/t3440, pos/t3534, pos/unapplyContexts2)
             // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
             d.symbol.owner = currentOwner
           case _ =>

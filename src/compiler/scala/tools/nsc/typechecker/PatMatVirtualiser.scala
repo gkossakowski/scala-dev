@@ -118,7 +118,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             case Function(_, _) if (t.symbol.owner == NoSymbol) || (t.symbol.owner == context.owner) =>
               // println("fundef: "+ (t, t.symbol.ownerChain, currentOwner.ownerChain))
               t.symbol.owner = currentOwner
-            case d : DefTree if (d.symbol.owner == NoSymbol) || (d.symbol.owner == context.owner) => // don't indiscriminately change existing owners! (see e.g., pos/t3440, pos/t3534, pos/unapplyContexts2)
+            case d : DefTree if (d.symbol != NoSymbol) && ((d.symbol.owner == NoSymbol) || (d.symbol.owner == context.owner)) => // don't indiscriminately change existing owners! (see e.g., pos/t3440, pos/t3534, pos/unapplyContexts2)
               // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
               d.symbol.owner = currentOwner
             // case d: DefTree =>
@@ -352,16 +352,22 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           val origSym = orig.symbol // undo rewrite performed in (5) of adapt
           val extractor = unapplyMember(origSym.filter(sym => reallyExists(unapplyMember(sym.tpe))).tpe)
           if((fun.tpe eq null) || fun.tpe.isError || (extractor eq NoSymbol)) {
-             error("cannot find unapply member for "+ fun +" with args "+ args) // TODO: ErrorTree
+             // error("cannot find unapply member for "+ fun +" with args "+ args) // TODO: ErrorTree
+             // die quietly for now
              (Nil, Nil)
           } else {
             val extractorSel = mkSelect(orig, extractor)
-            val Apply(extractorCall, _) = typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)
-            // must infer type params or complicate type-safe substitution (if we don't infer types, uninstantiated type params show up later: run/sudoku)
-            // (see also run/virtpatmat_alts.scala) 
-            // bypass typing at own risk: val extractorCall = mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+            silent(_.typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)) match {
+              case Apply(extractorCall, _)  => 
+                // must infer type params or complicate type-safe substitution (if we don't infer types, uninstantiated type params show up later: run/sudoku)
+                // (see also run/virtpatmat_alts.scala) 
+                // bypass typing at own risk: val extractorCall = mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
 
-            doUnapply(args, extractorCall, prevBinder, patTree.pos)
+                doUnapply(args, extractorCall, prevBinder, patTree.pos)
+              case _ =>
+               // die quietly for now
+               (Nil, Nil)
+            }
           }
         case BoundSym(patBinder, p)          =>
           // don't generate an extractor, TreeMaker only performs the substitution patBinder --> prevBinder
@@ -376,7 +382,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           // it's the responsibility of the treemaker (added to res in the previous line) to replace this symbol by a reference that
           // selects that result on the function symbol of the flatMap call that binds to the result of this extractor
           (List(patBinder), List(p))
-
+        case Bind(n, p) => (Nil, Nil) // there's no symbol -- something wrong?
         case Typed(expr, tpt)                 =>
           // println("Typed: expr is wildcard, right? "+ (expr, tpt.tpe, prevBinder, prevBinder.info))
           val tpe = tpt.tpe

@@ -60,7 +60,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     import typer._
     import typeDebug.{ ptTree, ptBlock, ptLine }
 
-    def solveImplicit(contextBoundTp: Type): (Tree, Type) = {
+    def solveContextBound(contextBoundTp: Type): (Tree, Type) = {
       val solSym = NoSymbol.newTypeParameter(NoPosition, "SolveImplicit$".toTypeName)
       val param = solSym.setInfo(contextBoundTp.typeSymbol.typeParams(0).info.cloneInfo(solSym)) // TypeBounds(NothingClass.typeConstructor, baseTp)
       val pt = appliedType(contextBoundTp, List(param.tpeHK))
@@ -72,7 +72,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       (result.tree, result.subst.to(result.subst.from indexOf param))
     }
 
-    lazy val (matchingStrategy, matchingMonadType) = solveImplicit(matchingStrategyTycon)
+    lazy val (matchingStrategy, matchingMonadType) = solveContextBound(matchingStrategyTycon)
 
     /** Implement a pattern match by turning its cases (including the implicit failure case)
       * into the corresponding (monadic) extractors, and combining them with the `orElse` combinator.
@@ -110,14 +110,17 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             t.setPos(tree.pos)
           }
           t match {
-            case Function(_, _) =>
-              if (t.symbol == NoSymbol) {
-                t.symbol = currentOwner.newValue(t.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
-                // println("new symbol for "+ (t, t.symbol.ownerChain))
-              }
+            case Function(_, _) if t.symbol == NoSymbol =>
+              t.symbol = currentOwner.newValue(t.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
+              // println("new symbol for "+ (t, t.symbol.ownerChain))
+            case Function(_, _) if (t.symbol.owner == NoSymbol) || (t.symbol.owner == context.owner) =>
+              // println("fundef: "+ (t, t.symbol.ownerChain, currentOwner.ownerChain))
+              t.symbol.owner = currentOwner
             case d : DefTree if (d.symbol.owner == NoSymbol) || (d.symbol.owner == context.owner) => // don't indiscriminately change existing owners! (see e.g., pos/t3440, pos/t3534, pos/unapplyContexts2)
               // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
               d.symbol.owner = currentOwner
+            // case d: DefTree =>
+            //   println("untouched def "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
             case _ =>
           }
           super.traverse(t)

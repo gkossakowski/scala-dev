@@ -346,11 +346,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           val orig = fun.asInstanceOf[TypeTree].original
           val origSym = orig.symbol // undo rewrite performed in (5) of adapt
           val extractor = unapplyMember(origSym.filter(sym => reallyExists(unapplyMember(sym.tpe))).tpe)
-          val extractorCall = typed(mkSelect(orig, extractor), POLYmode | FUNmode, WildcardType) // can't infer types yet -- must use POLYmode (see run/virtpatmat_alts.scala) 
-            // mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
-
-          // println("orig: "+ (orig, extractor, mkSelect(orig, extractor), typed(mkSelect(orig, extractor), FUNmode, WildcardType).tpe, caseClassApplyToUnapplyTp(fun.tpe)))
-          // println("apply extractor: "+ (extractor, extractorCall.tpe, fun.tpe, fun.asInstanceOf[TypeTree].original.tpe, origSym))
+          val extractorSel = mkSelect(orig, extractor)
+          val Apply(extractorCall, _) = typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)
+          // must infer type params or complicate type-safe substitution (if we don't infer types, uninstantiated type params show up later: run/sudoku)
+          // (see also run/virtpatmat_alts.scala) 
+          // bypass typing at own risk: val extractorCall = mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
 
           doUnapply(args, extractorCall, prevBinder, patTree.pos)
 

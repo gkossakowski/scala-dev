@@ -92,7 +92,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
       val xTree = tree match {
         case Match(scrut, cases) =>
-          val scrutSym = freshSym(tree.pos) setInfo scrut.tpe.widen // TODO: deal with scrut == EmptyTree
+          // TODO: deal with scrut == EmptyTree
+          val scrutType = if(scrut.tpe ne null) scrut.tpe.widen else {error("TODO: support match with empty scrut"); NoType} // TODO: ErrorTree
+          val scrutSym = freshSym(tree.pos) setInfo scrutType
           mkRunOrElse(scrut,
                       mkFun(scrutSym,
                             ((cases map Xcase(scrutSym)) ++ List(mkZero)) reduceLeft mkOrElse))
@@ -346,17 +348,21 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           doUnapply(args, unfun, prevBinder, patTree.pos)
 
         case Apply(fun, args)     =>
-          val orig = fun.asInstanceOf[TypeTree].original
+          val orig = if(fun.isInstanceOf[TypeTree]) fun.asInstanceOf[TypeTree].original else fun
           val origSym = orig.symbol // undo rewrite performed in (5) of adapt
           val extractor = unapplyMember(origSym.filter(sym => reallyExists(unapplyMember(sym.tpe))).tpe)
-          val extractorSel = mkSelect(orig, extractor)
-          val Apply(extractorCall, _) = typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)
-          // must infer type params or complicate type-safe substitution (if we don't infer types, uninstantiated type params show up later: run/sudoku)
-          // (see also run/virtpatmat_alts.scala) 
-          // bypass typing at own risk: val extractorCall = mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+          if((fun.tpe eq null) || fun.tpe.isError || (extractor eq NoSymbol)) {
+             error("cannot find unapply member for "+ fun +" with args "+ args) // TODO: ErrorTree
+             (Nil, Nil)
+          } else {
+            val extractorSel = mkSelect(orig, extractor)
+            val Apply(extractorCall, _) = typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)
+            // must infer type params or complicate type-safe substitution (if we don't infer types, uninstantiated type params show up later: run/sudoku)
+            // (see also run/virtpatmat_alts.scala) 
+            // bypass typing at own risk: val extractorCall = mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
 
-          doUnapply(args, extractorCall, prevBinder, patTree.pos)
-
+            doUnapply(args, extractorCall, prevBinder, patTree.pos)
+          }
         case BoundSym(patBinder, p)          =>
           // don't generate an extractor, TreeMaker only performs the substitution patBinder --> prevBinder
           res += (List(),
@@ -464,7 +470,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       if(res.typeSymbol == BooleanClass) UnitClass.tpe
       else {
         val monadArgs = res.baseType(matchingMonadType.typeSymbol).typeArgs
-        assert(monadArgs.length == 1, "unhandled extractor type: "+ extractorTp)
+        assert(monadArgs.length == 1, "unhandled extractor type: "+ extractorTp) // TODO: overloaded unapply
         monadArgs(0)
       }
     }
@@ -472,7 +478,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     // require(patBinders.nonEmpty)
     def monadTypeToSubPatTypesAndRefs(typeInMonad: Type, isSeq: Boolean, subPats: List[Tree], subPatBinders: List[Symbol]): (List[Type], Symbol => List[Tree]) = {
       val nbSubPatBinders = subPatBinders.length
-      val lastIsStar = treeInfo.isStar(subPats.last)
+      val lastIsStar = subPats.nonEmpty && treeInfo.isStar(subPats.last)
       val nbSubPats = subPats.length
 
       val ts =
@@ -535,10 +541,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     object BoundSym {
       def unapply(t: Tree): Option[(Symbol, Tree)] = t match {
-        case t@Bind(n, p) =>
-          val b = t.symbol
-          assert(b ne null, t); assert(b ne NoSymbol, t)
-          Some((b, p))
+        case t@Bind(n, p) if (t.symbol ne null) && (t.symbol ne NoSymbol) => // pos/t2429 does not satisfy these conditions
+          Some((t.symbol, p))
         case _ => None
       }
     }

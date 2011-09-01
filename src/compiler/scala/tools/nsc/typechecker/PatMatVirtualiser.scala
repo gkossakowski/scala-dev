@@ -120,9 +120,13 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               t.symbol.owner = currentOwner
             case d : DefTree if (d.symbol != NoSymbol) && ((d.symbol.owner == NoSymbol) || (d.symbol.owner == context.owner)) => // don't indiscriminately change existing owners! (see e.g., pos/t3440, pos/t3534, pos/unapplyContexts2)
               // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
+              if(d.symbol.isLazy) { // for lazy val's accessor -- is there no tree??
+                assert(d.symbol.lazyAccessor != NoSymbol && d.symbol.lazyAccessor.owner == d.symbol.owner)
+                d.symbol.lazyAccessor.owner = currentOwner
+              }
               d.symbol.owner = currentOwner
-            // case d: DefTree =>
-            //   println("untouched def "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
+            // case _ if (t.symbol != NoSymbol) && (t.symbol ne null) =>
+            //   println("untouched "+ (t, t.getClass, t.symbol.ownerChain, currentOwner.ownerChain))
             case _ =>
           }
           super.traverse(t)

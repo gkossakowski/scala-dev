@@ -3232,8 +3232,9 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           treeCopy.If(tree, cond1, thenp1, elsep1) setType owntype
         }
       }
-/* DONE IN VIRTMATCH
-      def typedMatch(tree: Tree, selector: Tree, cases: List[CaseDef]): Tree = 
+
+      def typedMatch(tree: Tree, selector: Tree, cases: List[CaseDef]): Tree = {
+        val translator = new MatchTranslator(this)
         if (selector == EmptyTree) {
           val arity = if (isFunctionType(pt)) pt.normalize.typeArgs.length - 1 else 1
           val params = for (i <- List.range(0, arity)) yield 
@@ -3244,7 +3245,9 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val ids = for (p <- params) yield Ident(p.name)
           val selector1 = atPos(tree.pos.focusStart) { if (arity == 1) ids.head else gen.mkTuple(ids) }
           val body = treeCopy.Match(tree, selector1, cases)
-          typed1(atPos(tree.pos) { Function(params, body) }, mode, pt)
+          // don't run translator after typers (see comments in PatMatVirtualiser)
+          val bodyX = if(phase.id <= currentRun.typerPhase.id) translator.X(body) else body
+          typed1(atPos(tree.pos) { Function(params, bodyX) }, mode, pt)
         } else {
           val selector1 = checkDead(typed(selector, EXPRmode | BYVALmode, WildcardType))
           var cases1 = typedCases(tree, cases, selector1.tpe.widen, pt)
@@ -3252,9 +3255,13 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           if (needAdapt) {
             cases1 = cases1 map (adaptCase(_, owntype))
           }
-          treeCopy.Match(tree, selector1, cases1) setType owntype
+          if(phase.id <= currentRun.typerPhase.id) // don't run translator after typers (see comments in PatMatVirtualiser)
+            typed1(translator.X(treeCopy.Match(tree, selector1, cases1)), mode, owntype) // setType owntype
+          else
+            treeCopy.Match(tree, selector1, cases1) setType owntype
         }
-*/
+      }
+
       def typedReturn(expr: Tree) = {
         val enclMethod = context.enclMethod
         if (enclMethod == NoContext || 
@@ -4079,7 +4086,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           typedIf(cond, thenp, elsep)
 
         case tree @ Match(selector, cases) =>
-          typedMatch(Typer.this, tree, selector, cases, mode, pt)
+          typedMatch(tree, selector, cases)
 
         case Return(expr) =>
           typedReturn(expr)

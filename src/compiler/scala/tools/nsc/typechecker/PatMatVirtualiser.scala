@@ -54,73 +54,43 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
   import global._
   import definitions._
 
-  // TODO handle nested matches:  a match { case p => b match { case p => ... } }
-  // note that the matching strategy may change -- need to defer to type checker to set up context
-  def typedMatch(typer: Typer, tree: Tree, selector: Tree, cases: List[CaseDef], mode: Int, pt: Type): Tree = {
+  private lazy val matchingStrategyTycon = getMember(PredefModule, "MatchingStrategy".toTypeName).typeConstructor
+
+  class MatchTranslator(typer: Typer) { translator =>
     import typer._
-    def solveImplicit(contextBoundTp: Type, tree: Tree): (Tree, Type) = {
-      val solSym = NoSymbol.newTypeParameter(tree.pos, "SolveImplicit$".toTypeName)
+    import typeDebug.{ ptTree, ptBlock, ptLine }
+
+    def solveImplicit(contextBoundTp: Type): (Tree, Type) = {
+      val solSym = NoSymbol.newTypeParameter(NoPosition, "SolveImplicit$".toTypeName)
       val param = solSym.setInfo(contextBoundTp.typeSymbol.typeParams(0).info.cloneInfo(solSym)) // TypeBounds(NothingClass.typeConstructor, baseTp)
       val pt = appliedType(contextBoundTp, List(param.tpeHK))
       val savedUndets = context.undetparams
       context.undetparams = param :: context.undetparams
-      val result = inferImplicit(tree, pt, false, false, context)
+      val result = inferImplicit(EmptyTree, pt, false, false, context)
       context.undetparams = savedUndets
 
       (result.tree, result.subst.to(result.subst.from indexOf param))
     }
 
-    val matchingStrategyTycon = getMember(PredefModule, "MatchingStrategy".toTypeName).typeConstructor
-    val (matchingStrategy, matchingMonadType) = solveImplicit(matchingStrategyTycon, tree)
-
-    val selector1 = typed(selector, EXPRmode | BYVALmode, WildcardType) // TODO: handle empty selector (just remove outer apply node from xTree?)
-    val xTree = new MatchTranslator(typer, matchingStrategy, matchingMonadType).X(treeCopy.Match(tree, selector1, typedCases(tree, cases, selector1.tpe.widen, pt)))
-    // println("xformed patmat: "+ xTree)
-
-    // TODO: do this during tree construction, but that will require tracking the current owner in proto treemakers
-    // TODO: assign more fine-grained positions
-    // fixes symbol nesting, assigns positions
-    object fixerUpper extends Traverser {
-      currentOwner = context.owner
-
-      override def traverse(t: Tree) {
-        if (t != EmptyTree && t.pos == NoPosition) {
-          t.setPos(tree.pos)
-        }
-        t match {
-          case Function(_, _) =>
-            if (t.symbol == NoSymbol) {
-              t.symbol = currentOwner.newValue(t.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
-              // println("new symbol for "+ (t, t.symbol.ownerChain))
-            }
-          case d : DefTree if (d.symbol.owner == NoSymbol) || (d.symbol.owner == context.owner) => // don't indiscriminately change existing owners! (see e.g., pos/t3440, pos/t3534, pos/unapplyContexts2)
-            // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
-            d.symbol.owner = currentOwner
-          case _ =>
-        }
-        super.traverse(t)
-      }
-    }
-
-    fixerUpper(xTree) // atPos(tree.pos)(xTree) does not achieve the same effect
-    // printTypings = true
-    val res = typed(xTree, mode, pt)
-    // printTypings = false
-    res
-  }
-
-  private class MatchTranslator(typer: Typer, matchStrategy: Tree, matchingMonadType: Type) { translator =>
-    import typer._
-    import typeDebug.{ ptTree, ptBlock, ptLine }
+    lazy val (matchingStrategy, matchingMonadType) = solveImplicit(matchingStrategyTycon)
 
     /** Implement a pattern match by turning its cases (including the implicit failure case)
       * into the corresponding (monadic) extractors, and combining them with the `orElse` combinator.
       *
       * For `scrutinee match { case1 ... caseN }`, the resulting tree has the shape
       * `runOrElse(scrutinee)(x => Xcase1(x).orElse(Xcase2(x)).....orElse(zero))`
+      *
+      * NOTE: the resulting tree is not type checked, nor are nested pattern matches transformed
+      *   thus, you must typecheck the result (and that will in turn translate nested matches)
+      *   this could probably optimized... (but note that the matchingStrategy must be solved for each nested patternmatch)
       */
-    def X(tree: Tree): Tree = {
-      tree match {
+    def X(tree: Tree): Tree = { 
+      // we don't transform after typers
+      // (that would require much more sophistication when generating trees, 
+      //  and the only place that emits Matches after typers is for exception handling anyway)
+      assert(phase.id <= currentRun.typerPhase.id)
+
+      val xTree = tree match {
         case Match(scrut, cases) =>
           val scrutSym = freshSym(tree.pos) setInfo scrut.tpe.widen // TODO: deal with scrut == EmptyTree
           mkRunOrElse(scrut,
@@ -128,16 +98,45 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                             ((cases map Xcase(scrutSym)) ++ List(mkZero)) reduceLeft mkOrElse))
         case t => t
       }
+
+      // TODO: do this during tree construction, but that will require tracking the current owner in proto treemakers
+      // TODO: assign more fine-grained positions
+      // fixes symbol nesting, assigns positions
+      object fixerUpper extends Traverser {
+        currentOwner = context.owner
+
+        override def traverse(t: Tree) {
+          if (t != EmptyTree && t.pos == NoPosition) {
+            t.setPos(tree.pos)
+          }
+          t match {
+            case Function(_, _) =>
+              if (t.symbol == NoSymbol) {
+                t.symbol = currentOwner.newValue(t.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
+                // println("new symbol for "+ (t, t.symbol.ownerChain))
+              }
+            case d : DefTree if (d.symbol.owner == NoSymbol) || (d.symbol.owner == context.owner) => // don't indiscriminately change existing owners! (see e.g., pos/t3440, pos/t3534, pos/unapplyContexts2)
+              // println("def: "+ (d, d.symbol.ownerChain, currentOwner.ownerChain))
+              d.symbol.owner = currentOwner
+            case _ =>
+          }
+          super.traverse(t)
+        }
+      }
+      fixerUpper(xTree) // atPos(tree.pos)(xTree) does not achieve the same effect
+
+      xTree
     }
 
     type TreeXForm = Tree => Tree
     type ProtoTreeMaker = (List[Tree], TreeXForm => (TreeXForm /* wrap a Fun and subst variables to tuple sel on variable bound by that Fun */, TreeXForm /* just the subst */))
 
     object TreeMaker {
-      def apply(trees: List[Tree], mkFunAndSubst0: TreeXForm): TreeMaker =
-        if (trees isEmpty) new NoTreeMaker{def mkFunAndSubst(next: Tree) = mkFunAndSubst0(next)}
-        else if (trees.length == 1) new SingleTreeMaker(trees.head){def mkFunAndSubst(next: Tree) = mkFunAndSubst0(next)}
-        else new AlternativeTreeMaker(trees){def mkFunAndSubst(next: Tree) = mkFunAndSubst0(next)}
+      def apply(trees: List[Tree], mkFunAndSubst0: TreeXForm): TreeMaker = trees match {
+        case Nil => new NoTreeMaker{def mkFunAndSubst(next: Tree) = mkFunAndSubst0(next)}
+        case List(tree) => new SingleTreeMaker(tree){def mkFunAndSubst(next: Tree) = mkFunAndSubst0(next)}
+        case _ => new AlternativeTreeMaker(trees){def mkFunAndSubst(next: Tree) = mkFunAndSubst0(next)}
+      }
     }
     abstract class TreeMaker {
       // wrap a Fun (with binder x) around the next tree and do aggregated substitution (which
@@ -209,7 +208,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def Xcase(scrutSym: Symbol)(tree: Tree): Tree = {
       tree match {
         case CaseDef(pattern, guard, body) =>
-          threadSubstitution(Xpat(scrutSym)(pattern) ++ Xguard(guard))._1.foldRight(mkOne(X(body)))(_ mkFlatMap _) setPos tree.pos
+          threadSubstitution(Xpat(scrutSym)(pattern) ++ Xguard(guard))._1.foldRight(mkOne(body))(_ mkFlatMap _) setPos tree.pos
           // TODO: if we want to support a generalisation of Kotlin's patmat continue, must not hard-wire lifting into the monad (mkOne), so that user can generate failure when needed -- use implicit conversion to lift into monad on-demand
       }
     }
@@ -347,14 +346,13 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           val orig = fun.asInstanceOf[TypeTree].original
           val origSym = orig.symbol // undo rewrite performed in (5) of adapt
           val extractor = unapplyMember(origSym.filter(sym => reallyExists(unapplyMember(sym.tpe))).tpe)
-          val extractorCall = typed(mkSelect(orig, extractor), POLYmode | FUNmode, WildcardType) // can't infer types yet -- must use POLYmode (check run/virtpatmat_alts.scala) 
-          // mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+          val extractorCall = typed(mkSelect(orig, extractor), POLYmode | FUNmode, WildcardType) // can't infer types yet -- must use POLYmode (see run/virtpatmat_alts.scala) 
+            // mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
 
           // println("orig: "+ (orig, extractor, mkSelect(orig, extractor), typed(mkSelect(orig, extractor), FUNmode, WildcardType).tpe, caseClassApplyToUnapplyTp(fun.tpe)))
           // println("apply extractor: "+ (extractor, extractorCall.tpe, fun.tpe, fun.asInstanceOf[TypeTree].original.tpe, origSym))
 
           doUnapply(args, extractorCall, prevBinder, patTree.pos)
-
 
         case BoundSym(patBinder, p)          =>
           // don't generate an extractor, TreeMaker only performs the substitution patBinder --> prevBinder
@@ -378,11 +376,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           def isRef             = prevTp <:< AnyRefClass.tpe
 
           val extractor = { import CODE._
-            def genEquals(sym: Symbol): Tree = (REF(sym) MEMBER_== REF(prevBinder)) AND gen.mkIsInstanceOf(REF(prevBinder), tpe.widen, true, false)
+            def genEquals(sym: Symbol): Tree = mkEquals(sym, REF(prevBinder)) AND gen.mkIsInstanceOf(REF(prevBinder), tpe.widen, true, false)
             atPos(patTree.pos)(
               mkTypeTest(tpe, prevBinder, tpe match {
                 case ConstantType(Constant(null)) if isRef  => REF(prevBinder) OBJ_EQ NULL
-                case ConstantType(const)                    => REF(prevBinder) MEMBER_== Literal(const)
+                case ConstantType(const)                    => mkEquals(prevBinder, Literal(const))
                 case SingleType(NoPrefix, sym)              => genEquals(sym)
                 case SingleType(pre, sym) if sym.isStable   => genEquals(sym) // TODO: why is pre ignored?
                 case ThisType(sym) if sym.isModule          => genEquals(sym)
@@ -429,7 +427,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           (Nil, Nil)
 
         // case x: ArrayValue        => // SequencePattern(x)
-        // case x: Star              =>
         // case x: This              =>
 
         case _                       =>  // TODO
@@ -450,7 +447,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def Xguard(guard: Tree): List[ProtoTreeMaker] = {
       if (guard == EmptyTree) List()
       else List(
-        (List(mkGuard(X(guard))),
+        (List(mkGuard(guard)),
           { outerSubst =>
             val binder = freshSym(guard.pos) setInfo UnitClass.tpe
             (nestedTree => mkFun(binder, outerSubst(nestedTree)), outerSubst) // guard does not bind any variables, so next subst is the current one
@@ -573,11 +570,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     import CODE._
     // methods in MatchingStrategy (the monad companion)
-    def mkZero: Tree = matchStrategy DOT "zero".toTermName                                          // matchStrategy.zero
-    def mkOne(res: Tree): Tree = (matchStrategy DOT "one".toTermName)(res)                          // matchStrategy.one(res)
-    def mkOr(as: List[Tree], f: Tree): Tree = (matchStrategy DOT "or".toTermName)((f :: as): _*)    // matchStrategy.or(f, as)
-    def mkGuard(t: Tree, then: Tree = UNIT): Tree = (matchStrategy DOT "guard".toTermName)(t, then) // matchStrategy.guard(t, then)
-    def mkRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchStrategy.runOrElse(scrut)(matcher)
+    def mkZero: Tree = matchingStrategy DOT "zero".toTermName                                          // matchingStrategy.zero
+    def mkOne(res: Tree): Tree = (matchingStrategy DOT "one".toTermName)(res)                          // matchingStrategy.one(res)
+    def mkOr(as: List[Tree], f: Tree): Tree = (matchingStrategy DOT "or".toTermName)((f :: as): _*)    // matchingStrategy.or(f, as)
+    def mkGuard(t: Tree, then: Tree = UNIT): Tree = (matchingStrategy DOT "guard".toTermName)(t, then) // matchingStrategy.guard(t, then)
+    def mkRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchingStrategy.runOrElse(scrut)(matcher)
     def mkCast(expectedTp: Type, binder: Symbol): Tree = mkTypeTest(expectedTp, binder, gen.mkIsInstanceOf(REF(binder), expectedTp, true, false))
     def mkTypeTest(expectedTp: Type, binder: Symbol, check: Tree): Tree =
       mkGuard(check, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))

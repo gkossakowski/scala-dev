@@ -237,6 +237,10 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // what's the extractor's result type in the monad?
         val typeInMonad = extractorResultInMonad(extractorType)
 
+        if(typeInMonad == ErrorType) {
+          error("Unsupported extractor type: "+ extractorType)
+          return (Nil, Nil)
+        }
 
         // `patBinders` are the variables bound by this pattern in the following patterns
         // patBinders are replaced by references to the relevant part of the extractor's result (tuple component, seq element, the result as-is)
@@ -499,8 +503,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       if(res.typeSymbol == BooleanClass) UnitClass.tpe
       else {
         val monadArgs = res.baseType(matchingMonadType.typeSymbol).typeArgs
-        assert(monadArgs.length == 1, "unhandled extractor type: "+ extractorTp) // TODO: overloaded unapply
-        monadArgs(0)
+        // assert(monadArgs.length == 1, "unhandled extractor type: "+ extractorTp) // TODO: overloaded unapply??
+        if(monadArgs.length == 1) monadArgs(0)
+        else ErrorType
       }
     }
 

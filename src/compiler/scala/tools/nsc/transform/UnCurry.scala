@@ -257,7 +257,7 @@ abstract class UnCurry extends InfoTransform
         def parents =
           if (isFunctionType(fun.tpe)) List(abstractFunctionForFunctionType(fun.tpe), SerializableClass.tpe)
           else List(ObjectClass.tpe, fun.tpe, SerializableClass.tpe)
-          
+
         anonClass setInfo ClassInfoType(parents, new Scope, anonClass)
         val applyMethod = anonClass.newMethod(fun.pos, nme.apply) setFlag FINAL
         applyMethod setInfo MethodType(applyMethod newSyntheticValueParams formals, restpe)
@@ -274,27 +274,26 @@ abstract class UnCurry extends InfoTransform
           val m = anonClass.newMethod(fun.pos, nme.isDefinedAt) setFlag FINAL
           m setInfo MethodType(m newSyntheticValueParams formals, BooleanClass.tpe)
           anonClass.info.decls enter m
-          
-          (fun.body: @unchecked) match {
+          val vparam = fun.vparams.head.symbol
+          val idparam = m.paramss.head.head
+          val substParam = new TreeSymSubstituter(List(vparam), List(idparam))
+          def substTree[T <: Tree](t: T): T = substParam(resetLocalAttrs(t))
+
+          DefDef(m, (fun.body: @unchecked) match {
             case Match(selector, cases) =>
-              val vparam = fun.vparams.head.symbol
-              val idparam = m.paramss.head.head
-              val substParam = new TreeSymSubstituter(List(vparam), List(idparam))
-              def substTree[T <: Tree](t: T): T = substParam(resetLocalAttrs(t))
-          
               def transformCase(cdef: CaseDef): CaseDef =
                 substTree(CaseDef(cdef.pat.duplicate, cdef.guard.duplicate, Literal(Constant(true))))
               def defaultCase = CaseDef(Ident(nme.WILDCARD), EmptyTree, Literal(Constant(false)))
-          
-              DefDef(m, gen.mkUncheckedMatch(
+
+              gen.mkUncheckedMatch(
                 if (cases exists treeInfo.isDefaultCase) Literal(Constant(true))
                 else Match(substTree(selector.duplicate), (cases map transformCase) :+ defaultCase)
-              ))
-            case Apply(Apply(TypeApply(Select(tgt, n), targs), scrut), pm) if n == "runOrElse".toTermName =>
-              Apply(Apply(TypeApply(Select(tgt, "isSuccess".toTermName), targs), scrut), pm)
-          }
+              )
+            case Apply(Apply(TypeApply(Select(tgt, n), targs), args_scrut), args_pm) if n == "runOrElse".toTermName =>
+              substTree(Apply(Apply(TypeApply(Select(tgt.duplicate, tgt.tpe.member("isSuccess".toTermName)), targs map (_.duplicate)), args_scrut map (_.duplicate)), args_pm map (_.duplicate)))
+          })
         }
-          
+
         val members =
           if (isPartial) List(applyMethodDef, isDefinedAtMethodDef)
           else List(applyMethodDef)

@@ -102,6 +102,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         case t => t
       }
 
+      // println("before fixerupper: "+ xTree)
+      // currentRun.trackerFactory.snapshot()
       // TODO: do this during tree construction, but that will require tracking the current owner in proto treemakers
       // TODO: assign more fine-grained positions
       // fixes symbol nesting, assigns positions
@@ -134,6 +136,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         }
       }
       fixerUpper(xTree) // atPos(tree.pos)(xTree) does not achieve the same effect
+
+      // println("after fixerupper")
+      // currentRun.trackerFactory.snapshot()
 
       xTree
     }

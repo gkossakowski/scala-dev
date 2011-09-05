@@ -2051,7 +2051,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         if ((isFunctionType(pt)
              || 
              pt.typeSymbol == PartialFunctionClass && 
-             numVparams == 1 && fun.body.isInstanceOf[Match])
+             numVparams == 1 && (fun.body.isInstanceOf[Match] || {println("typedFunction: not a Match? "+ (fun.body.getClass, fun.body)); true}))
              && // see bug901 for a reason why next conditions are needed
             (pt.normalize.typeArgs.length - 1 == numVparams
              || 

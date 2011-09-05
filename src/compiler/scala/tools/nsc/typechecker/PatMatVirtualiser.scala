@@ -427,7 +427,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           case Literal(Constant(_)) | Ident(_) | Select(_, _) => // it was folly to think we can unify this with type tests
             val tpe = stabilizedType(patTree)
             val prevTp = prevBinder.info.widen
-            val accumType = intersectionType(List(prevTp, tpe))
+            val accumType = prevTp // equals need not be well-behaved, so this is unsound: intersectionType(List(prevTp, tpe))
 
             // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
             val extractor = atPos(patTree.pos)(mkTypeTest(mkEquals(prevBinder, patTree), accumType, prevBinder))

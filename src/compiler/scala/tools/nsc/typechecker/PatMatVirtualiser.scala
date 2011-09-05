@@ -517,6 +517,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
       val ts =
         if(typeInMonad.typeSymbol eq UnitClass) Nil
+        else if(nbSubPatBinders == 1) List(typeInMonad)
         else getProductArgs(typeInMonad) getOrElse List(typeInMonad)
 
       // replace last type (of shape Seq[A]) with RepeatedParam[A] so that formalTypes will

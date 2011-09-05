@@ -85,9 +85,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       *   thus, you must typecheck the result (and that will in turn translate nested matches)
       *   this could probably optimized... (but note that the matchingStrategy must be solved for each nested patternmatch)
       */
-    def X(tree: Tree): Tree = { 
+    def X(tree: Tree): Tree = {
       // we don't transform after typers
-      // (that would require much more sophistication when generating trees, 
+      // (that would require much more sophistication when generating trees,
       //  and the only place that emits Matches after typers is for exception handling anyway)
       assert(phase.id <= currentRun.typerPhase.id)
 
@@ -134,7 +134,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         }
       }
       fixerUpper(xTree) // atPos(tree.pos)(xTree) does not achieve the same effect
-      context.undetparams ++= undets
+
       xTree
     }
 
@@ -347,7 +347,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         */
       def transformPat(prevBinder: Symbol, patTree: Tree)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = patTree match {
         case UnApply(Apply(unfun, unargs), args) =>
-        // TODO: check unargs == args
+          // TODO: check unargs == args
           // println("unfun: "+ (unfun.tpe, unfun.symbol.ownerChain, unfun.symbol.info, prevBinder.info))
 
           doUnapply(args, unfun, prevBinder, patTree.pos)
@@ -361,25 +361,31 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
              (Nil, Nil)
           } else {
             val extractorSel = mkSelect(orig, extractor)
-            silent(_.typedOperator(extractorSel)) match { //_.typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)) match {
-              case extractorCall: Tree  => 
-                undets ++= extractorCall.tpe.typeParams
-                // bypass typing at own risk: val extractorCall = mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
-                // can't infer type arguments:
-                /*  case class Span[K <: Ordered[K]](low: Option[K]) {
-                      override def equals(x: Any): Boolean = x match {
-                        case Span((low0 @ _)) if low0 equals low => true
-                      }
-                    }*/
-                // so... leave undetermined type params floating around, but forego type-safe substitution when undets.nonEmpty
-                // (if we don't infer types, uninstantiated type params show up later: pos/sudoku)
-                // (see also run/virtpatmat_alts.scala) 
 
-                doUnapply(args, extractorCall, prevBinder, patTree.pos)
-              case ex =>
-               error("cannot type unapply call for "+ extractorSel +" error: "+ ex) // TODO: ErrorTree
-               (Nil, Nil)
-            }
+            // this is a tricky balance: pos/t602.scala, pos/sudoku.scala, run/virtpatmat_alts.scala must all be happy
+            // bypass typing at own risk: val extractorCall = mkSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
+            // can't always infer type arguments (pos/t602):
+            /*  case class Span[K <: Ordered[K]](low: Option[K]) {
+                  override def equals(x: Any): Boolean = x match {
+                    case Span((low0 @ _)) if low0 equals low => true
+                  }
+                }*/
+            // so... leave undetermined type params floating around if we have to, but forego type-safe substitution when undets.nonEmpty
+            // (if we don't infer types, uninstantiated type params show up later: pos/sudoku.scala)
+            // (see also run/virtpatmat_alts.scala)
+            val savedUndets = context.undetparams
+            val extractorCall = try {
+              context.undetparams = Nil
+              silent(_.typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)) match {
+                case Apply(extractorCall, _)  => extractorCall
+                case ex =>
+                 // error("cannot type unapply call for "+ extractorSel +" error: "+ ex) // TODO: ErrorTree
+                 typedOperator(extractorSel)
+              }
+            } finally context.undetparams = savedUndets
+
+            undets ++= extractorCall.tpe.typeParams // TODO: reduce to boolean that overrides unsafe in typesafe subst
+            doUnapply(args, extractorCall, prevBinder, patTree.pos)
           }
         case BoundSym(patBinder, p)          =>
           // don't generate an extractor, TreeMaker only performs the substitution patBinder --> prevBinder
@@ -583,9 +589,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           def subst(from: List[Symbol], to: List[Tree]): Tree =
             if (from.isEmpty) tree
             else if (tree.symbol == from.head) {
-              if(tree.tpe != null && tree.tpe != NoType) 
+              if(tree.tpe != null && tree.tpe != NoType)
                 typed(to.head.shallowDuplicate, EXPRmode, if(unsafe || undets.nonEmpty) WildcardType else tree.tpe.widen)
-              else 
+              else
                 to.head.shallowDuplicate
             }
             else subst(from.tail, to.tail);

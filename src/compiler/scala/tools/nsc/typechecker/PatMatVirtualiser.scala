@@ -39,6 +39,7 @@ TODO:
  - anonymous classes in scrutinee (pos/t0646)
  - existentials (pos/t1843.scala, pos/t2635.scala)
  - gadt typing (pos/gadt-gilles, pos/channels)
+ - run/t3530.scala, run/t2800.scala
 
   * (longer-term) TODO:
   *  - recover GADT typing by locally inserting implicit witnesses to type equalities derived from the current case, and considering these witnesses during subtyping (?)
@@ -250,7 +251,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // must use type `tp`, which is provided by extractor's result, not the type expected by binder,
         // as b.info may be based on a Typed type ascription, which has not been taken into account yet by the translation
         // (it will later result in a type test when `tp` is not a subtype of `b.info`)
-        (patBinders, subPatTypes).zipped foreach { case (b, tp) => b setInfo tp } // println("changing "+ b +" : "+ b.info +" -> "+ tp); 
+        (patBinders, subPatTypes).zipped foreach { case (b, tp) => b setInfo tp } // println("changing "+ b +" : "+ b.info +" -> "+ tp);
 
         val extractorParamType = extractorType.paramTypes.head
 
@@ -342,10 +343,15 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             case BoundSym(patBinder, Typed(expr, tpt)) => Some((patBinder, tpt))
             case Bind(_, Typed(expr, tpt)) => Some((prevBinder, tpt))
             case Typed(expr, tpt) =>  Some((prevBinder, tpt))
+            case Ident(_) | Select(_, _) | Literal(Constant(_)) =>
+              val tp = stabilizedType(tree)
+              assert(tp ne null)
+              assert(tp.isStable)
+              Some((prevBinder, TypeTree() setType tp)) // this will generate an equality check for Constants, for example
             case _ => None
           }
         }
-      
+
         patTree match {
           case UnApply(Apply(unfun, unargs), args) =>
             // TODO: check unargs == args
@@ -393,23 +399,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             val tpe = tpt.tpe // TODO: handle Binds nested in tpt
             val prevTp = prevBinder.info.widen
             val accumType = intersectionType(List(prevTp, tpe))
-            def isMatchUnlessNull = prevTp <:< tpe && (tpe <:< AnyRefClass.tpe)
-            def isRef             = prevTp <:< AnyRefClass.tpe
 
-            // println("TYPED(prevBinder, prevTp, tpe, isMatchUnlessNull): "+(prevBinder, prevTp, tpe, isMatchUnlessNull))
-
-            val extractor = { import CODE._
-              def genEquals(sym: Symbol): Tree = mkEquals(sym, REF(prevBinder)) AND gen.mkIsInstanceOf(REF(prevBinder), tpe.widen, true, false)
-              atPos(patTree.pos)(
-                mkTypeTest(accumType, prevBinder, tpe match {
-                  case ConstantType(Constant(null)) if isRef  => REF(prevBinder) OBJ_EQ NULL
-                  case ConstantType(const)                    => mkEquals(prevBinder, Literal(const))
-                  case SingleType(NoPrefix, sym)              => genEquals(sym)
-                  case SingleType(pre, sym) if sym.isStable   => genEquals(sym) // TODO: why is pre ignored?
-                  case ThisType(sym) if sym.isModule          => genEquals(sym)
-                  case _ if isMatchUnlessNull                 => REF(prevBinder) OBJ_NE NULL
-                  case _                                      => gen.mkIsInstanceOf(REF(prevBinder), tpe, true, false)
-                }))}
+            val extractor = atPos(patTree.pos)(mkTypeTest(mkTypeDerivedTest(prevBinder, prevTp, tpe), accumType, prevBinder))
 
             res += singleBinderProtoTreeMakerWithTp(patBinder, accumType, unsafe = true, extractor)
 
@@ -431,12 +422,13 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             (List(patBinder), List(p))
           case Bind(n, p) => (Nil, Nil) // there's no symbol -- something wrong?
 
-          case Literal(Constant(_)) | Ident(_) | Select(_, _) =>
-            res += singleBinderProtoTreeMaker(prevBinder, atPos(patTree.pos)(
-                      mkGuard(mkEquals(prevBinder, patTree),
-                              CODE.REF(prevBinder) setType prevBinder.info)))
-
-            (Nil, Nil)
+          // handled by MaybeBoundType
+          // case Literal(Constant(_)) | Ident(_) | Select(_, _) =>
+          //   res += singleBinderProtoTreeMaker(prevBinder, atPos(patTree.pos)(
+          //             mkGuard(mkEquals(prevBinder, patTree), // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
+          //                     CODE.REF(prevBinder) setType prevBinder.info)))
+          //
+          //   (Nil, Nil)
 
           // case Star(x)              => // no need to handle this because it's always a wildcard nested in a bind (?)
           //   println("star: "+ (x, x.getClass))
@@ -494,7 +486,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
 // tree exegesis, rephrasing everything in terms of extractors
-
     def extractorResultInMonad(extractorTp: Type): Type = {
       val res = extractorTp.finalResultType
       if(res.typeSymbol == BooleanClass) UnitClass.tpe
@@ -542,22 +533,33 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       (subPatTypes, subPatRefs)
     }
 
+    // generate the tree for the run-time test that follows from the fact that
+    // a `scrut` of known type `scrutTp` is expected to have type `expectedTp`
+    def mkTypeDerivedTest(scrut: Symbol, scrutTp: Type, expectedTp: Type): Tree = { import CODE._
+      def isMatchUnlessNull = scrutTp <:< expectedTp && (expectedTp <:< AnyRefClass.tpe)
+      def isRef             = scrutTp <:< AnyRefClass.tpe
+      // println("TYPED(scrut, scrutTp, expectedTp, isMatchUnlessNull): "+(scrut, scrutTp, expectedTp, isMatchUnlessNull))
+      def genEquals(sym: Symbol): Tree = mkEquals(scrut, REF(sym)) AND gen.mkIsInstanceOf(REF(scrut), expectedTp.widen, true, false)
+      expectedTp match {
+          case ConstantType(Constant(null)) if isRef  => REF(scrut) OBJ_EQ NULL
+          case ConstantType(const)                    => mkEquals(scrut, Literal(const))
+          case SingleType(NoPrefix, sym)              => genEquals(sym)
+          case SingleType(pre, sym) if sym.isStable   => genEquals(sym) // TODO: why is pre ignored?
+          case ThisType(sym) if sym.isModule          => genEquals(sym)
+          case _ if isMatchUnlessNull                 => REF(scrut) OBJ_NE NULL
+          case _                                      => gen.mkIsInstanceOf(REF(scrut), expectedTp, true, false)
+        }
+    }
 
-    // not needed: now typing the unapply call
-    // inverse of monadTypeToSubPatTypes(extractorResultInMonad(_))
-    // minus the padding of repeated args for unapplySeq (TODO?)
-    // def subPatTypesToExtractorResultType(tps: List[Type]): Type = {
-    //   tps match {
-    //     case Nil => BooleanClass.tpe
-    //     case List(x) => optionType(x)
-    //     case xs => optionType(tupleType(xs))
-    //   }
-    // }
-    // def caseClassApplyToUnapplyTp(tp: Type) = {
-    //   val dummyMethod = new TermSymbol(NoSymbol, NoPosition, "$dummy")
-    //   val resTp = subPatTypesToExtractorResultType(tp.paramTypes)
-    //   MethodType(List(dummyMethod newSyntheticValueParam(tp.finalResultType)), if(tp.paramTypes nonEmpty) resTp else BooleanClass.tpe)
-    // }
+    def stabilizedType(tree: Tree): Type = tree match {
+      case Ident(_) if tree.symbol.isStable =>
+        singleType(NoPrefix, tree.symbol)
+      case Select(qual, _) if qual.tpe != null && tree.symbol.isStable =>
+        singleType(qual.tpe, tree.symbol)
+      case Literal(c@Constant(_)) =>
+        ConstantType(c)
+      case _ => null
+    }
 
     /** A conservative approximation of which patterns do not discern anything.
       * A corrolary of this is that they do not entail any variable binding.
@@ -617,9 +619,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def mkOr(as: List[Tree], f: Tree): Tree = (matchingStrategy DOT "or".toTermName)((f :: as): _*)    // matchingStrategy.or(f, as)
     def mkGuard(t: Tree, then: Tree = UNIT): Tree = (matchingStrategy DOT "guard".toTermName)(t, then) // matchingStrategy.guard(t, then)
     def mkRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchingStrategy.runOrElse(scrut)(matcher)
-    def mkCast(expectedTp: Type, binder: Symbol): Tree = mkTypeTest(expectedTp, binder, gen.mkIsInstanceOf(REF(binder), expectedTp, true, false))
-    def mkTypeTest(expectedTp: Type, binder: Symbol, check: Tree): Tree =
-      mkGuard(check, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
+    def mkCast(expectedTp: Type, binder: Symbol): Tree = mkTypeTest(gen.mkIsInstanceOf(REF(binder), expectedTp, true, false), expectedTp, binder) // TODO: use mkTypeDerivedTest(binder, binder.info.widen, expectedTp) instead of gen.mkIsInstanceOf?
+    def mkTypeTest(cond: Tree, expectedTp: Type, binder: Symbol): Tree = mkGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
 
 
     // methods in the monad instance
@@ -633,6 +634,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def mkIndex(tgt: Tree)(i: Int): Tree = tgt APPLY (LIT(i))
     def mkDrop(tgt: Tree)(n: Int): Tree = (tgt DOT "drop".toTermName) (LIT(n))
     def mkTupleSel(binder: Symbol)(i: Int): Tree = (REF(binder) DOT ("_"+i).toTermName) // make tree that accesses the i'th component of the tuple referenced by binder
-    def mkEquals(binder: Symbol, other: Tree): Tree = REF(binder) MEMBER_== other
+    def mkEquals(binder: Symbol, checker: Tree): Tree = checker MEMBER_== REF(binder) // NOTE: checker must be the target of the ==, that's the patmat semantics for ya
   }
 }

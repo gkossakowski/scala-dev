@@ -34,16 +34,10 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - unknown:
-    - pos/t1059.scala
-    - pos/unapplySeq.scala
-    - pos/t3972.scala
-    - pos/t3856.scala
-    - pos/t2691.scala
  - run/t3530.scala, run/t2800.scala
- - xml matching: run/t2276.scala
  - crash: run/unapply, run/t576, run/patmatnew
  - Bind nested in Typed's tpe (such as in pos/t1439 `case v: View[_] =>`)
+ - xml matching: run/t2276.scala
  - anonymous classes in scrutinee (pos/t0646)
  - existentials (pos/t1843.scala, pos/t2635.scala)
  - gadt typing (pos/gadt-gilles, pos/channels)
@@ -253,7 +247,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
         // the types for the binders corresponding to my subpatterns
         // subPatTypes != args map (_.tpe) since the args may have more specific types than the constructor's parameter types
-        val (subPatTypes, subPatRefs) = monadTypeToSubPatTypesAndRefs(typeInMonad, isSeq, args, patBinders)
+        val (subPatTypes, subPatRefs, lenGuard) = monadTypeToSubPatTypesAndRefs(typeInMonad, isSeq, args, patBinders)
 
         // must use type `tp`, which is provided by extractor's result, not the type expected by binder,
         // as b.info may be based on a Typed type ascription, which has not been taken into account yet by the translation
@@ -262,7 +256,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
         val extractorParamType = extractorType.paramTypes.head
 
-        // println("doUnapply (subPatTypes, typeInMonad, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType) =\n"+(subPatTypes, typeInMonad, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType))
+        // println("doUnapply (subPatTypes, typeInMonad, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType) =\n"+
+        //   (subPatTypes, typeInMonad, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType))
 
         // println("doUnapply checking parameter type: "+ (prevBinder, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType))
         // example check: List[Int] <:< ::[Int]
@@ -282,24 +277,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           } else prevBinder
 
 
-        def unapplySeqLengthGuard = { import CODE._
-          val hasStar = (args.nonEmpty && treeInfo.isStar(args.last))
-          // the method call symbol
-          val methodOp: Symbol                = extractorParamType member nme.lengthCompare
-
-          // the comparison to perform.  If the pivot is right ignoring, then a scrutinee sequence
-          // of >= pivot length could match it; otherwise it must be exactly equal.
-          val compareOp: (Tree, Tree) => Tree = if (hasStar) _ INT_>= _ else _ INT_== _
-
-          // scrutinee.lengthCompare(pivotLength) [== | >=] 0
-          val compareFn: Tree => Tree         = (t: Tree) => compareOp((t DOT methodOp)(LIT(if(hasStar) args.length - 1 else args.length)), ZERO)
-
-          // wrapping in a null check on the scrutinee
-          Xguard(nullSafe(compareFn, FALSE)(REF(prevBinderOrCasted)))
-        }
-
-        if(isSeq) res ++= unapplySeqLengthGuard
-
         // the extractor call (applied to the binder bound by the flatMap corresponding to the previous (i.e., enclosing/outer) pattern)
         val extractorApply = atPos(pos)(mkApply(extractorCall, prevBinderOrCasted))
         val patTree =
@@ -312,14 +289,14 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           if(patBinders isEmpty)
             { outerSubst: TreeXForm =>
                 val binder = freshSym(patTree.pos, typeInMonad) // UnitClass.tpe is definitely wrong when isSeq, and typeInMonad should always be correct since it comes directly from the extractor's result type
-                (nestedTree => mkFun(binder, outerSubst(nestedTree)), outerSubst)
+                (nestedTree => mkFun(binder, lenGuard(binder, outerSubst(nestedTree))), outerSubst)
             }
           else
             { outerSubst: TreeXForm =>
                 val binder = freshSym(patTree.pos, typeInMonad)
                 val theSubst = mkTypedSubst(patBinders, subPatRefs(binder))
                 def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
-                (nestedTree => mkFun(binder, nextSubst(nestedTree)), nextSubst)
+                (nestedTree => mkFun(binder, lenGuard(binder, nextSubst(nestedTree))), nextSubst)
             })
 
         sub
@@ -502,7 +479,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
     // require(patBinders.nonEmpty)
-    def monadTypeToSubPatTypesAndRefs(typeInMonad: Type, isSeq: Boolean, subPats: List[Tree], subPatBinders: List[Symbol]): (List[Type], Symbol => List[Tree]) = {
+    def monadTypeToSubPatTypesAndRefs(typeInMonad: Type, isSeq: Boolean, subPats: List[Tree], subPatBinders: List[Symbol]): (List[Type], Symbol => List[Tree], (Symbol, Tree) => Tree) = {
       val nbSubPatBinders = subPatBinders.length
       val lastIsStar = subPats.nonEmpty && treeInfo.isStar(subPats.last)
       val nbSubPats = subPats.length
@@ -523,18 +500,37 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       // only relevant if isSeq: (here to avoid capturing too much in the returned closure)
       val firstIndexingBinder = ts.length - 1 // ts.last is the Seq, thus there are `ts.length - 1` non-seq elements in the tuple
       val lastIndexingBinder = if(lastIsStar) nbSubPatBinders-2 else nbSubPatBinders-1
+      def seqTree(binder: Symbol): Tree = if(firstIndexingBinder == 0) CODE.REF(binder) else mkTupleSel(binder)(firstIndexingBinder+1)
+      def seqTpe = ts.last
 
       def subPatRefs(binder: Symbol): List[Tree] =
         (if(isSeq) {
-          val seqTree: Tree = if(firstIndexingBinder == 0) CODE.REF(binder) else mkTupleSel(binder)(firstIndexingBinder+1)
           ((1 to firstIndexingBinder) map mkTupleSel(binder)) ++  // there are `firstIndexingBinder` non-seq tuple elements preceding the Seq
-          ((firstIndexingBinder to lastIndexingBinder) map mkIndex(seqTree)) ++  // then we have to index the binder that represents the sequence for the remaining subpatterns, except for...
-          ((lastIndexingBinder+1 to nbSubPatBinders-1) map {n => if(n == 0) seqTree else mkDrop(seqTree)(n)}) // the last one -- if the last subpattern is a sequence wildcard: drop the prefix (indexed by the refs on the line above), return the remainder
+          ((firstIndexingBinder to lastIndexingBinder) map mkIndex(seqTree(binder))) ++  // then we have to index the binder that represents the sequence for the remaining subpatterns, except for...
+          ((lastIndexingBinder+1 to nbSubPatBinders-1) map {n => if(n == 0) seqTree(binder) else mkDrop(seqTree(binder))(n)}) // the last one -- if the last subpattern is a sequence wildcard: drop the prefix (indexed by the refs on the line above), return the remainder
         }
         else if(nbSubPatBinders == 1) List(CODE.REF(binder))
         else ((1 to nbSubPatBinders) map mkTupleSel(binder))).toList
 
-      (subPatTypes, subPatRefs)
+      // len may still be -1 even if isSeq
+      val len = if(!isSeq) -1 else lastIndexingBinder - firstIndexingBinder + 1
+      def unapplySeqLengthGuard(binder: Symbol, then: Tree) = { import CODE._
+        // the method call symbol
+        def methodOp: Symbol                = seqTpe member nme.lengthCompare
+
+        // the comparison to perform.  If the pivot is right ignoring, then a scrutinee sequence
+        // of >= pivot length could match it; otherwise it must be exactly equal.
+        def compareOp: (Tree, Tree) => Tree = if (lastIsStar) _ INT_>= _ else _ INT_== _
+
+        // scrutinee.lengthCompare(pivotLength) [== | >=] 0
+        def lenOk                        = compareOp((seqTree(binder) DOT methodOp)(LIT(len)), ZERO)
+
+        // wrapping in a null check on the scrutinee
+        if(len >= 0) IF ((seqTree(binder) ANY_!= NULL) AND lenOk) THEN then ELSE mkZero
+        else then
+      }
+
+      (subPatTypes, subPatRefs, unapplySeqLengthGuard)
     }
 
     // generate the tree for the run-time test that follows from the fact that

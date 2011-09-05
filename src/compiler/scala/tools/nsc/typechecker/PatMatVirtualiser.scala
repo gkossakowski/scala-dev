@@ -34,12 +34,20 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - unapplySeq length
+ - NoSymbol does not have owner: pos/t0301-pos.log, pos/pat_iuli-pos.log, pos/unapplyContexts2-pos.log
+ - unknown:
+    - pos/t1059.scala
+    - pos/unapplySeq.scala
+    - pos/t3972.scala
+    - pos/t3856.scala
+    - pos/t2691.scala
+ - run/t3530.scala, run/t2800.scala
+ - xml matching: run/t2276.scala
+ - crash: run/unapply, run/t576, run/patmatnew
  - Bind nested in Typed's tpe (such as in pos/t1439 `case v: View[_] =>`)
  - anonymous classes in scrutinee (pos/t0646)
  - existentials (pos/t1843.scala, pos/t2635.scala)
  - gadt typing (pos/gadt-gilles, pos/channels)
- - run/t3530.scala, run/t2800.scala
 
   * (longer-term) TODO:
   *  - recover GADT typing by locally inserting implicit witnesses to type equalities derived from the current case, and considering these witnesses during subtyping (?)

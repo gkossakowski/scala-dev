@@ -321,7 +321,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         res += Pair(List(patTree),
           if(patBinders isEmpty)
             { outerSubst: TreeXForm =>
-                val binder = freshSym(patTree.pos) setInfo UnitClass.tpe
+                val binder = freshSym(patTree.pos) setInfo typeInMonad // UnitClass.tpe is definitely wrong when isSeq, and typeInMonad should always be correct since it comes directly from the extractor's result type
                 (nestedTree => mkFun(binder, outerSubst(nestedTree)), outerSubst)
             }
           else
@@ -526,6 +526,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         formalTypes(ts.init :+ typeRef(pre, RepeatedParamClass, args), nbSubPats)
       } else ts
 
+      // println("subPatTypes (typeInMonad, isSeq, nbSubPats, ts, subPatTypes)= "+(typeInMonad, isSeq, nbSubPats, ts, subPatTypes))
       // only relevant if isSeq: (here to avoid capturing too much in the returned closure)
       val firstIndexingBinder = ts.length - 1 // ts.last is the Seq, thus there are `ts.length - 1` non-seq elements in the tuple
       val lastIndexingBinder = if(lastIsStar) nbSubPatBinders-2 else nbSubPatBinders-1

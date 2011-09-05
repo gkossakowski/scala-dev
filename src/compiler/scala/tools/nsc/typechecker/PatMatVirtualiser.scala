@@ -85,7 +85,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       *   thus, you must typecheck the result (and that will in turn translate nested matches)
       *   this could probably optimized... (but note that the matchingStrategy must be solved for each nested patternmatch)
       */
-    def X(tree: Tree): Tree = {
+    def X(tree: Tree, pt: Type): Tree = {
       // we don't transform after typers
       // (that would require much more sophistication when generating trees,
       //  and the only place that emits Matches after typers is for exception handling anyway)
@@ -98,7 +98,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           val scrutSym = freshSym(tree.pos) setInfo scrutType
           mkRunOrElse(scrut,
                       mkFun(scrutSym,
-                            ((cases map Xcase(scrutSym)) ++ List(mkZero)) reduceLeft mkOrElse))
+                            ((cases map Xcase(scrutSym)) ++ List(mkZero)) reduceLeft mkTypedOrElse(appliedType(matchingMonadType, List(pt))))) // need to propagate pt explicitly, type inferencer can't handle it
         case t => t
       }
 
@@ -626,7 +626,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     // methods in the monad instance
     def mkFlatMap(a: Tree, b: Tree): Tree = (a DOT "flatMap".toTermName)(b)
-    def mkOrElse(thisCase: Tree, elseCase: Tree): Tree = (thisCase DOT "orElse".toTermName)(elseCase)
+    def mkTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree = (Typed(thisCase, TypeTree(pt)) DOT "orElse".toTermName)(Typed(elseCase, TypeTree(pt)))
 
     // misc
     def mkApply(fun: Tree, arg: Symbol): Tree = fun APPLY REF(arg)

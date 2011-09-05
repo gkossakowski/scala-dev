@@ -3245,9 +3245,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val ids = for (p <- params) yield Ident(p.name)
           val selector1 = atPos(tree.pos.focusStart) { if (arity == 1) ids.head else gen.mkTuple(ids) }
           val body = treeCopy.Match(tree, selector1, cases)
-          // don't run translator after typers (see comments in PatMatVirtualiser)
-          val bodyX = if(phase.id <= currentRun.typerPhase.id) translator.X(body) else body
-          typed1(atPos(tree.pos) { Function(params, bodyX) }, mode, pt)
+          typed1(atPos(tree.pos) { Function(params, body) }, mode, pt)
         } else {
           val selector1 = checkDead(typed(selector, EXPRmode | BYVALmode, WildcardType))
           var cases1 = typedCases(tree, cases, selector1.tpe.widen, pt)
@@ -3256,7 +3254,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             cases1 = cases1 map (adaptCase(_, owntype))
           }
           if(phase.id <= currentRun.typerPhase.id) // don't run translator after typers (see comments in PatMatVirtualiser)
-            typed1(translator.X(treeCopy.Match(tree, selector1, cases1)), mode, owntype) // setType owntype
+            typed1(translator.X(treeCopy.Match(tree, selector1, cases1), owntype), mode, owntype) // setType owntype
           else
             treeCopy.Match(tree, selector1, cases1) setType owntype
         }

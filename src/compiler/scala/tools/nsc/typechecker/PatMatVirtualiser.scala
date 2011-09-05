@@ -34,7 +34,6 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - NoSymbol does not have owner: pos/t0301-pos.log, pos/pat_iuli-pos.log, pos/unapplyContexts2-pos.log
  - unknown:
     - pos/t1059.scala
     - pos/unapplySeq.scala
@@ -351,11 +350,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             case BoundSym(patBinder, Typed(expr, tpt)) => Some((patBinder, tpt))
             case Bind(_, Typed(expr, tpt)) => Some((prevBinder, tpt))
             case Typed(expr, tpt) =>  Some((prevBinder, tpt))
-            case Ident(_) | Select(_, _) | Literal(Constant(_)) =>
-              val tp = stabilizedType(tree)
-              assert(tp ne null)
-              assert(tp.isStable)
-              Some((prevBinder, TypeTree() setType tp)) // this will generate an equality check for Constants, for example
             case _ => None
           }
         }
@@ -430,13 +424,15 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             (List(patBinder), List(p))
           case Bind(n, p) => (Nil, Nil) // there's no symbol -- something wrong?
 
-          // handled by MaybeBoundType
-          // case Literal(Constant(_)) | Ident(_) | Select(_, _) =>
-          //   res += singleBinderProtoTreeMaker(prevBinder, atPos(patTree.pos)(
-          //             mkGuard(mkEquals(prevBinder, patTree), // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
-          //                     CODE.REF(prevBinder) setType prevBinder.info)))
-          //
-          //   (Nil, Nil)
+          case Literal(Constant(_)) | Ident(_) | Select(_, _) => // it was folly to think we can unify this with type tests
+            val tpe = stabilizedType(patTree)
+            val prevTp = prevBinder.info.widen
+            val accumType = intersectionType(List(prevTp, tpe))
+
+            // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
+            val extractor = atPos(patTree.pos)(mkTypeTest(mkEquals(prevBinder, patTree), accumType, prevBinder))
+            res += singleBinderProtoTreeMakerWithTp(prevBinder, accumType, unsafe = false, extractor)
+            (Nil, Nil)
 
           // case Star(x)              => // no need to handle this because it's always a wildcard nested in a bind (?)
           //   println("star: "+ (x, x.getClass))

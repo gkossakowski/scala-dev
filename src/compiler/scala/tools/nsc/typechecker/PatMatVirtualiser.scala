@@ -34,7 +34,7 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - crash: run/t576, run/patmatnew
+ - outer-path equality (part of patmatnew)
 jvm/t560bis.scala, jvm/unittest_xml.scala, jvm/xml02.scala
 
  - Bind nested in Typed's tpe (such as in pos/t1439 `case v: View[_] =>`)
@@ -514,7 +514,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       def subPatRefs(binder: Symbol): List[Tree] =
         (if(isSeq) {
           ((1 to firstIndexingBinder) map mkTupleSel(binder)) ++  // there are `firstIndexingBinder` non-seq tuple elements preceding the Seq
-          ((firstIndexingBinder to lastIndexingBinder) map mkIndex(seqTree(binder))) ++  // then we have to index the binder that represents the sequence for the remaining subpatterns, except for...
+          ((firstIndexingBinder to lastIndexingBinder) map {i => mkIndex(seqTree(binder))(i-firstIndexingBinder)}) ++  // then we have to index the binder that represents the sequence for the remaining subpatterns, except for...
           ((lastIndexingBinder+1 to nbSubPatBinders-1) map {n => if(n == 0) seqTree(binder) else mkDrop(seqTree(binder))(n)}) // the last one -- if the last subpattern is a sequence wildcard: drop the prefix (indexed by the refs on the line above), return the remainder
         }
         else if(nbSubPatBinders == 1) List(CODE.REF(binder))

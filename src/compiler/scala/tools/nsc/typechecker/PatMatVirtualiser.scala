@@ -553,8 +553,10 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           case ConstantType(Constant(null)) if isRef  => REF(scrut) OBJ_EQ NULL
           case ConstantType(const)                    => mkEquals(scrut, Literal(const))
           case SingleType(NoPrefix, sym)              => genEquals(sym)
-          case SingleType(pre, sym) if sym.isStable   => genEquals(sym) // TODO: why is pre ignored?
+          case SingleType(pre, sym) if sym.isStable   =>
+            genEquals(sym) // TODO: why is pre ignored?
           case ThisType(sym) if sym.isModule          => genEquals(sym)
+          case ThisType(sym)                          => REF(scrut) OBJ_EQ This(sym) // TODO: this matches the actual pattern matcher, but why not use equals as in the object case above? (see run/t576)
           case _ if isMatchUnlessNull                 => REF(scrut) OBJ_NE NULL
           case _                                      => gen.mkIsInstanceOf(REF(scrut), expectedTp, true, false)
         }

@@ -229,7 +229,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
     def Xpat(scrutSym: Symbol)(pattern: Tree): List[ProtoTreeMaker] = {
-      def doUnapply(args: List[Tree], extractorCall: Tree, prevBinder: Symbol, pos: Position)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
+      def doUnapply(args: List[Tree], extractorCall: Tree, prevBinder: Symbol, pos: Position, outerCheck: Option[Tree] = None)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
         assert((extractorCall.tpe ne null) && (extractorCall.tpe ne NoType) && (extractorCall.tpe ne ErrorType), "args: "+ args +" extractorCall: "+ extractorCall)
         val extractorType = extractorCall.tpe
         val isSeq = extractorCall.symbol.name == nme.unapplySeq
@@ -267,19 +267,21 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // example check: List[Int] <:< ::[Int]
         // TODO: extractorParamType may contain unbound type params (run/t2800, run/t3530)
         val prevBinderOrCasted =
-          if(!(prevBinder.info.widen <:< extractorParamType)) {
+          if(!(prevBinder.info.widen <:< extractorParamType)) { import CODE._
             val castedBinder = freshSym(pos, extractorParamType, "cp")
-            val castTree = genCast(extractorParamType, prevBinder) // cast (with failure expressed using the monad)
+            // cast
+            val condTp = gen.mkIsInstanceOf(REF(prevBinder), extractorParamType, true, false)
+            val cond = outerCheck map (_ AND condTp) getOrElse condTp
+
             // chain a cast before the actual extractor call
             // we control which binder is used in the nested tree (patTree -- created below), so no need to substitute
-            res += (List(castTree),
+            res += (List(genTypedGuard(cond, extractorParamType, prevBinder)),
                       { outerSubst: TreeXForm =>
                           (nestedTree => genFun(castedBinder,outerSubst(nestedTree)), outerSubst)
                       })
 
             castedBinder
           } else prevBinder
-
 
         // the extractor call (applied to the binder bound by the flatMap corresponding to the previous (i.e., enclosing/outer) pattern)
         val extractorApply = atPos(pos)(genApply(extractorCall, prevBinderOrCasted))
@@ -356,6 +358,12 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                error("cannot find unapply member for "+ fun +" with args "+ args) // TODO: ErrorTree
                (Nil, Nil)
             } else {
+              // println("needs outer test? "+(needsOuterTest(patTree.tpe, prevBinder.info, context.owner), patTree.tpe, prevBinder, prevBinder.info, context.owner))
+              val outerCheck =
+                if (needsOuterTest(patTree.tpe, prevBinder.info, context.owner)) { import CODE._
+                  Some(genOuterCheck(prevBinder, patTree.tpe))
+                } else None
+
               val extractorSel = genSelect(orig, extractor)
 
               // this is a tricky balance: pos/t602.scala, pos/sudoku.scala, run/virtpatmat_alts.scala must all be happy
@@ -373,7 +381,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               val extractorCall = try {
                 context.undetparams = Nil
                 silent(_.typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)) match {
-                  case Apply(extractorCall, _)  => 
+                  case Apply(extractorCall, _)  =>
                     unwrapExtractorApply(extractorCall)(extractor)
                   case ex =>
                    // error("cannot type unapply call for "+ extractorSel +" error: "+ ex) // TODO: ErrorTree
@@ -382,15 +390,22 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               } finally context.undetparams = savedUndets
 
               overrideUnsafe ||= extractorCall.tpe.typeParams.nonEmpty // all bets are off when you have unbound type params floating around
-              doUnapply(args, extractorCall, prevBinder, patTree.pos)
+              doUnapply(args, extractorCall, prevBinder, patTree.pos, outerCheck)
             }
 
           case MaybeBoundTyped(patBinder, tpt) => // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
-            val tpe = tpt.tpe // TODO: handle Binds nested in tpt
+            val tpe = tpt.tpe // TODO: handle Binds nested in tpt (spec: 8.2 Type Patterns)
             val prevTp = prevBinder.info.widen
             val accumType = intersectionType(List(prevTp, tpe))
 
-            val extractor = atPos(patTree.pos)(genTypedGuard(genTypeDirectedEquals(prevBinder, prevTp, tpe), accumType, prevBinder))
+            val condTp = genTypeDirectedEquals(prevBinder, prevTp, tpe)
+            // println("needs outer test? "+(needsOuterTest(tpe, prevBinder.info, context.owner), (tpe, prevBinder.info, context.owner)))
+            val cond =
+              if (needsOuterTest(tpe, prevBinder.info, context.owner)) { import CODE._
+                genOuterCheck(prevBinder, tpe) AND condTp
+              } else condTp
+
+            val extractor = atPos(patTree.pos)(genTypedGuard(cond, accumType, prevBinder))
 
             res += singleBinderProtoTreeMakerWithTp(patBinder, accumType, unsafe = true, extractor)
 
@@ -414,10 +429,18 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
           case Literal(Constant(_)) | Ident(_) | Select(_, _) => // it was folly to think we can unify this with type tests
             val prevTp = prevBinder.info.widen
+            val tpe = patTree.tpe
+
+            val condEq = genEquals(prevBinder, patTree)
+            // println("needs outer test? "+(needsOuterTest(tpe, prevBinder.info, context.owner), tpe.prefix, (tpe, prevBinder.info, context.owner)))
+            val cond =
+              if (needsOuterTest(tpe, prevBinder.info, context.owner)) { import CODE._
+                genOuterCheck(prevBinder, tpe) AND condEq
+              } else condEq
 
             // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
             // equals need not be well-behaved, so don't intersect with pattern's (stabilized) type (unlike MaybeBoundTyped's accumType, where its required)
-            val extractor = atPos(patTree.pos)(genTypedGuard(genEquals(prevBinder, patTree), prevTp, prevBinder))
+            val extractor = atPos(patTree.pos)(genTypedGuard(cond, prevTp, prevBinder))
 
             res += singleBinderProtoTreeMakerWithTp(prevBinder, prevTp, unsafe = false, extractor)
 
@@ -510,7 +533,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       val firstIndexingBinder = ts.length - 1 // ts.last is the Seq, thus there are `ts.length - 1` non-seq elements in the tuple
       val lastIndexingBinder = if(lastIsStar) nbSubPatBinders-2 else nbSubPatBinders-1
       def seqTree(binder: Symbol): Tree = if(firstIndexingBinder == 0) CODE.REF(binder) else genTupleSel(binder)(firstIndexingBinder+1)
-      def seqTpe = ts.last
+      def seqLenCmp = ts.last member nme.lengthCompare
 
       def subPatRefs(binder: Symbol): List[Tree] =
         (if(isSeq) {
@@ -524,19 +547,17 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       // len may still be -1 even if isSeq
       val len = if(!isSeq) -1 else lastIndexingBinder - firstIndexingBinder + 1
       def unapplySeqLengthGuard(binder: Symbol, then: Tree) = { import CODE._
-        // the method call symbol
-        def methodOp: Symbol                = seqTpe member nme.lengthCompare
-
         // the comparison to perform.  If the pivot is right ignoring, then a scrutinee sequence
         // of >= pivot length could match it; otherwise it must be exactly equal.
         def compareOp: (Tree, Tree) => Tree = if (lastIsStar) _ INT_>= _ else _ INT_== _
 
         // scrutinee.lengthCompare(pivotLength) [== | >=] 0
-        def lenOk                        = compareOp((seqTree(binder) DOT methodOp)(LIT(len)), ZERO)
+        def lenOk                        = compareOp( (seqTree(binder) DOT seqLenCmp)(LIT(len)), ZERO )
 
         // wrapping in a null check on the scrutinee
         // only check if minimal length is non-trivially satisfied
-        if(len >= (if(lastIsStar) 1 else 0)) IF ((seqTree(binder) ANY_!= NULL) AND lenOk) THEN then ELSE genZero
+        val minLenToCheck = if(lastIsStar) 1 else 0
+        if (len >= minLenToCheck) IF ((seqTree(binder) ANY_!= NULL) AND lenOk) THEN then ELSE genZero
         else then
       }
 
@@ -548,20 +569,33 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genTypeDirectedEquals(scrut: Symbol, scrutTp: Type, expectedTp: Type): Tree = { import CODE._
       def isMatchUnlessNull = scrutTp <:< expectedTp && (expectedTp <:< AnyRefClass.tpe)
       def isRef             = scrutTp <:< AnyRefClass.tpe
-      def genEqualsAndInstanceOf(sym: Symbol): Tree 
+      def genEqualsAndInstanceOf(sym: Symbol): Tree
         = genEquals(scrut, REF(sym)) AND gen.mkIsInstanceOf(REF(scrut), expectedTp.widen, true, false)
 
       expectedTp match {
           case ConstantType(Constant(null)) if isRef  => REF(scrut) OBJ_EQ NULL
           case ConstantType(const)                    => genEquals(scrut, Literal(const))
-          case SingleType(NoPrefix, sym)              => genEqualsAndInstanceOf(sym)
-          case SingleType(pre, sym) if sym.isStable   =>
-            genEqualsAndInstanceOf(sym) // TODO: why is pre ignored?
+// TODO: align with spec -- the cases below implement what the full pattern matcher does, not the spec
+// A singleton type p.type. This type pattern matches only the value denoted by the path p
+// [...] comparison of the matched value with p using method eq in class AnyRef
+          case SingleType(_, sym) => assert(sym.isStable); genEqualsAndInstanceOf(sym) // pre is checked elsewhere (genOuterCheck)
           case ThisType(sym) if sym.isModule          => genEqualsAndInstanceOf(sym)
           case ThisType(sym)                          => REF(scrut) OBJ_EQ This(sym) // TODO: this matches the actual pattern matcher, but why not use equals as in the object case above? (see run/t576)
           case _ if isMatchUnlessNull                 => REF(scrut) OBJ_NE NULL
           case _                                      => gen.mkIsInstanceOf(REF(scrut), expectedTp, true, false)
         }
+    }
+
+    /** adds a test comparing the dynamic outer to the static outer */
+    def genOuterCheck(scrut: Symbol, expectedTp: Type): Tree = { import CODE._
+      val expectedPrefix = expectedTp.prefix match {
+        case ThisType(clazz)  => THIS(clazz)
+        case pre              => REF(pre.prefix, pre.termSymbol)
+      }
+
+      // Select(q, outerSym) is replaced by Select(q, outerAccessor(outerSym.owner)) in ExplicitOuter
+      val outer = expectedTp.typeSymbol.newMethod("<outer>".toTermName) setInfo expectedTp.prefix setFlag SYNTHETIC
+      (Select(gen.mkAsInstanceOf(REF(scrut), expectedTp, true, false), outer)) OBJ_EQ expectedPrefix
     }
 
     /** A conservative approximation of which patterns do not discern anything.

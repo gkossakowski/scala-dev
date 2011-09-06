@@ -479,6 +479,17 @@ abstract class ExplicitOuter extends InfoTransform
           if (sym == currentClass || sym.hasModuleFlag && sym.isStatic) tree
           else atPos(tree.pos)(outerPath(outerValue, currentClass.outerClass, sym)) // (5)
 
+        // for patmatvirtualiser
+        // qual.<outer>.eq(o) --> qual.$outer().eq(o) if there's an accessor, else the whole tree becomes TRUE
+        // TODO remove the synthetic `<outer>` method from outerFor??
+        case Apply(eqsel@Select(eqapp@Apply(sel@Select(qual, n), Nil), eq), args)  if n == "<outer>".toTermName =>
+          val outerFor = sel.symbol.owner
+          val acc = outerAccessor(outerFor)
+          // if(acc == NoSymbol) println("No accessor in "+ tree +" for "+ outerFor)
+          // else println("Accessor in "+ tree +" for "+ outerFor +" is "+ acc)
+          if(acc == NoSymbol) transform(TRUE) // urgh... drop condition if there's no accessor
+          else transform(treeCopy.Apply(tree, treeCopy.Select(eqsel, treeCopy.Apply(eqapp, Select(qual, acc), Nil), eq), args))
+
         case Select(qual, name) =>
           if (currentClass != sym.owner) // (3)
             sym.makeNotPrivate(sym.owner)

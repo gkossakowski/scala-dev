@@ -526,7 +526,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         def lenOk                        = compareOp((seqTree(binder) DOT methodOp)(LIT(len)), ZERO)
 
         // wrapping in a null check on the scrutinee
-        if(len >= 0) IF ((seqTree(binder) ANY_!= NULL) AND lenOk) THEN then ELSE mkZero
+        // only check if minimal length is non-trivially satisfied
+        if(len >= (if(lastIsStar) 1 else 0)) IF ((seqTree(binder) ANY_!= NULL) AND lenOk) THEN then ELSE mkZero
         else then
       }
 

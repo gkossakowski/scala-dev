@@ -34,8 +34,9 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - run/t3530.scala, run/t2800.scala
- - crash: run/unapply, run/t576, run/patmatnew
+ - crash: run/t576, run/patmatnew
+jvm/t560bis.scala, jvm/unittest_xml.scala, jvm/xml02.scala
+
  - Bind nested in Typed's tpe (such as in pos/t1439 `case v: View[_] =>`)
  - xml matching: run/t2276.scala
  - anonymous classes in scrutinee (pos/t0646)
@@ -256,8 +257,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
         val extractorParamType = extractorType.paramTypes.head
 
-        // println("doUnapply (subPatTypes, typeInMonad, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType) =\n"+
-        //   (subPatTypes, typeInMonad, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType))
+        // println("doUnapply (subPatTypes, typeInMonad, prevBinder, prevBinder.info.widen, extractorCall.symbol, extractorType, prevBinder.info.widen <:< extractorParamType) =\n"+
+        //   (subPatTypes, typeInMonad, prevBinder, prevBinder.info.widen, extractorCall.symbol, extractorType, prevBinder.info.widen <:< extractorParamType))
 
         // println("doUnapply checking parameter type: "+ (prevBinder, prevBinder.info.widen, extractorParamType, prevBinder.info.widen <:< extractorParamType))
         // example check: List[Int] <:< ::[Int]
@@ -331,10 +332,16 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           }
         }
 
+        def unwrapExtractorApply(t: Tree)(implicit extractor: Symbol): Tree = t match {
+          case Apply(x, _) => unwrapExtractorApply(x) // could be implicit arg apply
+          case x if x.symbol == extractor => x
+        }
+
         patTree match {
-          case UnApply(Apply(unfun, unargs), args) =>
+          case UnApply(Apply(unfun0, unargs), args) =>
             // TODO: check unargs == args
             // println("unfun: "+ (unfun.tpe, unfun.symbol.ownerChain, unfun.symbol.info, prevBinder.info))
+            val unfun = unwrapExtractorApply(unfun0)(unfun0.symbol)
 
             doUnapply(args, unfun, prevBinder, patTree.pos)
 
@@ -363,7 +370,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               val extractorCall = try {
                 context.undetparams = Nil
                 silent(_.typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)) match {
-                  case Apply(extractorCall, _)  => extractorCall
+                  case Apply(extractorCall, _)  => 
+                    unwrapExtractorApply(extractorCall)(extractor)
                   case ex =>
                    // error("cannot type unapply call for "+ extractorSel +" error: "+ ex) // TODO: ErrorTree
                    typedOperator(extractorSel)

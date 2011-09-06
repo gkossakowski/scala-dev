@@ -398,7 +398,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             // the symbols are markers that may be used to refer to the result of the extractor in which the corresponding tree is nested
             // it's the responsibility of the treemaker (added to res in the previous line) to replace this symbol by a reference that
             // selects that result on the function symbol of the flatMap call that binds to the result of this extractor
-            (List(patBinder), List(p))
+            (List(prevBinder), List(p)) // must be prevBinder, as patBinder has the wrong info: even if the bind assumes a better type, this is not guaranteed until we cast
           case Bind(n, p) => (Nil, Nil) // there's no symbol -- something wrong?
 
           case Literal(Constant(_)) | Ident(_) | Select(_, _) => // it was folly to think we can unify this with type tests

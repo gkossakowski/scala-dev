@@ -34,6 +34,7 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
+ - def foo: this.type = 0 match { case 0 => this } // one(this): this.type !
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
  - anonymous classes in scrutinee (pos/t0646)
  - typing: pos/channels
@@ -413,7 +414,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
           case Literal(Constant(_)) | Ident(_) | Select(_, _) => // it was folly to think we can unify this with type tests
             val prevTp = prevBinder.info.widen
-            val tpe = patTree.tpe
 
             val condEq = genEquals(prevBinder, patTree)
             val cond = maybeOuterCheck(patTree.tpe, prevBinder) map (genAnd(_, condEq)) getOrElse condEq

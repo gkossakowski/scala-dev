@@ -3249,7 +3249,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         } else {
           val selector1 = checkDead(typed(selector, EXPRmode | BYVALmode, WildcardType))
           var cases1 = typedCases(tree, cases, selector1.tpe.widen, pt)
-          val (owntype, needAdapt) = ptOrLub(cases1 map (_.tpe))
+          val (owntype0, needAdapt) = ptOrLub(cases1 map (_.tpe))
+          val owntype = elimAnonymousClass(owntype0)
           if (needAdapt) {
             cases1 = cases1 map (adaptCase(_, owntype))
           }

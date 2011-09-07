@@ -34,14 +34,11 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - outer-path equality (part of patmatnew)
- - stackoverflow?: jvm/t3412, jvm/t3412-channel
  - typing: scalacheck/range
- - specialize: specialized/spec-patmatch
- - exceptions?: jvm/reactor-exceptionOnSend, jvm/actor-exceptions, jvm/t3365, jvm/t1449
  - type checking for xml matching: jvm/unittest_xml.scala
- - Bind nested in Typed's tpe (such as in pos/t1439 `case v: View[_] =>`)
- - partialfunction's isDefinedAt should not evaluate argument to `one` --> make it by CBN, but that means moving away from Option (since Some is not CBN)
+ - Type Patterns -- Bind nested in Typed's tpe (such as in pos/t1439 `case v: View[_] =>`)
+ - specialize: specialized/spec-patmatch
+ - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
  - anonymous classes in scrutinee (pos/t0646)
  - existentials (pos/t1843.scala, pos/t2635.scala)
  - gadt typing (pos/gadt-gilles, pos/channels)

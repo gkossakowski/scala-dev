@@ -223,8 +223,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
     def Xpat(scrutSym: Symbol)(pattern: Tree): List[ProtoTreeMaker] = {
-      def doUnapply(args: List[Tree], extractorCall: Tree, prevBinder: Symbol, pos: Position, outerCheck: Option[Tree] = None)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
+      def doUnapply(args: List[Tree], extractorCall: Tree, prevBinder: Symbol, patTreeOrig: Tree)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
         assert((extractorCall.tpe ne null) && (extractorCall.tpe ne NoType) && (extractorCall.tpe ne ErrorType), "args: "+ args +" extractorCall: "+ extractorCall)
+        val pos = patTreeOrig.pos
         val extractorType = extractorCall.tpe
         val isSeq = extractorCall.symbol.name == nme.unapplySeq
 
@@ -261,11 +262,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // example check: List[Int] <:< ::[Int]
         // TODO: extractorParamType may contain unbound type params (run/t2800, run/t3530)
         val prevBinderOrCasted =
-          if(!(prevBinder.info.widen <:< extractorParamType)) { import CODE._
+          if(!(prevBinder.info.widen <:< extractorParamType)) {
             val castedBinder = freshSym(pos, extractorParamType, "cp")
             // cast
-            val condTp = gen.mkIsInstanceOf(REF(prevBinder), extractorParamType, true, false)
-            val cond = outerCheck map (_ AND condTp) getOrElse condTp
+            val condTp = gen.mkIsInstanceOf(CODE.REF(prevBinder), extractorParamType, true, false)
+            val cond = maybeOuterCheck(patTreeOrig.tpe, prevBinder) map ((genAnd(_, condTp))) getOrElse condTp
 
             // chain a cast before the actual extractor call
             // we control which binder is used in the nested tree (patTree -- created below), so no need to substitute
@@ -342,7 +343,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             // println("unfun: "+ (unfun.tpe, unfun.symbol.ownerChain, unfun.symbol.info, prevBinder.info))
             val unfun = unwrapExtractorApply(unfun0)(unfun0.symbol)
 
-            doUnapply(args, unfun, prevBinder, patTree.pos)
+            doUnapply(args, unfun, prevBinder, patTree)
 
           case Apply(fun, args)     =>
             val orig = if(fun.isInstanceOf[TypeTree]) fun.asInstanceOf[TypeTree].original else fun
@@ -352,12 +353,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                error("cannot find unapply member for "+ fun +" with args "+ args) // TODO: ErrorTree
                (Nil, Nil)
             } else {
-              // println("needs outer test? "+(needsOuterTest(patTree.tpe, prevBinder.info, context.owner), patTree.tpe, prevBinder, prevBinder.info, context.owner))
-              val outerCheck =
-                if (needsOuterTest(patTree.tpe, prevBinder.info, context.owner)) { import CODE._
-                  Some(genOuterCheck(prevBinder, patTree.tpe))
-                } else None
-
               val extractorSel = genSelect(orig, extractor)
 
               // this is a tricky balance: pos/t602.scala, pos/sudoku.scala, run/virtpatmat_alts.scala must all be happy
@@ -384,7 +379,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               } finally context.undetparams = savedUndets
 
               overrideUnsafe ||= extractorCall.tpe.typeParams.nonEmpty // all bets are off when you have unbound type params floating around
-              doUnapply(args, extractorCall, prevBinder, patTree.pos, outerCheck)
+              doUnapply(args, extractorCall, prevBinder, patTree)
             }
 
           case MaybeBoundTyped(patBinder, tpt) => // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
@@ -393,11 +388,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             val accumType = intersectionType(List(prevTp, tpe))
 
             val condTp = genTypeDirectedEquals(prevBinder, prevTp, tpe)
-            // println("needs outer test? "+(needsOuterTest(tpe, prevBinder.info, context.owner), (tpe, prevBinder.info, context.owner)))
-            val cond =
-              if (needsOuterTest(tpe, prevBinder.info, context.owner)) { import CODE._
-                genOuterCheck(prevBinder, tpe) AND condTp
-              } else condTp
+            val cond = maybeOuterCheck(tpe, prevBinder) map (genAnd(_, condTp)) getOrElse condTp
 
             val extractor = atPos(patTree.pos)(genTypedGuard(cond, accumType, prevBinder))
 
@@ -426,11 +417,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             val tpe = patTree.tpe
 
             val condEq = genEquals(prevBinder, patTree)
-            // println("needs outer test? "+(needsOuterTest(tpe, prevBinder.info, context.owner), tpe.prefix, (tpe, prevBinder.info, context.owner)))
-            val cond =
-              if (needsOuterTest(tpe, prevBinder.info, context.owner)) { import CODE._
-                genOuterCheck(prevBinder, tpe) AND condEq
-              } else condEq
+            val cond = maybeOuterCheck(patTree.tpe, prevBinder) map (genAnd(_, condEq)) getOrElse condEq
 
             // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
             // equals need not be well-behaved, so don't intersect with pattern's (stabilized) type (unlike MaybeBoundTyped's accumType, where its required)
@@ -580,6 +567,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         }
     }
 
+    def maybeOuterCheck(expectedTp: Type, prevBinder: Symbol): Option[Tree] =  // println("needs outer test? "+(needsOuterTest(expectedTp, prevBinder.info, context.owner), expectedTp, prevBinder, prevBinder.info, context.owner))
+      if (needsOuterTest(expectedTp, prevBinder.info, context.owner))
+        Some(genOuterCheck(prevBinder, expectedTp))
+      else None
+
     /** adds a test comparing the dynamic outer to the static outer */
     def genOuterCheck(scrut: Symbol, expectedTp: Type): Tree = { import CODE._
       val expectedPrefix = expectedTp.prefix match {
@@ -587,7 +579,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         case pre              => REF(pre.prefix, pre.termSymbol)
       }
 
-      // Select(q, outerSym) is replaced by Select(q, outerAccessor(outerSym.owner)) in ExplicitOuter
+      // ExplicitOuter replaces `Select(q, outerSym) OBJ_EQ expectedPrefix` by `Select(q, outerAccessor(outerSym.owner)) OBJ_EQ expectedPrefix`
+      // if there's an outer accessor, otherwise the condition becomes `true` -- TODO: can we improve needsOuterTest so there's always an outerAccessor?
       val outer = expectedTp.typeSymbol.newMethod("<outer>".toTermName) setInfo expectedTp.prefix setFlag SYNTHETIC
       (Select(gen.mkAsInstanceOf(REF(scrut), expectedTp, true, false), outer)) OBJ_EQ expectedPrefix
     }
@@ -679,5 +672,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genDrop(tgt: Tree)(n: Int): Tree = (tgt DOT "drop".toTermName) (LIT(n))
     def genTupleSel(binder: Symbol)(i: Int): Tree = (REF(binder) DOT ("_"+i).toTermName) // make tree that accesses the i'th component of the tuple referenced by binder
     def genEquals(binder: Symbol, checker: Tree): Tree = checker MEMBER_== REF(binder) // NOTE: checker must be the target of the ==, that's the patmat semantics for ya
+    def genAnd(a: Tree, b: Tree): Tree = a AND b
   }
 }

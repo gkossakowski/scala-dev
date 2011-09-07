@@ -34,8 +34,6 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - typing: scalacheck/range
- - type checking for xml matching: jvm/unittest_xml.scala
  - Type Patterns -- Bind nested in Typed's tpe (such as in pos/t1439 `case v: View[_] =>`)
  - specialize: specialized/spec-patmatch
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
@@ -627,8 +625,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       new TermSymbol(NoSymbol, pos, (prefix+ctr).toTermName) setInfo tp
     }
 
-    // we must explicitly type the trees that we replace inside some other tree, since the latter may already have been typed, and will thus not be retyped
-    // thus, we might end up with untyped subtrees inside bigger, typed trees
+    // We must explicitly type the trees that we replace inside some other tree, since the latter may already have been typed,
+    // and will thus not be retyped. This means we might end up with untyped subtrees inside bigger, typed trees.
     def typedSubst(from: List[Symbol], to: List[Tree], unsafe: Boolean = false) = new Transformer {
       override def transform(tree: Tree): Tree = tree match {
         case Ident(_) =>
@@ -636,7 +634,20 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             if (from.isEmpty) tree
             else if (tree.symbol == from.head) {
               if(tree.tpe != null && tree.tpe != NoType)
-                typed(to.head.shallowDuplicate, EXPRmode, if(unsafe || overrideUnsafe) WildcardType else tree.tpe.widen)
+                // this whole "unsafe" business and the more precise pt are only for debugging (to detect iffy substitutions)
+                // could in principle always assume unsafe and use pt = WildcardType
+                if(overrideUnsafe || unsafe) typed(to.head.shallowDuplicate, EXPRmode, WildcardType)
+                else silent(_.typed(to.head.shallowDuplicate, EXPRmode, tree.tpe.widen)) match {
+                  case t: Tree => t
+                  case ex: TypeError => // these should be relatively rare
+                    // not necessarily a bug: e.g., in Node(_, md @ UnprefixedAttribute(_, _, _), _*),
+                    // md.info == UnprefixedAttribute, whereas x._2 : MetaData
+                    // (where x is the binder of the function that'll be flatMap'ed over Node's unapply;
+                    //  the unapply has sig (x: Node) Option[(String, MetaData, Seq[Node])])
+                    // (it's okay because doUnapply will insert a cast when x._2 is passed to the UnprefixedAttribute extractor)
+                    // println("subst unsafely replacing "+ tree.symbol +": "+ tree.tpe.widen +" by "+ to.head +" in: "+ tree)
+                    typed(to.head.shallowDuplicate, EXPRmode, WildcardType)
+                }
               else
                 to.head.shallowDuplicate
             }

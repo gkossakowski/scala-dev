@@ -34,12 +34,9 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - Type Patterns -- Bind nested in Typed's tpe (such as in pos/t1439 `case v: View[_] =>`)
- - specialize: specialized/spec-patmatch
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
  - anonymous classes in scrutinee (pos/t0646)
- - existentials (pos/t1843.scala, pos/t2635.scala)
- - gadt typing (pos/gadt-gilles, pos/channels)
+ - typing: pos/channels
 
   * (longer-term) TODO:
   *  - recover GADT typing by locally inserting implicit witnesses to type equalities derived from the current case, and considering these witnesses during subtyping (?)
@@ -266,6 +263,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             val castedBinder = freshSym(pos, extractorParamType, "cp")
             // cast
             val condTp = gen.mkIsInstanceOf(CODE.REF(prevBinder), extractorParamType, true, false)
+            // outer check, if necessary (TODO: what's the semantics for outerchecks on user-defined extractors?)
             val cond = maybeOuterCheck(patTreeOrig.tpe, prevBinder) map ((genAnd(_, condTp))) getOrElse condTp
 
             // chain a cast before the actual extractor call
@@ -324,10 +322,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         */
       def transformPat(prevBinder: Symbol, patTree: Tree)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = { // TODO zip the returned lists here?
         object MaybeBoundTyped {
-          def unapply(tree: Tree): Option[(Symbol, Tree)] = tree match {
-            case BoundSym(patBinder, Typed(expr, tpt)) => Some((patBinder, tpt))
-            case Bind(_, Typed(expr, tpt)) => Some((prevBinder, tpt))
-            case Typed(expr, tpt) =>  Some((prevBinder, tpt))
+          // the returned type is the one inferred by inferTypedPattern (`owntype`)
+          def unapply(tree: Tree): Option[(Symbol, Type)] = tree match {
+            case BoundSym(patBinder, typed@Typed(expr, tpt)) => Some((patBinder, typed.tpe))
+            case Bind(_, typed@Typed(expr, tpt)) => Some((prevBinder, typed.tpe))
+            case Typed(expr, tpt) =>  Some((prevBinder, tree.tpe))
             case _ => None
           }
         }
@@ -382,8 +381,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               doUnapply(args, extractorCall, prevBinder, patTree)
             }
 
-          case MaybeBoundTyped(patBinder, tpt) => // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
-            val tpe = tpt.tpe // TODO: handle Binds nested in tpt (spec: 8.2 Type Patterns)
+          // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
+          case MaybeBoundTyped(patBinder, tpe) =>
             val prevTp = prevBinder.info.widen
             val accumType = intersectionType(List(prevTp, tpe))
 
@@ -547,23 +546,24 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     // generate the tree for the run-time test that follows from the fact that
     // a `scrut` of known type `scrutTp` is expected to have type `expectedTp`
-    def genTypeDirectedEquals(scrut: Symbol, scrutTp: Type, expectedTp: Type): Tree = { import CODE._
+    // use genOuterCheck to check the type's prefix
+     def genTypeDirectedEquals(scrut: Symbol, scrutTp: Type, expectedTp: Type): Tree = { import CODE._
       def isMatchUnlessNull = scrutTp <:< expectedTp && (expectedTp <:< AnyRefClass.tpe)
       def isRef             = scrutTp <:< AnyRefClass.tpe
       def genEqualsAndInstanceOf(sym: Symbol): Tree
         = genEquals(scrut, REF(sym)) AND gen.mkIsInstanceOf(REF(scrut), expectedTp.widen, true, false)
 
       expectedTp match {
-          case ConstantType(Constant(null)) if isRef  => REF(scrut) OBJ_EQ NULL
-          case ConstantType(const)                    => genEquals(scrut, Literal(const))
 // TODO: align with spec -- the cases below implement what the full pattern matcher does, not the spec
 // A singleton type p.type. This type pattern matches only the value denoted by the path p
 // [...] comparison of the matched value with p using method eq in class AnyRef
-          case SingleType(_, sym) => assert(sym.isStable); genEqualsAndInstanceOf(sym) // pre is checked elsewhere (genOuterCheck)
-          case ThisType(sym) if sym.isModule          => genEqualsAndInstanceOf(sym)
-          case ThisType(sym)                          => REF(scrut) OBJ_EQ This(sym) // TODO: this matches the actual pattern matcher, but why not use equals as in the object case above? (see run/t576)
-          case _ if isMatchUnlessNull                 => REF(scrut) OBJ_NE NULL
-          case _                                      => gen.mkIsInstanceOf(REF(scrut), expectedTp, true, false)
+          case SingleType(_, sym) => assert(sym.isStable); genEqualsAndInstanceOf(sym)
+          case ThisType(sym) if sym.isModule            => genEqualsAndInstanceOf(sym)
+          case ThisType(sym)                            => REF(scrut) OBJ_EQ This(sym) // TODO: this matches the actual pattern matcher, but why not use equals as in the object case above? (see run/t576)
+          case ConstantType(Constant(null)) if isRef    => REF(scrut) OBJ_EQ NULL
+          case ConstantType(const)                      => genEquals(scrut, Literal(const))
+          case _ if isMatchUnlessNull                   => REF(scrut) OBJ_NE NULL
+          case _                                        => gen.mkIsInstanceOf(REF(scrut), expectedTp, true, false)
         }
     }
 

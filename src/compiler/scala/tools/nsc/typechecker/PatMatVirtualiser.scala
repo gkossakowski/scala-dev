@@ -171,7 +171,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
     abstract class AlternativeTreeMaker(alts: List[Tree]) extends TreeMaker {
-      def genFlatMap(tree: Tree) = genOr(alts, genFunAndSubst(tree)) setPos alts.head.pos
+      def genFlatMap(tree: Tree) = genOr(genFunAndSubst(tree), alts) setPos alts.head.pos
     }
 
     // (o => (o(foo), newO)) :: (o => (o(foo), newO')) :: (o => (o(foo), newO'')) :: (o => (o(foo), newO'''))
@@ -452,7 +452,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               // currently we ignore subst, since alternatives may not bind variables (except wildcards)
               val (treeMakers, subst) = threadSubstitution(resAlts.toList)
 
-              atPos(alt.pos)(treeMakers.foldRight (EmptyTree: Tree) (_ genFlatMap _)) // EmptyTree is treated specially in genFlatMap in SingleTreeMaker (fuses flatMap'ing the identity)
+              // EmptyTree is treated specially in genFlatMap in SingleTreeMaker (fuses flatMap'ing the identity)
+              atPos(alt.pos)(treeMakers.foldRight (genOne(CODE.REF(prevBinder))) (_ genFlatMap _))
             }
 
             res += singleBinderProtoTreeMaker(prevBinder, altTrees : _*)
@@ -650,7 +651,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     // methods in MatchingStrategy (the monad companion)
     def genZero: Tree = matchingStrategy DOT "zero".toTermName                                          // matchingStrategy.zero
     def genOne(res: Tree): Tree = (matchingStrategy DOT "one".toTermName)(res)                          // matchingStrategy.one(res)
-    def genOr(as: List[Tree], f: Tree): Tree = (matchingStrategy DOT "or".toTermName)((f :: as): _*)    // matchingStrategy.or(f, as)
+    def genOr(f: Tree, as: List[Tree]): Tree = (matchingStrategy DOT "or".toTermName)((f :: as): _*)    // matchingStrategy.or(f, as)
     def genGuard(t: Tree, then: Tree = UNIT): Tree = (matchingStrategy DOT "guard".toTermName)(t, then) // matchingStrategy.guard(t, then)
     def genRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchingStrategy.runOrElse(scrut)(matcher)
     def genCast(expectedTp: Type, binder: Symbol): Tree = genTypedGuard(gen.mkIsInstanceOf(REF(binder), expectedTp, true, false), expectedTp, binder) // TODO: use genTypeDirectedEquals(binder, binder.info.widen, expectedTp) instead of gen.mkIsInstanceOf?

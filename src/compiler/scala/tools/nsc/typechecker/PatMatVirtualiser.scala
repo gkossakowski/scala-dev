@@ -164,8 +164,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     abstract class SingleTreeMaker(extractor: Tree) extends TreeMaker {
       def genFlatMap(tree: Tree) =
-        if(tree == EmptyTree) extractor  // when combining treemakers in an alternative
-        else translator.genFlatMap(extractor, genFunAndSubst(tree)) setPos extractor.pos
+        translator.genFlatMap(extractor, genFunAndSubst(tree)) setPos extractor.pos
     }
 
     abstract class AlternativeTreeMaker(alts: List[Tree]) extends TreeMaker {
@@ -450,7 +449,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               // currently we ignore subst, since alternatives may not bind variables (except wildcards)
               val (treeMakers, subst) = threadSubstitution(resAlts.toList)
 
-              // EmptyTree is treated specially in genFlatMap in SingleTreeMaker (fuses flatMap'ing the identity)
               atPos(alt.pos)(treeMakers.foldRight (genOne(CODE.REF(prevBinder))) (_ genFlatMap _))
             }
 

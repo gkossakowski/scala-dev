@@ -253,8 +253,8 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
         case _ => 
           (tp1 <:< tp2) || {
             tp1.typeSymbol.isModuleClass && tp2.typeSymbol.isModuleClass && {
-              val cb1 = tp1.typeSymbol.classBound
-              val cb2 = tp2.typeSymbol.classBound
+              val cb1 = tp1.typeSymbol.classBound.asSeenFrom(self, tp1.typeSymbol.owner)
+              val cb2 = tp2.typeSymbol.classBound.asSeenFrom(self, tp2.typeSymbol.owner)
               (cb1 <:< cb2) && {
                 log("Allowing %s to override %s because %s <:< %s".format(tp1, tp2, cb1, cb2))
                 true
@@ -284,7 +284,7 @@ abstract class RefChecks extends InfoTransform with reflect.internal.transform.R
             ";\n (Note that "+infoStringWithLocation(other)+" is abstract,"+
            "\n  and is therefore overridden by concrete "+infoStringWithLocation(member)+")"
           }
-          else objectOverrideMsg
+          else ": "+ objectOverrideMsg
         }
 
         def overrideError(msg: String) {

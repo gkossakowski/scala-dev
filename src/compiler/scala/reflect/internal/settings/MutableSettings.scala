@@ -31,7 +31,7 @@ abstract class MutableSettings extends AbsSettings {
 
   def printtypes: SettingValue { type T = Boolean }
   def debug: SettingValue { type T = Boolean }
-  def YdepMethTpes: SettingValue { type T = Boolean }
+  // def YdepMethTpes: SettingValue { type T = Boolean }
   def Ynotnull: SettingValue { type T = Boolean }
   def explaintypes: SettingValue { type T = Boolean }
   def verbose: SettingValue { type T = Boolean }

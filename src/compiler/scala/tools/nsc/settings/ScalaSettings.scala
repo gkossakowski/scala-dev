@@ -93,7 +93,7 @@ trait ScalaSettings extends AbsScalaSettings
 
   // Experimental Extensions
   val Xexperimental = BooleanSetting    ("-Xexperimental", "Enable experimental extensions.") .
-                          withPostSetHook(set => List(YdepMethTpes, YmethodInfer) foreach (_.value = set.value)) //YvirtClasses, 
+                          withPostSetHook(set => List(/*YdepMethTpes, */YmethodInfer) foreach (_.value = set.value)) //YvirtClasses, 
 
   /** Compatibility stubs for options whose value name did
    *  not previously match the option name.
@@ -165,7 +165,7 @@ trait ScalaSettings extends AbsScalaSettings
   val Ydocdebug     = BooleanSetting    ("-Ydoc-debug", "Trace all scaladoc activity.")
   val Ypmatnaive    = BooleanSetting    ("-Ypmat-naive", "Desugar matches as naively as possible.")
   val Ynotnull      = BooleanSetting    ("-Ynotnull", "Enable (experimental and incomplete) scala.NotNull.")
-  val YdepMethTpes  = BooleanSetting    ("-Ydependent-method-types", "Allow dependent method types.")
+  // val YdepMethTpes  = BooleanSetting    ("-Ydependent-method-types", "Allow dependent method types.")
   val YmethodInfer  = BooleanSetting    ("-Yinfer-argument-types", "Infer types for arguments of overriden methods.")
   val noSelfCheck   = BooleanSetting    ("-Yno-self-type-checks", "Suppress check for self-type conformance among inherited members.")
   val YvirtClasses  = false // too embryonic to even expose as a -Y //BooleanSetting    ("-Yvirtual-classes", "Support virtual classes")

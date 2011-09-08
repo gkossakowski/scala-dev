@@ -963,10 +963,9 @@ trait Namers { self: Analyzer =>
                 if (sym.owner == meth && sym.isValueParameter && !(okParams contains sym))
                   context.error(
                     sym.pos, 
-                    "illegal dependent method type"+
-                    (if (settings.YdepMethTpes.value) 
-                       ": parameter appears in the type of another parameter in the same section or an earlier one"
-                     else ""))
+                    "illegal dependent method type"+(
+                    //if (!settings.YdepMethTpes.value) "" else
+                       ": parameter appears in the type of another parameter in the same section or an earlier one"))
               case _ =>
                 mapOver(tp)
             }
@@ -974,7 +973,7 @@ trait Namers { self: Analyzer =>
         }
         for(vps <- vparamSymss) {
           for(p <- vps) checkDependencies(p.info)
-          if(settings.YdepMethTpes.value) okParams ++= vps // can only refer to symbols in earlier parameter sections (if the extension is enabled)
+          okParams ++= vps // can only refer to symbols in earlier parameter sections -- if(settings.YdepMethTpes.value)
         }
         checkDependencies(restpe) // DEPMETTODO: check not needed when they become on by default
 

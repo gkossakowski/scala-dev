@@ -401,7 +401,7 @@ trait Types extends api.Types { self: SymbolTable =>
     def resultType(actuals: List[Type]) = this
 
     /** Only used for dependent method types. */
-    def resultApprox: Type = if (settings.YdepMethTpes.value) ApproximateDependentMap(resultType) else resultType
+    def resultApprox: Type = ApproximateDependentMap(resultType) // if (!settings.YdepMethTpes.value) resultType else
 
     /** If this is a TypeRef `clazz`[`T`], return the argument `T`
      *  otherwise return this type
@@ -2077,7 +2077,7 @@ A type's typeSymbol should never be inspected directly.
     override def isTrivial: Boolean = isTrivial0
     private lazy val isTrivial0 =
       resultType.isTrivial && params.forall{p => p.tpe.isTrivial &&  (
-        !settings.YdepMethTpes.value || !(params.exists(_.tpe.contains(p)) || resultType.contains(p)))
+        /*!settings.YdepMethTpes.value ||*/ !(params.exists(_.tpe.contains(p)) || resultType.contains(p)))
       }
 
     def isImplicit = params.nonEmpty && params.head.isImplicit
@@ -2117,7 +2117,7 @@ A type's typeSymbol should never be inspected directly.
       }
 
     // implicit args can only be depended on in result type: TODO this may be generalised so that the only constraint is dependencies are acyclic
-    def approximate: MethodType = MethodType(params, resultApprox)
+    def approximate: MethodType = MethodType(params, resultApprox) // if (!settings.YdepMethTpes.value) this else
 
     override def finalResultType: Type = resultType.finalResultType
 

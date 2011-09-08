@@ -1,0 +1,8 @@
+override2.scala:16: error: overriding object Bar in trait Foo of type object Foo2.this.Bar;
+ object Bar has incompatible typeoverriding object Bar in trait Foo of type object Foo2.this.Bar with object Bar in trait Foo2 of type object Foo2.this.Bar;
+Note that Bar must conform to the overridden object's class bound.
+  found: Bippy with ScalaObject
+    req: Bippy with Bippo with ScalaObject
+  override object Bar extends Bippy {
+                  ^
+one error found

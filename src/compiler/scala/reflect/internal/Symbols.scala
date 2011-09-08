@@ -90,20 +90,31 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       newMethod(pos, name).setFlag(LABEL)
     final def newConstructor(pos: Position) =
       newMethod(pos, nme.CONSTRUCTOR)
-    final def newModule(pos: Position, name: TermName, clazz: ClassSymbol) =
-      new ModuleSymbol(this, pos, name).setFlag(MODULE | FINAL)
-        .setModuleClass(clazz)
-    final def newModule(name: TermName, clazz: Symbol, pos: Position = NoPosition) =
-      new ModuleSymbol(this, pos, name).setFlag(MODULE | FINAL)
-        .setModuleClass(clazz.asInstanceOf[ClassSymbol])
-    final def newModule(pos: Position, name: TermName) = {
-      val m = new ModuleSymbol(this, pos, name).setFlag(MODULE | FINAL)
-      m.setModuleClass(new ModuleClassSymbol(m))
-    } 
-    final def newPackage(pos: Position, name: TermName) = {
+
+    private def finishModule(m: ModuleSymbol, clazz: ClassSymbol): ModuleSymbol = {
+      // val flags = if (isPackage || isPackageClass) (MODULE | FINAL) else MODULE
+      // val flags = (MODULE | FINAL)
+      val flags = MODULE
+      m setFlag flags
+      m setModuleClass clazz
+      m
+    }
+    private def finishModule(m: ModuleSymbol): ModuleSymbol =
+      finishModule(m, new ModuleClassSymbol(m))
+
+    final def newModule(pos: Position, name: TermName, clazz: ClassSymbol): ModuleSymbol =
+      finishModule(new ModuleSymbol(this, pos, name), clazz)
+
+    final def newModule(name: TermName, clazz: Symbol, pos: Position = NoPosition): ModuleSymbol =
+      newModule(pos, name, clazz.asInstanceOf[ClassSymbol])
+
+    final def newModule(pos: Position, name: TermName): ModuleSymbol =
+      finishModule(new ModuleSymbol(this, pos, name))
+
+    final def newPackage(pos: Position, name: TermName): ModuleSymbol = {
       assert(name == nme.ROOT || isPackageClass)
       val m = newModule(pos, name).setFlag(JAVA | PACKAGE)
-      m.moduleClass.setFlag(JAVA | PACKAGE)
+      m.moduleClass setFlag (JAVA | PACKAGE)
       m
     }
     final def newThisSym(pos: Position) =

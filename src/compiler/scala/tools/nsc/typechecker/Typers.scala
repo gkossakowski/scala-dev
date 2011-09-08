@@ -713,7 +713,7 @@ trait Typers extends Modes with Adaptations {
           // needed for implicits in 2.8 collection library -- maybe once #3346 is fixed, we can reinstate the condition?
             inferExprInstance(tree, context.extractUndetparams(), pt,
               // approximate types that depend on arguments since dependency on implicit argument is like dependency on type parameter
-              if  (settings.YdepMethTpes.value) mt.approximate else mt,
+              mt.approximate,
               // if we are looking for a manifest, instantiate type to Nothing anyway,
               // as we would get ambiguity errors otherwise. Example
               // Looking for a manifest of Nil: This has many potential types,
@@ -1866,12 +1866,12 @@ trait Typers extends Modes with Adaptations {
         }
 
       var tpt1 = checkNoEscaping.privates(meth, typedType(ddef.tpt))
-      if (!settings.YdepMethTpes.value) {
-        for (vparams <- vparamss1; vparam <- vparams) {
-          pending = logErrorTree(checkNoEscaping.locals(context.scope, WildcardType, vparam.tpt), pending)
-        }
-        pending = logErrorTree(checkNoEscaping.locals(context.scope, WildcardType, tpt1), pending)
-      }
+      // if (!settings.YdepMethTpes.value) {
+      //   for (vparams <- vparamss1; vparam <- vparams) {
+      //     pending = logErrorTree(checkNoEscaping.locals(context.scope, WildcardType, vparam.tpt), pending)
+      //   }
+      //   pending = logErrorTree(checkNoEscaping.locals(context.scope, WildcardType, tpt1), pending)
+      // }
       checkNonCyclic(ddef, tpt1) match {
         case Some(cylic) =>
           pending = cylic::pending

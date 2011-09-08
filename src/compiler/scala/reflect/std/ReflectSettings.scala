@@ -12,7 +12,7 @@ class ReflectSettings extends internal.settings.MutableSettings {
 
   val overrideObjects = newSetting(false)
   val debug = newSetting(false)
-  val YdepMethTpes = newSetting(false)
+  // val YdepMethTpes = newSetting(false)
   val Ynotnull = newSetting(false)
   val explaintypes = newSetting(false)
   val verbose = newSetting(false)

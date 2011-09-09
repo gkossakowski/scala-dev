@@ -532,7 +532,7 @@ trait Infer {
      *  @param pt      ...
      *  @return        ...
      */
-    private def exprTypeArgs(tparams: List[Symbol], restpe: Type, pt: Type, useWeaklyCompatible: Boolean = false): List[Type] = {
+    private def exprTypeArgs(tparams: List[Symbol], restpe: Type, pt: Type, useWeaklyCompatible: Boolean = false): (List[Type], List[TypeVar]) = {
       val tvars = tparams map freshVar
       val instResTp = restpe.instantiateTypeParams(tparams, tvars)
       if ( if (useWeaklyCompatible) isWeaklyCompatible(instResTp, pt) else isCompatible(instResTp, pt) ) {
@@ -547,12 +547,12 @@ trait Infer {
               restpe
           }
           //println("try to solve "+tvars+" "+tparams)
-          solvedTypes(tvars, tparams, tparams map varianceInType(varianceType), 
-                      false, lubDepth(List(restpe, pt)))
+          (solvedTypes(tvars, tparams, tparams map varianceInType(varianceType), 
+                      false, lubDepth(List(restpe, pt))), tvars)
         } catch {
-          case ex: NoInstance => null
+          case ex: NoInstance => (null, null)
         }
-      } else null
+      } else (null, null)
     }
 
     /** Return inferred proto-type arguments of function, given
@@ -648,11 +648,11 @@ trait Infer {
      *  @return map from tparams to inferred arg, if inference was successful, tparams that map to None are considered left undetermined
      *    type parameters that are inferred as `scala.Nothing` and that are not covariant in <code>restpe</code> are taken to be undetermined
      */
-    def adjustTypeArgs(tparams: List[Symbol], targs: List[Type], restpe: Type = WildcardType): AdjustedTypeArgs.Result  = {
+    def adjustTypeArgs(tparams: List[Symbol], tvars: List[TypeVar], targs: List[Type], restpe: Type = WildcardType): AdjustedTypeArgs.Result  = {
       @inline def notCovariantIn(tparam: Symbol, restpe: Type) =
         (varianceInType(restpe)(tparam) & COVARIANT) == 0  // tparam occurred non-covariantly (in invariant or contravariant position)
 
-      (tparams, targs).zipped.map{ (tparam, targ) =>
+      (tparams, tvars, targs).zipped.map{ (tparam, tvar, targ) =>
         if (targ.typeSymbol == NothingClass && 
             (restpe.isWildcard || notCovariantIn(tparam, restpe))) {
           tparam -> None
@@ -660,7 +660,7 @@ trait Infer {
           tparam -> Some(
             if      (targ.typeSymbol == RepeatedParamClass)     targ.baseType(SeqClass)
             else if (targ.typeSymbol == JavaRepeatedParamClass) targ.baseType(ArrayClass)
-            else if (targ.typeSymbol.isModuleClass) targ  // this infers Foo.type instead of "object Foo" (see also widenIfNecessary)
+            else if (targ.typeSymbol.isModuleClass || tvar.constr.avoidWiden) targ  // this infers Foo.type instead of "object Foo" (see also widenIfNecessary)
             else targ.widen
           )
         }
@@ -738,7 +738,7 @@ trait Infer {
         tvars, tparams, tparams map varianceInTypes(formals), 
         false, lubDepth(formals) max lubDepth(argtpes)
       )
-      val result = adjustTypeArgs(tparams, targs, restpe)
+      val result = adjustTypeArgs(tparams, tvars, targs, restpe)
 
       printInference(
         ptBlock("methTypeArgs result",
@@ -1170,9 +1170,13 @@ trait Infer {
           "lenientPt"   -> lenientPt
         )
       )
-      var targs = exprTypeArgs(undetparams, tree.tpe, strictPt)
-      if ((targs eq null) || !(tree.tpe.subst(undetparams, targs) <:< strictPt)) {
-        targs = exprTypeArgs(undetparams, tree.tpe, lenientPt)
+      val targs = {
+        val (targsStrict, _) = exprTypeArgs(undetparams, tree.tpe, strictPt)
+        if ((targsStrict ne null) && (tree.tpe.subst(undetparams, targsStrict) <:< strictPt)) targsStrict
+        else {
+          val (targsLenient, _) = exprTypeArgs(undetparams, tree.tpe, lenientPt)
+          targsLenient
+        } 
       }
       printInference("[inferArgumentInstance] finished, targs = " + targs)
       substExpr(tree, undetparams, targs, lenientPt)
@@ -1193,12 +1197,12 @@ trait Infer {
           "pt"      -> pt
         )
       )
-      val targs = exprTypeArgs(tparams, treeTp, pt, useWeaklyCompatible)
+      val (targs, tvars) = exprTypeArgs(tparams, treeTp, pt, useWeaklyCompatible)
 
       if (keepNothings || (targs eq null)) { //@M: adjustTypeArgs fails if targs==null, neg/t0226
         (substExpr(tree, tparams, targs, pt), List())
       } else {
-        val AdjustedTypeArgs.Undets(okParams, okArgs, leftUndet) = adjustTypeArgs(tparams, targs)
+        val AdjustedTypeArgs.Undets(okParams, okArgs, leftUndet) = adjustTypeArgs(tparams, tvars, targs)
         printInference(
           ptBlock("inferExprInstance/AdjustedTypeArgs",
             "okParams" -> okParams,

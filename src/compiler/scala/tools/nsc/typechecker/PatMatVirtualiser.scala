@@ -268,10 +268,12 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             val cond = maybeOuterCheck(patTreeOrig.tpe, prevBinder) map ((genAnd(_, condTp))) getOrElse condTp
 
             // chain a cast before the actual extractor call
-            // we control which binder is used in the nested tree (patTree -- created below), so no need to substitute
+            // need to substitute since binder may be used outside of the next extractor call (say, in the body of the case)
             res += (List(genTypedGuard(cond, extractorParamType, prevBinder)),
                       { outerSubst: TreeXForm =>
-                          (nestedTree => genFun(castedBinder,outerSubst(nestedTree)), outerSubst)
+                          val theSubst = typedSubst(List(prevBinder), List(CODE.REF(castedBinder)))
+                          def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
+                          (nestedTree => genFun(castedBinder, nextSubst(nestedTree)), nextSubst)
                       })
 
             castedBinder

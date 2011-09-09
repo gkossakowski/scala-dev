@@ -2363,6 +2363,20 @@ A type's typeSymbol should never be inspected directly.
 
   //private var tidCount = 0  //DEBUG
 
+  object HasTypeMember {
+    def apply(name: TypeName, tp: Type): Type = {
+      val bound = refinedType(List(WildcardType), NoSymbol)
+      val bsym = bound.typeSymbol.newAliasType(NoPosition, name)
+      bsym setInfo tp
+      bound.decls enter bsym
+      bound
+    }
+    def unapply(tp: Type): Option[(TypeName, Type)] = tp match {
+      case RefinedType(List(WildcardType), Scope(sym)) => Some((sym.name.toTypeName, sym.info))
+      case _ => None
+    }
+  }
+
   //@M 
   // a TypeVar used to be a case class with only an origin and a constr
   // then, constr became mutable (to support UndoLog, I guess),
@@ -2566,6 +2580,8 @@ A type's typeSymbol should never be inspected directly.
       // So the strategy used here is to test first the type, then the direct parents, and finally
       // to fall back on the individual base types. This warrants eventual re-examination.
 
+      // AM: I think we could use the `suspended` flag to avoid side-effecting during unification
+
       if (suspended)              // constraint accumulation is disabled
         checkSubtype(tp, origin)
       else if (constr.instValid)  // type var is already set
@@ -2610,11 +2626,7 @@ A type's typeSymbol should never be inspected directly.
      * (`T` corresponds to @param sym)
      */
     def registerTypeSelection(sym: Symbol, tp: Type): Boolean = {
-      val bound = refinedType(List(WildcardType), NoSymbol)
-      val bsym = bound.typeSymbol.newAliasType(NoPosition, sym.name.toTypeName)
-      bsym setInfo tp
-      bound.decls enter bsym
-      registerBound(bound, false)
+      registerBound(HasTypeMember(sym.name.toTypeName, tp), false)
     }
 
     /** Can this variable be related in a constraint to type `tp`?
@@ -3195,7 +3207,7 @@ A type's typeSymbol should never be inspected directly.
   /** A class expressing upper and lower bounds constraints of type variables, 
    * as well as their instantiations.
    */
-  class TypeConstraint(lo0: List[Type], hi0: List[Type], numlo0: Type, numhi0: Type) { 
+  class TypeConstraint(lo0: List[Type], hi0: List[Type], numlo0: Type, numhi0: Type, avoidWidening0: Boolean = false) { 
     def this(lo0: List[Type], hi0: List[Type]) = this(lo0, hi0, NoType, NoType)
     def this() = this(List(), List())
 
@@ -3203,9 +3215,11 @@ A type's typeSymbol should never be inspected directly.
     private var hibounds = hi0
     private var numlo = numlo0
     private var numhi = numhi0
+    private var avoidWidening = avoidWidening0
 
     def loBounds: List[Type] = if (numlo == NoType) lobounds else numlo :: lobounds
     def hiBounds: List[Type] = if (numhi == NoType) hibounds else numhi :: hibounds
+    def avoidWiden: Boolean = avoidWidening
 
     def addLoBound(tp: Type, isNumericBound: Boolean = false) {
       if (isNumericBound && isNumericValueType(tp)) {
@@ -3217,7 +3231,16 @@ A type's typeSymbol should never be inspected directly.
       else lobounds ::= tp
     }
 
+    def checkWidening(tp: Type) {
+      if(tp.isStable) avoidWidening = true
+      else tp match {
+        case HasTypeMember(_, _) => avoidWidening = true
+        case _ =>
+      }
+    }
+
     def addHiBound(tp: Type, isNumericBound: Boolean = false) {
+      checkWidening(tp)
       if (isNumericBound && isNumericValueType(tp)) {
         if (numhi == NoType || isNumericSubType(tp, numhi))
           numhi = tp
@@ -3238,7 +3261,7 @@ A type's typeSymbol should never be inspected directly.
     def instValid = (inst ne null) && (inst ne NoType)
 
     def cloneInternal = {
-      val tc = new TypeConstraint(lobounds, hibounds, numlo, numhi)
+      val tc = new TypeConstraint(lobounds, hibounds, numlo, numhi, avoidWidening)
       tc.inst = inst
       tc
     }

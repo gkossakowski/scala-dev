@@ -870,7 +870,7 @@ trait Infer {
               try {
                 val AdjustedTypeArgs.Undets(okparams, okargs, leftUndet) = methTypeArgs(undetparams, formals, restpe, argtpes, pt)
                 // #2665: must use weak conformance, not regular one (follow the monomorphic case above)
-                (exprTypeArgs(leftUndet, restpe.instantiateTypeParams(okparams, okargs), pt, useWeaklyCompatible = true) ne null) && 
+                (exprTypeArgs(leftUndet, restpe.instantiateTypeParams(okparams, okargs), pt, useWeaklyCompatible = true)._1 ne null) &&
                 isWithinBounds(NoPrefix, NoSymbol, okparams, okargs)
               } catch {
                 case ex: NoInstance => false
@@ -1170,14 +1170,11 @@ trait Infer {
           "lenientPt"   -> lenientPt
         )
       )
-      val targs = {
-        val (targsStrict, _) = exprTypeArgs(undetparams, tree.tpe, strictPt)
-        if ((targsStrict ne null) && (tree.tpe.subst(undetparams, targsStrict) <:< strictPt)) targsStrict
-        else {
-          val (targsLenient, _) = exprTypeArgs(undetparams, tree.tpe, lenientPt)
-          targsLenient
-        } 
-      }
+
+      var targs = exprTypeArgs(undetparams, tree.tpe, strictPt)._1
+      if ((targs eq null) || !(tree.tpe.subst(undetparams, targs) <:< strictPt))
+        targs = exprTypeArgs(undetparams, tree.tpe, lenientPt)._1
+
       printInference("[inferArgumentInstance] finished, targs = " + targs)
       substExpr(tree, undetparams, targs, lenientPt)
     }

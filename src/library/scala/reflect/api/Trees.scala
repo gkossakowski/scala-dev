@@ -1408,6 +1408,7 @@ trait Trees /*extends reflect.generic.Trees*/ { self: Universe =>
         treeCopy.TypeBoundsTree(tree, transform(lo), transform(hi)) 
       case ExistentialTypeTree(tpt, whereClauses) =>
         treeCopy.ExistentialTypeTree(tree, transform(tpt), transformTrees(whereClauses))
+      case _: AbsErrorTree => tree // TODO: hubert?
       case _ =>
         xtransform(this, tree)
     }

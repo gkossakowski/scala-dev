@@ -521,6 +521,9 @@ trait Implicits {
           }
           else
             typed1(itree, EXPRmode, wildPt)
+        
+        if (itree1.containsError())
+          return SearchFailure
 
         incCounter(typedImplicits)
 
@@ -541,15 +544,17 @@ trait Implicits {
           }
         }
 
-        if (itree2.tpe.isError)
+        if (itree2.containsErrorOrIsErrorTyped())
           SearchFailure
         else if (!hasMatchingSymbol(itree1))
           fail("candidate implicit %s is shadowed by other implicit %s".format(
             info.sym + info.sym.locationString, itree1.symbol + itree1.symbol.locationString))
         else {
           val tvars = undetParams map freshVar
-              
-          if (matchesPt(itree2.tpe, pt.instantiateTypeParams(undetParams, tvars), undetParams)) {
+
+          if (!matchesPt(itree2.tpe, pt.instantiateTypeParams(undetParams, tvars), undetParams))
+            fail("incompatible: %s does not match expected type %s".format(itree2.tpe, pt.instantiateTypeParams(undetParams, tvars)))
+          else {
             printInference(
               ptBlock("matchesPt",
                 "itree1"      -> itree1,
@@ -565,83 +570,92 @@ trait Implicits {
                                     false, lubDepth(List(itree2.tpe, pt)))
 
             // #2421: check that we correctly instantiated type parameters outside of the implicit tree:
-            checkBounds(itree2.pos, NoPrefix, NoSymbol, undetParams, targs, "inferred ")
+            // TODO: refactoring needed, shouldn't emit it here
+            if(checkBounds(itree2.pos, NoPrefix, NoSymbol, undetParams, targs, "inferred ") nonEmpty) SearchFailure
+            else {
+              // filter out failures from type inference, don't want to remove them from undetParams!
+              // we must be conservative in leaving type params in undetparams
+              // prototype == WildcardType: want to remove all inferred Nothings
+              val AdjustedTypeArgs(okParams, okArgs) = adjustTypeArgs(undetParams, targs)
+              val subst: TreeTypeSubstituter =
+                if (okParams.isEmpty) EmptyTreeTypeSubstituter
+                else {
+                  val subst = new TreeTypeSubstituter(okParams, okArgs)
+                  subst traverse itree2 
+                  subst
+                }
 
-            // filter out failures from type inference, don't want to remove them from undetParams!
-            // we must be conservative in leaving type params in undetparams
-            // prototype == WildcardType: want to remove all inferred Nothings
-            val AdjustedTypeArgs(okParams, okArgs) = adjustTypeArgs(undetParams, targs)
-            val subst: TreeTypeSubstituter =
-              if (okParams.isEmpty) EmptyTreeTypeSubstituter
+              // #2421b: since type inference (which may have been
+              // performed during implicit search) does not check whether
+              // inferred arguments meet the bounds of the corresponding
+              // parameter (see note in solvedTypes), must check again
+              // here:
+              // TODO: I would prefer to just call typed instead of
+              // duplicating the code here, but this is probably a
+              // hotspot (and you can't just call typed, need to force
+              // re-typecheck)
+              // TODO: the return tree is ignored.  This seems to make
+              // no difference, but it's bad practice regardless.
+              // AM: if checked contains an error, the implicit search fails, because the result would not typecheck
+            
+              // we call typedTypeApply which can return an error tree, so we cannot ignore the tree
+              val checked = itree2 match {
+                case TypeApply(fun, args)           => typedTypeApply(itree2, EXPRmode, fun, args)
+                case Apply(TypeApply(fun, args), _) => typedTypeApply(itree2, EXPRmode, fun, args) // t2421c
+                case t                              => t
+              }
+
+              if (checked.containsErrorOrIsErrorTyped()) SearchFailure
               else {
-                val subst = new TreeTypeSubstituter(okParams, okArgs)
-                subst traverse itree2 
-                subst
-              }
-
-            // #2421b: since type inference (which may have been
-            // performed during implicit search) does not check whether
-            // inferred arguments meet the bounds of the corresponding
-            // parameter (see note in solvedTypes), must check again
-            // here:
-            // TODO: I would prefer to just call typed instead of
-            // duplicating the code here, but this is probably a
-            // hotspot (and you can't just call typed, need to force
-            // re-typecheck)
-            // TODO: the return tree is ignored.  This seems to make
-            // no difference, but it's bad practice regardless.
-            itree2 match {
-              case TypeApply(fun, args)           => typedTypeApply(itree2, EXPRmode, fun, args)
-              case Apply(TypeApply(fun, args), _) => typedTypeApply(itree2, EXPRmode, fun, args) // t2421c
-              case t                              => t
-            }
-
-            // #3340 -- TODO: rethink this
-            object MethodTypeWithImplicits {
-              def unapply(tp: Type): Option[(List[Symbol])] = tp match {
-                case mt@MethodType(params, res) => if(mt.isImplicit) Some(params) else unapply(res)
-                case _ => None
-              }
-            }
-
-            // println("2ndorder: "+(itree2, itree2.tpe match {case MethodTypeWithImplicits(ps) => ps.toString case t => t.toString}))
-            val secondOrderImplicitsSatisfiable = itree2.tpe match { // TODO: the inferImplicit below will be performed again later -- should be avoided
-              case MethodTypeWithImplicits(params) =>
-                // TODO lift out <this part> of applyImplicitArgs
-                val argResultsBuff = new ListBuffer[SearchResult]()
-                val c2 = context.makeSilent(true)
-                c2.implicitsEnabled = true
-                // apply the substitutions (undet type param -> type) that were determined
-                // by implicit resolution of implicit arguments on the left of this argument
-                for(param <- params) {
-                  var paramTp = param.tpe
-                  for(ar <- argResultsBuff)
-                    paramTp = paramTp.subst(ar.subst.from, ar.subst.to)
-
-                  argResultsBuff += inferImplicit(itree2, paramTp, true, false, c2) // TODO: this might loop
+                // #3340 -- TODO: rethink this
+                object MethodTypeWithImplicits {
+                  def unapply(tp: Type): Option[(List[Symbol])] = tp match {
+                    case mt@MethodType(params, res) => if(mt.isImplicit) Some(params) else unapply(res)
+                    case _ => None
+                  }
                 }
-                // </this part>
 
-                argResultsBuff.toList.zip(params) forall {
-                  case (arg, param) => //println("apsfd:"+(arg, param, arg != SearchFailure, param.hasFlag(DEFAULTPARAM)))
-                    arg != SearchFailure || param.hasFlag(DEFAULTPARAM)
+                // println("2ndorder: "+(itree2, itree2.tpe match {case MethodTypeWithImplicits(ps) => ps.toString case t => t.toString}))
+                val secondOrderImplicitsSatisfiable = itree2.tpe match { // TODO: the inferImplicit below will be performed again later -- should be avoided
+                  case MethodTypeWithImplicits(params) =>
+                    // TODO lift out <this part> of applyImplicitArgs
+                    val argResultsBuff = new ListBuffer[SearchResult]()
+                    val c2 = context.makeSilent(true)
+                    c2.implicitsEnabled = true
+                    // apply the substitutions (undet type param -> type) that were determined
+                    // by implicit resolution of implicit arguments on the left of this argument
+                    for(param <- params) {
+                      var paramTp = param.tpe
+                      for(ar <- argResultsBuff)
+                        paramTp = paramTp.subst(ar.subst.from, ar.subst.to)
+
+                      argResultsBuff += inferImplicit(itree2, paramTp, true, false, c2) // TODO: this might loop
+                    }
+                    // </this part>
+
+                    argResultsBuff.toList.zip(params) forall {
+                      case (arg, param) => //println("apsfd:"+(arg, param, arg != SearchFailure, param.hasFlag(DEFAULTPARAM)))
+                        arg != SearchFailure || param.hasFlag(DEFAULTPARAM)
+                    }
+                  case _ => true // there are no second-order implicits
                 }
-              case _ => true // there are no second-order implicits
-            }
 
-            // println("sois: "+secondOrderImplicitsSatisfiable)
-            if(secondOrderImplicitsSatisfiable){
-              val result = new SearchResult(itree2, subst)
-              incCounter(foundImplicits)
-              printInference("[typedImplicit1] SearchResult: " + result)
-              // println("RESULT = "+itree+"///"+itree1+"///"+itree2)//DEBUG
-              result
-            } else SearchFailure
-          } else fail("incompatible: %s does not match expected type %s".format(
-            itree2.tpe, pt.instantiateTypeParams(undetParams, tvars)))
+                // println("sois: "+secondOrderImplicitsSatisfiable)
+                if (!secondOrderImplicitsSatisfiable) SearchFailure
+                else {
+                  val result = new SearchResult(checked, subst)
+                  incCounter(foundImplicits)
+                  printInference("[typedImplicit1] SearchResult: " + result)
+                  result
+                }
+              }
+            }
+          }
         }
       }
       catch {
+        // TODO: once refactoring of type errors is done we should only
+        // catch here cyclic references.
         case ex: TypeError => fail(ex.getMessage())
       }
     }

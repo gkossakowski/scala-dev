@@ -833,7 +833,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             tree
           }
         } else {
-          CaseClassConstructorError(tree)
+          tree // TODO: CaseClassConstructorError(tree)
         }
       }
       
@@ -854,7 +854,10 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         if (qual.containsError()) qual // Fail quickly
         else typed(atPos(tree.pos)(Select(qual, nme.apply)), mode, pt)
       }
-      
+
+      println("adapt: "+ (tree, tree.tpe, pt, context.undetparams, modeString(mode)))
+      Thread.dumpStack()
+
       // begin adapt
       tree.tpe match {
         case atp @ AnnotatedType(_, _, _) if canAdaptAnnotations(tree, mode, pt) => // (-1)
@@ -2665,7 +2668,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 case _ => doTypedApply(tree, fun, args, mode, pt)
               }
             } else {
-              assert(!inPatternMode(mode)) // this case cannot arise for patterns
+              // assert(!inPatternMode(mode)) // this case cannot arise for patterns -- it does for parameterized extractors
               val lenientTargs = protoTypeArgs(tparams, formals, mt.resultApprox, pt)
               val strictTargs = (lenientTargs, tparams).zipped map ((targ, tparam) =>
                 if (targ == WildcardType) tparam.tpe else targ) //@M TODO: should probably be .tpeHK
@@ -2765,7 +2768,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           }
 
           // setType null is necessary so that ref will be stabilized; see bug 881
-          val fun1 = typedPos(fun.pos)(Apply(Select(fun setType null, unapp), List(arg)))
+          val fun1 = typedOperator(atPos(fun.pos)((Apply(Select(fun setType null, unapp), List(arg)))))
           
           // Set error tree
           if (fun1.containsError())
@@ -3656,12 +3659,13 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
     
       def typedApply(fun: Tree, args: List[Tree]) = {
+        println("typedApply: "+(fun, args, "in: "+context.tree.getClass))
         val stableApplication = (fun.symbol ne null) && fun.symbol.isMethod && fun.symbol.isStable
         if (stableApplication && isPatternMode) {
           // treat stable function applications f() as expressions.
           typed1(tree, mode & ~PATTERNmode | EXPRmode, pt)
         } else {
-          val funpt = if (isPatternMode) pt else WildcardType
+          val funpt = WildcardType //if (isPatternMode && !context.tree.isInstanceOf[Apply]) pt else WildcardType
           val appStart = startTimer(failedApplyNanos)
           val opeqStart = startTimer(failedOpEqNanos)
           

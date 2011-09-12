@@ -34,7 +34,9 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - def foo: this.type = 0 match { case 0 => this } // one(this): this.type !
+ - existentials and skolems, oh my! 
+  - library/scala//util/parsing/combinator/PackratParsers.scala 
+  - library/scala/collection/immutable/TrieIterator.scala)
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
  - anonymous classes in scrutinee (pos/t0646)
  - typing: pos/channels
@@ -221,7 +223,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
     def Xpat(scrutSym: Symbol)(pattern: Tree): List[ProtoTreeMaker] = {
-      def doUnapply(args: List[Tree], extractorCall: Tree, prevBinder: Symbol, patTreeOrig: Tree)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
+      def doUnapply(args: List[Tree], extractorCallIncludingDummy: Tree, prevBinder: Symbol, patTreeOrig: Tree)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
+        val Some(Apply(extractorCall, _)) = extractorCallIncludingDummy.find{ case Apply(_, List(Ident(nme.SELECTOR_DUMMY))) => true case _ => false }
         assert((extractorCall.tpe ne null) && (extractorCall.tpe ne NoType) && (extractorCall.tpe ne ErrorType), "args: "+ args +" extractorCall: "+ extractorCall)
         val pos = patTreeOrig.pos
         val extractorType = extractorCall.tpe
@@ -279,8 +282,16 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             castedBinder
           } else prevBinder
 
+        object spliceExtractorApply extends Transformer {
+          override def transform(t: Tree) = t match {
+            case Apply(x, List(Ident(nme.SELECTOR_DUMMY))) =>
+              treeCopy.Apply(t, x, List(CODE.REF(prevBinderOrCasted)))
+            case _ => super.transform(t)
+          }
+        }
         // the extractor call (applied to the binder bound by the flatMap corresponding to the previous (i.e., enclosing/outer) pattern)
-        val extractorApply = atPos(pos)(genApply(extractorCall, prevBinderOrCasted))
+        val extractorApply = atPos(pos)(spliceExtractorApply.transform(extractorCallIncludingDummy))
+
         val patTree =
           if(extractorType.finalResultType.typeSymbol == BooleanClass) genGuard(extractorApply)
           else extractorApply
@@ -340,11 +351,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         }
 
         patTree match {
-          case UnApply(Apply(unfun0, unargs), args) =>
+          case UnApply(unfun, args) =>
             // TODO: check unargs == args
             // println("unfun: "+ (unfun.tpe, unfun.symbol.ownerChain, unfun.symbol.info, prevBinder.info))
-            val unfun = unwrapExtractorApply(unfun0)(unfun0.symbol)
-
             doUnapply(args, unfun, prevBinder, patTree)
 
           case Apply(fun, args)     =>
@@ -371,23 +380,24 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               val savedUndets = context.undetparams
               val extractorCall = try {
                 context.undetparams = Nil
-                silent(_.typed(Apply(extractorSel, List(Ident("<argument>") setType fun.tpe.finalResultType)), EXPRmode, WildcardType)) match {
-                  case Apply(extractorCall, _)  =>
-                    unwrapExtractorApply(extractorCall)(extractor)
+                silent(_.typed(Apply(extractorSel, List(Ident(nme.SELECTOR_DUMMY) setType fun.tpe.finalResultType)), EXPRmode, WildcardType)) match {
+                  case extractorCall: Tree if !extractorCall.containsError() => extractorCall
                   case ex =>
                    // error("cannot type unapply call for "+ extractorSel +" error: "+ ex) // TODO: ErrorTree
-                   typedOperator(extractorSel)
+                   overrideUnsafe = true // all bets are off when you have unbound type params floating around
+                   Apply(typedOperator(extractorSel), List(Ident(nme.SELECTOR_DUMMY)))
                 }
               } finally context.undetparams = savedUndets
 
-              overrideUnsafe ||= extractorCall.tpe.typeParams.nonEmpty // all bets are off when you have unbound type params floating around
               doUnapply(args, extractorCall, prevBinder, patTree)
             }
 
           // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
           case MaybeBoundTyped(patBinder, tpe) =>
             val prevTp = prevBinder.info.widen
-            val accumType = intersectionType(List(prevTp, tpe))
+            val accumType = glb(List(prevTp, tpe)) //if(tpe <:< prevTp) tpe else if (prevTp <:< tpe) prevTp else intersectionType(List(prevTp, tpe))
+            // println("glb vs accum: "+(glb(List(prevTp, tpe)), accumType))
+            // println("packed: "+ packedType(patTree, context.owner)._1)
 
             val condTp = genTypeDirectedEquals(prevBinder, prevTp, tpe)
             val cond = maybeOuterCheck(tpe, prevBinder) map (genAnd(_, condTp)) getOrElse condTp
@@ -421,7 +431,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             val cond = maybeOuterCheck(patTree.tpe, prevBinder) map (genAnd(_, condEq)) getOrElse condEq
 
             // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
-            // equals need not be well-behaved, so don't intersect with pattern's (stabilized) type (unlike MaybeBoundTyped's accumType, where its required)
+            // equals need not be well-behaved, so don't intersect with pattern's (stabilized) type (unlike MaybeBoundTyped's accumType, where it's required)
             val extractor = atPos(patTree.pos)(genTypedGuard(cond, prevTp, prevBinder))
 
             res += singleBinderProtoTreeMakerWithTp(prevBinder, prevTp, unsafe = false, extractor)
@@ -631,8 +641,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                 // could in principle always assume unsafe and use pt = WildcardType
                 if(overrideUnsafe || unsafe) typed(to.head.shallowDuplicate, EXPRmode, WildcardType)
                 else silent(_.typed(to.head.shallowDuplicate, EXPRmode, tree.tpe.widen)) match {
-                  case t: Tree => t
-                  case ex: TypeError => // these should be relatively rare
+                  case t: Tree if !t.containsError() => t
+                  case ex => // these should be relatively rare
                     // not necessarily a bug: e.g., in Node(_, md @ UnprefixedAttribute(_, _, _), _*),
                     // md.info == UnprefixedAttribute, whereas x._2 : MetaData
                     // (where x is the binder of the function that'll be flatMap'ed over Node's unapply;
@@ -659,7 +669,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genGuard(t: Tree, then: Tree = UNIT): Tree = (matchingStrategy DOT "guard".toTermName)(t, then) // matchingStrategy.guard(t, then)
     def genRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchingStrategy.runOrElse(scrut)(matcher)
     def genCast(expectedTp: Type, binder: Symbol): Tree = genTypedGuard(gen.mkIsInstanceOf(REF(binder), expectedTp, true, false), expectedTp, binder) // TODO: use genTypeDirectedEquals(binder, binder.info.widen, expectedTp) instead of gen.mkIsInstanceOf?
-    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree  = genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
+    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
 
 
     // methods in the monad instance

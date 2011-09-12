@@ -34,7 +34,9 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - def foo: this.type = 0 match { case 0 => this } // one(this): this.type !
+ - existentials and skolems, oh my! 
+  - library/scala//util/parsing/combinator/PackratParsers.scala 
+  - library/scala/collection/immutable/TrieIterator.scala)
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
  - anonymous classes in scrutinee (pos/t0646)
  - typing: pos/channels
@@ -387,7 +389,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
           case MaybeBoundTyped(patBinder, tpe) =>
             val prevTp = prevBinder.info.widen
-            val accumType = intersectionType(List(prevTp, tpe))
+            val accumType = glb(List(prevTp, tpe)) //if(tpe <:< prevTp) tpe else if (prevTp <:< tpe) prevTp else intersectionType(List(prevTp, tpe))
+            // println("glb vs accum: "+(glb(List(prevTp, tpe)), accumType))
+            // println("packed: "+ packedType(patTree, context.owner)._1)
 
             val condTp = genTypeDirectedEquals(prevBinder, prevTp, tpe)
             val cond = maybeOuterCheck(tpe, prevBinder) map (genAnd(_, condTp)) getOrElse condTp
@@ -421,7 +425,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             val cond = maybeOuterCheck(patTree.tpe, prevBinder) map (genAnd(_, condEq)) getOrElse condEq
 
             // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
-            // equals need not be well-behaved, so don't intersect with pattern's (stabilized) type (unlike MaybeBoundTyped's accumType, where its required)
+            // equals need not be well-behaved, so don't intersect with pattern's (stabilized) type (unlike MaybeBoundTyped's accumType, where it's required)
             val extractor = atPos(patTree.pos)(genTypedGuard(cond, prevTp, prevBinder))
 
             res += singleBinderProtoTreeMakerWithTp(prevBinder, prevTp, unsafe = false, extractor)
@@ -659,7 +663,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genGuard(t: Tree, then: Tree = UNIT): Tree = (matchingStrategy DOT "guard".toTermName)(t, then) // matchingStrategy.guard(t, then)
     def genRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchingStrategy.runOrElse(scrut)(matcher)
     def genCast(expectedTp: Type, binder: Symbol): Tree = genTypedGuard(gen.mkIsInstanceOf(REF(binder), expectedTp, true, false), expectedTp, binder) // TODO: use genTypeDirectedEquals(binder, binder.info.widen, expectedTp) instead of gen.mkIsInstanceOf?
-    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree  = genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
+    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
 
 
     // methods in the monad instance

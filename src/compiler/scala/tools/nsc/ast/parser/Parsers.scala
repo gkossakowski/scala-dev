@@ -1803,10 +1803,11 @@ self =>
               case LBRACKET   => atPos(start, in.offset)(TypeApply(convertToTypeId(t), typeArgs()))
               case _          => t
             }
-            in.token match {
+            val res = in.token match {
               case LPAREN   => atPos(start, in.offset)(Apply(typeAppliedTree, argumentPatterns()))
               case _        => typeAppliedTree
             }
+            simplePatternRest(res)
           case USCORE =>
             in.nextToken()
             atPos(start, start) { Ident(nme.WILDCARD) }
@@ -1821,6 +1822,26 @@ self =>
             syntaxErrorOrIncomplete("illegal start of simple pattern", true)
             errorPatternTree
         }
+      }
+    }
+    def simplePatternRest(t: Tree): Tree = { // copy-pasted from simpleExprRest...
+      newLineOptWhenFollowedBy(LBRACE)
+      in.token match {
+        case LPAREN | LBRACE =>
+          val app = atPos(t.pos.startOrPoint, in.offset) {
+            // look for anonymous function application like (f _)(x) and
+            // translate to (f _).apply(x), bug #460
+            val sel = t match {
+              case Parens(List(Typed(_, _: Function))) =>
+                Select(stripParens(t), nme.apply)
+              case _ =>
+                stripParens(t)
+            }
+            Apply(sel, argumentExprs())
+          }
+          simplePatternRest(app)
+        case _ =>
+          t
       }
     }
     /** The implementation of the context sensitive methods for parsing outside of patterns. */

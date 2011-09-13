@@ -2110,7 +2110,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         val oldBodyTp = body1.tpe
         body1.tpe = context.restoreTypeBounds(body1.tpe)
         //println("gadt: "+ (body1.tpe, isFullyDefined(pt), oldBodyTp, pt))
-        if (isFullyDefined(pt) && !(oldBodyTp <:< pt)) { // AM: this was body1.tpe <:< pt, but isn't that always true after restoreTypeBounds?
+        if (isFullyDefined(pt) && !(body1.tpe <:< pt)) {
           body1 = typed {
             atPos(body1.pos) {
               // @M no need for pt.normalize here, is done in erasure
@@ -3458,7 +3458,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             cases1 = cases1 map (adaptCase(_, owntype))
           }
           if(phase.id <= currentRun.typerPhase.id) // don't run translator after typers (see comments in PatMatVirtualiser)
-            typed1(translator.X(treeCopy.Match(tree, selector1, cases1), owntype), mode, owntype) // setType owntype
+            typed1(translator.X(treeCopy.Match(tree, selector1, cases1), owntype), mode, WildcardType) setType owntype
           else
             treeCopy.Match(tree, selector1, cases1) setType owntype
         }

@@ -217,7 +217,10 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def Xcase(scrutSym: Symbol)(tree: Tree): Tree = {
       tree match {
         case CaseDef(pattern, guard, body) =>
-          threadSubstitution(Xpat(scrutSym)(pattern) ++ Xguard(guard))._1.foldRight(genOne(body))(_ genFlatMap _) setPos tree.pos
+          // body.tpe is the type of the body after applying the substitution that represents the solution of GADT type inference
+          // need the explicit cast in case our substitutions in the body change the type to something that doesn't take GADT typing into account
+          val bodyCasted = genAsInstanceOf(body, body.tpe)
+          threadSubstitution(Xpat(scrutSym)(pattern) ++ Xguard(guard))._1.foldRight(genOne(bodyCasted))(_ genFlatMap _) setPos tree.pos
           // TODO: if we want to support a generalisation of Kotlin's patmat continue, must not hard-wire lifting into the monad (genOne), so that user can generate failure when needed -- use implicit conversion to lift into monad on-demand
       }
     }
@@ -596,7 +599,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       // ExplicitOuter replaces `Select(q, outerSym) OBJ_EQ expectedPrefix` by `Select(q, outerAccessor(outerSym.owner)) OBJ_EQ expectedPrefix`
       // if there's an outer accessor, otherwise the condition becomes `true` -- TODO: can we improve needsOuterTest so there's always an outerAccessor?
       val outer = expectedTp.typeSymbol.newMethod("<outer>".toTermName) setInfo expectedTp.prefix setFlag SYNTHETIC
-      (Select(gen.mkAsInstanceOf(REF(scrut), expectedTp, true, false), outer)) OBJ_EQ expectedPrefix
+      (Select(genAsInstanceOf(REF(scrut), expectedTp), outer)) OBJ_EQ expectedPrefix
     }
 
     /** A conservative approximation of which patterns do not discern anything.
@@ -677,8 +680,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       // the other workaround is to explicitly pass expectedTp as the type argument for the call to guard, but repacking the existential somehow feels more robust
       val exists = (expectedTp filter {tp => tp.typeSymbol.isExistentiallyBound}) map (_.typeSymbol)
       val expectedTpOk = existentialAbstraction(exists, expectedTp)
-      genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTpOk, true, false))
+      genGuard(cond, genAsInstanceOf(REF(binder), expectedTpOk))
     }
+    def genAsInstanceOf(t: Tree, tp: Type): Tree = gen.mkAsInstanceOf(t, tp, true, false)
       // specify expectedType explicitly, because if it's an existential type, type inference will mess up
       // genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false), expectedTp)
 

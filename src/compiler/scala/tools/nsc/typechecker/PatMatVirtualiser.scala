@@ -35,8 +35,9 @@ import scala.collection.mutable.ListBuffer
 
 TODO:
  - existentials and skolems, oh my! 
-  - library/scala//util/parsing/combinator/PackratParsers.scala 
-  - library/scala/collection/immutable/TrieIterator.scala)
+  - library/scala/collection/immutable/TrieIterator.scala 
+      --> something goes wrong when locker is compiling the lib,
+          but all is well when the quick.comp (built from the same source as locker) is building TrieIterator stand-alone
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
 
   * (longer-term) TODO:
@@ -269,7 +270,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           if(!(prevBinder.info.widen <:< extractorParamType)) {
             val castedBinder = freshSym(pos, extractorParamType, "cp")
             // cast
-            val condTp = gen.mkIsInstanceOf(CODE.REF(prevBinder), extractorParamType, true, false)
+            val condTp = genIsInstanceOf(CODE.REF(prevBinder), extractorParamType)
             // outer check, if necessary (TODO: what's the semantics for outerchecks on user-defined extractors?)
             val cond = maybeOuterCheck(patTreeOrig.tpe, prevBinder) map ((genAnd(_, condTp))) getOrElse condTp
 
@@ -278,7 +279,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             res += (List(genTypedGuard(cond, extractorParamType, prevBinder)),
                       { outerSubst: TreeXForm =>
                           val theSubst = typedSubst(List(prevBinder), List(CODE.REF(castedBinder)))
-                          def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
+                          def nextSubst(tree: Tree): Tree = outerSubst(theSubst(tree))
                           (nestedTree => genFun(castedBinder, nextSubst(nestedTree)), nextSubst)
                       })
 
@@ -293,7 +294,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           }
         }
         // the extractor call (applied to the binder bound by the flatMap corresponding to the previous (i.e., enclosing/outer) pattern)
-        val extractorApply = atPos(pos)(spliceExtractorApply.transform(extractorCallIncludingDummy))
+        val extractorApply = atPos(pos)(spliceExtractorApply.transform(extractorCallIncludingDummy)) // treegen
 
         val patTree =
           if(extractorType.finalResultType.typeSymbol == BooleanClass) genGuard(extractorApply)
@@ -311,7 +312,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             { outerSubst: TreeXForm =>
                 val binder = freshSym(patTree.pos, typeInMonad)
                 val theSubst = typedSubst(patBinders, subPatRefs(binder))
-                def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
+                def nextSubst(tree: Tree): Tree = outerSubst(theSubst(tree))
                 (nestedTree => genFun(binder, lenGuard(binder, nextSubst(nestedTree))), nextSubst)
             })
 
@@ -327,7 +328,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                 val binder = freshSym(patTrees.head.pos, binderType)
                 val theSubst = typedSubst(List(binderToSubst), List(CODE.REF(binder)), unsafe)
                 // println("theSubst: "+ theSubst)
-                def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
+                def nextSubst(tree: Tree): Tree = outerSubst(theSubst(tree))
                 (nestedTree => genFun(binder, nextSubst(nestedTree)), nextSubst)
             })
       }
@@ -360,8 +361,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             doUnapply(args, unfun, prevBinder, patTree)
 
           case Apply(fun, args)     =>
-            val orig = if(fun.isInstanceOf[TypeTree]) fun.asInstanceOf[TypeTree].original else fun
-            val origSym = orig.symbol // undo rewrite performed in (5) of adapt
+            // undo rewrite performed in (5) of adapt
+            val orig = fun match {case tpt: TypeTree => tpt.original case _ => fun}
+            val origSym = orig.symbol
             val extractor = unapplyMember(origSym.filter(sym => reallyExists(unapplyMember(sym.tpe))).tpe)
             if((fun.tpe eq null) || fun.tpe.isError || (extractor eq NoSymbol)) {
                error("cannot find unapply member for "+ fun +" with args "+ args) // TODO: ErrorTree
@@ -388,7 +390,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                   case ex =>
                    // error("cannot type unapply call for "+ extractorSel +" error: "+ ex) // TODO: ErrorTree
                    overrideUnsafe = true // all bets are off when you have unbound type params floating around
-                   Apply(typedOperator(extractorSel), List(Ident(nme.SELECTOR_DUMMY)))
+                   Apply(typedOperator(extractorSel), List(Ident(nme.SELECTOR_DUMMY))) // no need to set the type of the dummy arg, it will be replaced anyway
                 }
               } finally context.undetparams = savedUndets
 
@@ -416,7 +418,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                       { outerSubst: TreeXForm =>
                           val theSubst = typedSubst(List(patBinder), List(CODE.REF(prevBinder)), unsafe = true)
                           // println("proto subst of: "+ patBinder)
-                          def nextSubst(tree: Tree): Tree = outerSubst(theSubst.transform(tree))
+                          def nextSubst(tree: Tree): Tree = outerSubst(theSubst(tree))
                           (nestedTree => nextSubst(nestedTree), nextSubst)
                       })
             // the symbols are markers that may be used to refer to the result of the extractor in which the corresponding tree is nested
@@ -451,7 +453,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               // `one(x) : T` where x is the binder before this pattern, which will be replaced by the binder for the alternative by singleBinderProtoTreeMaker below
               // T is the widened type of the previous binder -- this ascription is necessary to infer a clean type for `or` -- the alternative combinator -- in the presence of existential types
               // see pos/virtpatmat_exist1.scala
-              val one = genOne(Typed(CODE.REF(prevBinder), TypeTree(prevBinder.info.widen)))
+              val one = genOne(genTyped(CODE.REF(prevBinder), prevBinder.info.widen))
               atPos(alt.pos)(treeMakers.foldRight (one) (_ genFlatMap _))
             }
 
@@ -554,7 +556,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         // wrapping in a null check on the scrutinee
         // only check if minimal length is non-trivially satisfied
         val minLenToCheck = if(lastIsStar) 1 else 0
-        if (len >= minLenToCheck) IF ((seqTree(binder) ANY_!= NULL) AND lenOk) THEN then ELSE genZero
+        if (len >= minLenToCheck) IF ((seqTree(binder) ANY_!= NULL) AND lenOk) THEN then ELSE genZero // treegen
         else then
       }
 
@@ -568,7 +570,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       def isMatchUnlessNull = scrutTp <:< expectedTp && (expectedTp <:< AnyRefClass.tpe)
       def isRef             = scrutTp <:< AnyRefClass.tpe
       def genEqualsAndInstanceOf(sym: Symbol): Tree
-        = genEquals(scrut, REF(sym)) AND gen.mkIsInstanceOf(REF(scrut), expectedTp.widen, true, false)
+        = genEquals(scrut, REF(sym)) AND genIsInstanceOf(REF(scrut), expectedTp.widen)
 
       expectedTp match {
 // TODO: align with spec -- the cases below implement what the full pattern matcher does, not the spec
@@ -580,7 +582,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           case ConstantType(Constant(null)) if isRef    => REF(scrut) OBJ_EQ NULL
           case ConstantType(const)                      => genEquals(scrut, Literal(const))
           case _ if isMatchUnlessNull                   => REF(scrut) OBJ_NE NULL
-          case _                                        => gen.mkIsInstanceOf(REF(scrut), expectedTp, true, false)
+          case _                                        => genIsInstanceOf(REF(scrut), expectedTp)
         }
     }
 
@@ -635,7 +637,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     // We must explicitly type the trees that we replace inside some other tree, since the latter may already have been typed,
     // and will thus not be retyped. This means we might end up with untyped subtrees inside bigger, typed trees.
-    def typedSubst(from: List[Symbol], to: List[Tree], unsafe: Boolean = false) = new Transformer {
+    def typedSubst(from: List[Symbol], to: List[Tree], unsafe: Boolean = false): Tree => Tree = new Transformer with (Tree => Tree) {
+      def apply(tree: Tree): Tree = transform(tree)  // treegen
       override def transform(tree: Tree): Tree = tree match {
         case Ident(_) =>
           def subst(from: List[Symbol], to: List[Tree]): Tree =
@@ -666,44 +669,48 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       }
     }
 
-    import CODE._
-    // methods in MatchingStrategy (the monad companion)
-    def genZero: Tree = matchingStrategy DOT "zero".toTermName                                          // matchingStrategy.zero
-    def genOne(res: Tree): Tree = (matchingStrategy DOT "one".toTermName)(res)                          // matchingStrategy.one(res)
-    def genOr(f: Tree, as: List[Tree]): Tree = (matchingStrategy DOT "or".toTermName)((f :: as): _*)    // matchingStrategy.or(f, as)
-    def genGuard(t: Tree, then: Tree = UNIT): Tree = (matchingStrategy DOT "guard".toTermName)(t, then) // matchingStrategy.guard(t, then)
-    def genRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchingStrategy.runOrElse(scrut)(matcher)
-    def genCast(expectedTp: Type, binder: Symbol): Tree = genTypedGuard(gen.mkIsInstanceOf(REF(binder), expectedTp, true, false), expectedTp, binder) // TODO: use genTypeDirectedEquals(binder, binder.info.widen, expectedTp) instead of gen.mkIsInstanceOf?
-    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = {
-      // the other workaround (besides repackExistential) is to explicitly pass expectedTp as the type argument for the call to guard, but repacking the existential somehow feels more robust
-      genGuard(cond, genAsInstanceOf(REF(binder), expectedTp))
-    }
-    
     // repack existential types, otherwise they sometimes get unpacked in the wrong location (type inference comes up with an unexpected skolem)
     // TODO: I don't really know why this happens -- maybe because the owner hierarchy changes?
-    def repackExistential(tp: Type): Type = 
+    // the other workaround (besides repackExistential) is to explicitly pass expectedTp as the type argument for the call to guard, but repacking the existential somehow feels more robust
+    def repackExistential(tp: Type): Type                              = 
       existentialAbstraction((tp filter {t => t.typeSymbol.isExistentiallyBound}) map (_.typeSymbol), tp)
 
-    def genAsInstanceOf(t: Tree, tp: Type): Tree = gen.mkAsInstanceOf(t, repackExistential(tp), true, false)
-      // specify expectedType explicitly, because if it's an existential type, type inference will mess up
-      // genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false), expectedTp)
+    // object noShadowedUntyped extends Traverser {
+    //   override def traverse(t: Tree) {
+    //     if ((t.tpe ne null) && (t.tpe ne NoType)) okTree = t
+    //     else if(okTree ne null) println("untyped subtree "+ t +" in typed tree"+ okTree +" : "+ okTree.tpe)
+    //     super.traverse(t)
+    //   }
+    //   var okTree: Tree = null
+    // }
+    // private def c(t: Tree): Tree = noShadowedUntyped(t)
 
+    import CODE._
+
+    // methods in MatchingStrategy (the monad companion)
+    def genRunOrElse(scrut: Tree, matcher: Tree): Tree                    = ( (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher)        ) // matchingStrategy.runOrElse(scrut)(matcher)
+    def genZero: Tree                                                     = ( matchingStrategy DOT "zero".toTermName                                      ) // matchingStrategy.zero
+    def genOne(res: Tree): Tree                                           = ( (matchingStrategy DOT "one".toTermName)(res)                                ) // matchingStrategy.one(res)
+    def genOr(f: Tree, as: List[Tree]): Tree                              = ( (matchingStrategy DOT "or".toTermName)((f :: as): _*)                       ) // matchingStrategy.or(f, as)
+    def genGuard(t: Tree, then: Tree = UNIT): Tree                        = ( (matchingStrategy DOT "guard".toTermName)(t, then)                          ) // matchingStrategy.guard(t, then)
+    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = ( genGuard(cond, genAsInstanceOf(REF(binder), expectedTp))                    )
+    def genCast(expectedTp: Type, binder: Symbol): Tree                   = ( genTypedGuard(genIsInstanceOf(REF(binder), expectedTp), expectedTp, binder) )
 
     // methods in the monad instance
-    def genFlatMap(a: Tree, b: Tree): Tree = (a DOT "flatMap".toTermName)(b)
-    def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree = {
-      def tpd(t: Tree) = if(pt == NoType) t else Typed(t, TypeTree(repackExistential(pt)))
-      (tpd(thisCase) DOT "orElse".toTermName)(tpd(elseCase))
-    }
+    def genFlatMap(a: Tree, b: Tree): Tree                                = ( (a DOT "flatMap".toTermName)(b)                                             )
+    def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree    = ( (genTyped(thisCase, pt) DOT "orElse".toTermName)(genTyped(elseCase, pt))    )
 
     // misc
-    def genApply(fun: Tree, arg: Symbol): Tree = fun APPLY REF(arg)
-    def genSelect(tgt: Tree, mem: Symbol): Tree = tgt DOT mem
-    def genFun(arg: Symbol, body: Tree): Tree = Function(List(ValDef(arg)), body)
-    def genIndex(tgt: Tree)(i: Int): Tree = tgt APPLY (LIT(i))
-    def genDrop(tgt: Tree)(n: Int): Tree = (tgt DOT "drop".toTermName) (LIT(n))
-    def genTupleSel(binder: Symbol)(i: Int): Tree = (REF(binder) DOT ("_"+i).toTermName) // make tree that accesses the i'th component of the tuple referenced by binder
-    def genEquals(binder: Symbol, checker: Tree): Tree = checker MEMBER_== REF(binder) // NOTE: checker must be the target of the ==, that's the patmat semantics for ya
-    def genAnd(a: Tree, b: Tree): Tree = a AND b
+    def genApply(fun: Tree, arg: Symbol): Tree                            = ( fun APPLY REF(arg)                                                          )
+    def genSelect(tgt: Tree, mem: Symbol): Tree                           = ( tgt DOT mem                                                                 )
+    def genFun(arg: Symbol, body: Tree): Tree                             = ( Function(List(ValDef(arg)), body)                                           )
+    def genTupleSel(binder: Symbol)(i: Int): Tree                         = ( (REF(binder) DOT ("_"+i).toTermName)                                        ) // make tree that accesses the i'th component of the tuple referenced by binder
+    def genIndex(tgt: Tree)(i: Int): Tree                                 = ( tgt APPLY (LIT(i))                                                          )
+    def genDrop(tgt: Tree)(n: Int): Tree                                  = ( (tgt DOT "drop".toTermName) (LIT(n))                                        )
+    def genEquals(binder: Symbol, checker: Tree): Tree                    = ( checker MEMBER_== REF(binder)                                               ) // NOTE: checker must be the target of the ==, that's the patmat semantics for ya
+    def genAnd(a: Tree, b: Tree): Tree                                    = ( a AND b                                                                     )
+    def genTyped(t: Tree, tp: Type): Tree                                 = ( if(tp == NoType) t else Typed(t, TypeTree(repackExistential(tp)))           )
+    def genAsInstanceOf(t: Tree, tp: Type): Tree                          = ( gen.mkAsInstanceOf(t, repackExistential(tp), true, false)                   )
+    def genIsInstanceOf(t: Tree, tp: Type): Tree                          = ( gen.mkIsInstanceOf(t, repackExistential(tp), true, false)                   )
   }
 }

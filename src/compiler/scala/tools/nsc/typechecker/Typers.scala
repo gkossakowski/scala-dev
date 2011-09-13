@@ -3457,8 +3457,20 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           if (needAdapt) {
             cases1 = cases1 map (adaptCase(_, owntype))
           }
-          if(phase.id <= currentRun.typerPhase.id) // don't run translator after typers (see comments in PatMatVirtualiser)
-            typed1(translator.X(treeCopy.Match(tree, selector1, cases1), owntype), mode, WildcardType) setType owntype
+          if(phase.id <= currentRun.typerPhase.id) { // don't run translator after typers (see comments in PatMatVirtualiser)
+            typed1(translator.X(treeCopy.Match(tree, selector1, cases1), owntype), mode, WildcardType) setType owntype // TODO: get rid of setType owntype -- it should all typecheck
+            // object checker extends Traverser {
+            //   override def traverse(t: Tree) {
+            //     if((t ne EmptyTree) && (!t.isInstanceOf[MemberDef]) && // these aren't supposed to be typed
+            //        (t.tpe == null || t.tpe == NoType || t.tpe == ErrorType)) println("illegal type "+ t.tpe +" for "+ t + " at "+ t.pos +" in "+ prevTree)
+            //     else prevTree = t
+            //     super.traverse(t)
+            //   }
+            //   var prevTree: Tree = null
+            // }
+            // checker(res)
+            // res
+          }
           else
             treeCopy.Match(tree, selector1, cases1) setType owntype
         }

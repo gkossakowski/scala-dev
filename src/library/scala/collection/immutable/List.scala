@@ -211,7 +211,7 @@ sealed abstract class List[+A] extends LinearSeq[A]
   }
 
   override def takeRight(n: Int): List[A] = {
-    @tailrec
+    // @tailrec
     def loop(lead: List[A], lag: List[A]): List[A] = lead match {
       case Nil => lag
       case _ :: tail => loop(tail, lag.tail)

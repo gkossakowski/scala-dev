@@ -579,7 +579,8 @@ trait Parsers {
 
     def continue(in: Input): ParseResult[List[T]] = {
       val p0 = p    // avoid repeatedly re-evaluating by-name parser
-      @tailrec def applyp(in0: Input): ParseResult[List[T]] = p0(in0) match {
+      // @tailrec
+      def applyp(in0: Input): ParseResult[List[T]] = p0(in0) match {
         case Success(x, rest) => elems += x ; applyp(rest)
         case _                => Success(elems.toList, in0)
       }
@@ -608,7 +609,8 @@ trait Parsers {
       val elems = new ListBuffer[T]
       val p0 = p    // avoid repeatedly re-evaluating by-name parser
 
-      @tailrec def applyp(in0: Input): ParseResult[List[T]] =
+      // @tailrec 
+      def applyp(in0: Input): ParseResult[List[T]] =
         if (elems.length == num) Success(elems.toList, in0)
         else p0(in0) match {
           case Success(x, rest) => elems += x ; applyp(rest)

@@ -89,7 +89,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       val xTree = tree match {
         case Match(scrut, cases) =>
           // TODO: deal with scrut == EmptyTree
-          val scrutType = if(scrut.tpe ne null) scrut.tpe.widen else {error("TODO: support match with empty scrut"); NoType} // TODO: ErrorTree
+          val scrutType = if(scrut.tpe ne null) elimAnonymousClass(scrut.tpe.widen) else {error("TODO: support match with empty scrut"); NoType} // TODO: ErrorTree
           val scrutSym = freshSym(tree.pos, scrutType)
           genRunOrElse(scrut,
                       genFun(scrutSym,

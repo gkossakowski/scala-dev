@@ -810,7 +810,6 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
       
       def adaptConstrPattern(): Tree = { // (5)
-        if(tree.symbol == null) return tree // TODO
         val extractor = tree.symbol.filter(sym => reallyExists(unapplyMember(sym.tpe)))
         if (extractor != NoSymbol) {
           tree setSymbol extractor
@@ -830,12 +829,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   else err
                 case _ => tree1
               }
-          } else {
-            tree
-          }
-        } else {
-          tree // TODO: CaseClassConstructorError(tree)
-        }
+          } else tree
+        } else CaseClassConstructorError(tree)
       }
       
       def insertApply(): Tree = {
@@ -915,7 +910,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           }
           if (tree.isType) 
             adaptType()
-          else if ((mode & (PATTERNmode | FUNmode)) == (PATTERNmode | FUNmode)) 
+          else if ((mode & (PATTERNmode | FUNmode)) == (PATTERNmode | FUNmode) &&
+                   !tree.isInstanceOf[UnApply]) // don't adapt when we're in the middle of a partially applied extractor
             adaptConstrPattern()
           else if (inAllModes(mode, EXPRmode | FUNmode) &&
             !tree.tpe.isInstanceOf[MethodType] &&
@@ -2429,10 +2425,11 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
     }
 
-    def doTypedApply(tree: Tree, fun0: Tree, args: List[Tree], mode0: Int, pt0: Type): Tree = {
+    def doTypedApply(tree: Tree, fun0: Tree, args: List[Tree], mode0: Int, pt0: Type): Tree = { // TODO_NMT: check the assumption that args nonEmpty
       var pt = pt0
       var mode = mode0
-      // TODO_NMT: check the assumption that args nonEmpty
+
+      // parameterised extractors: unwrap unapply (will put it back after typing the unapply application)
       var fun = fun0 match {
         case UnApply(fun, _) => 
           // println("unwrapping unapply: "+(fun, args, modeString(mode), pt, context.undetparams))
@@ -2443,6 +2440,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           fun
         case _ => fun0
       }
+
+      // deal with overloading
       if (fun.hasSymbol && fun.symbol.isOverloaded) {
         // remove alternatives with wrong number of parameters without looking at types.
         // less expensive than including them in inferMethodAlternatvie (see below).
@@ -2732,8 +2731,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             tree
           else 
             ErroneousFunInTypeApplyError(fun, args)
-        /* --- begin unapply  --- */
 
+/* --- begin unapply  --- */
         case otpe if inPatternMode(mode) && unapplyMember(otpe).exists =>
           if (args.length > MaxTupleArity)
             return TooManyArgsPatternError(fun)
@@ -2806,27 +2805,30 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             }
             else
               WrongNumberArgsPatternError(tree, fun)
-          } else {
+          } else { // parameterised extractor: can't type arguments yet, must first fully apply (so that types can be inferred before checking the nested patterns (i.e., the args))
             val pt1 = if (isFullyDefined(pt)) pt else makeFullyDefined(pt)
             val itype = glb(List(pt1, arg.tpe))
+            // println("param extractor: "+(fun1, itype))
             arg.tpe = pt1    // restore type (arg is a dummy tree, just needs to pass typechecking)
             UnApply(fun1, args) setPos tree.pos setType itype
           }
-          
 /* --- end unapply  --- */
+
         case _ =>
           ApplyWithoutArgsError(tree, fun)
       }
+
+      // rewrap in UnApply if we unwrapped when coming in
       fun0 match {
         case UnApply(fun, args) =>
-          val fun1 = res
-          if(fun1.tpe.paramss.isEmpty) { // got to the base case
-            val formals0 = unapplyTypeList(fun1.symbol, fun1.tpe)
+          // println("wrapped unapply: "+(res, res.tpe))
+          if(res.tpe.paramss.isEmpty) { // got to the base case --> check arguments (subpatterns)
+            val formals0 = unapplyTypeList(res.symbol, res.tpe)
             val formals1 = formalTypes(formals0, args.length)
             if (sameLength(formals1, args)) {
-              treeCopy.UnApply(fun0, fun1, typedArgs(args, PATTERNmode, formals0, formals1))
+              treeCopy.UnApply(fun0, res, typedArgs(args, PATTERNmode, formals0, formals1))
             } else WrongNumberArgsPatternError(tree, fun)
-          } else treeCopy.UnApply(fun0, fun1, args)
+          } else treeCopy.UnApply(fun0, res, args) // more applications pending, hopefully -- just push the new function into the UnApply; we'll be back!
         case _ => res
       }
     }

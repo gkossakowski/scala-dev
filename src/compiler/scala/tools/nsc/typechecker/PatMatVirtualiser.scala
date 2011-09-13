@@ -90,7 +90,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           val scrutType = if(scrut.tpe ne null) elimAnonymousClass(scrut.tpe.widen) else {error("TODO: support match with empty scrut"); NoType} // TODO: ErrorTree
           val scrutSym = freshSym(tree.pos, scrutType)
           // when specified, need to propagate pt explicitly, type inferencer can't handle it
-          val optPt = if(pt == WildcardType) pt else appliedType(matchingMonadType, List(pt))
+          val optPt = if(!isFullyDefined(pt)) NoType else appliedType(matchingMonadType, List(pt))
           genRunOrElse(scrut,
                       genFun(scrutSym,
                             ((cases map Xcase(scrutSym)) ++ List(genZero)) reduceLeft genTypedOrElse(optPt)))
@@ -686,7 +686,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     // methods in the monad instance
     def genFlatMap(a: Tree, b: Tree): Tree = (a DOT "flatMap".toTermName)(b)
     def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree = {
-      def tpd(t: Tree) = if(pt == WildcardType) t else Typed(t, TypeTree(pt))
+      def tpd(t: Tree) = if(pt == NoType) t else Typed(t, TypeTree(pt))
       (tpd(thisCase) DOT "orElse".toTermName)(tpd(elseCase))
     }
 

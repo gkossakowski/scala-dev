@@ -2107,8 +2107,10 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       
       var body1: Tree = typed(cdef.body, pt)
       if (!context.savedTypeBounds.isEmpty) {
+        val oldBodyTp = body1.tpe
         body1.tpe = context.restoreTypeBounds(body1.tpe)
-        if (isFullyDefined(pt) && !(body1.tpe <:< pt)) {
+        //println("gadt: "+ (body1.tpe, isFullyDefined(pt), oldBodyTp, pt))
+        if (isFullyDefined(pt) && !(oldBodyTp <:< pt)) { // AM: this was body1.tpe <:< pt, but isn't that always true after restoreTypeBounds?
           body1 = typed {
             atPos(body1.pos) {
               // @M no need for pt.normalize here, is done in erasure

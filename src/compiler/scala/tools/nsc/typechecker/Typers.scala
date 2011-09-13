@@ -3458,7 +3458,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             cases1 = cases1 map (adaptCase(_, owntype))
           }
           if(phase.id <= currentRun.typerPhase.id) // don't run translator after typers (see comments in PatMatVirtualiser)
-            typed1(translator.X(treeCopy.Match(tree, selector1, cases1), owntype), mode, owntype) // setType owntype
+            typed1(translator.X(treeCopy.Match(tree, selector1, cases1), pt), mode, owntype) // setType owntype
           else
             treeCopy.Match(tree, selector1, cases1) setType owntype
         }

@@ -38,8 +38,6 @@ TODO:
   - library/scala//util/parsing/combinator/PackratParsers.scala 
   - library/scala/collection/immutable/TrieIterator.scala)
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
- - anonymous classes in scrutinee (pos/t0646)
- - typing: pos/channels
 
   * (longer-term) TODO:
   *  - recover GADT typing by locally inserting implicit witnesses to type equalities derived from the current case, and considering these witnesses during subtyping (?)
@@ -395,9 +393,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
           case MaybeBoundTyped(patBinder, tpe) =>
             val prevTp = prevBinder.info.widen
-            val accumType = glb(List(prevTp, tpe)) //if(tpe <:< prevTp) tpe else if (prevTp <:< tpe) prevTp else intersectionType(List(prevTp, tpe))
-            // println("glb vs accum: "+(glb(List(prevTp, tpe)), accumType))
-            // println("packed: "+ packedType(patTree, context.owner)._1)
+            val accumType = glb(List(prevTp, tpe))
 
             val condTp = genTypeDirectedEquals(prevBinder, prevTp, tpe)
             val cond = maybeOuterCheck(tpe, prevBinder) map (genAnd(_, condTp)) getOrElse condTp
@@ -447,7 +443,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               // currently we ignore subst, since alternatives may not bind variables (except wildcards)
               val (treeMakers, subst) = threadSubstitution(resAlts.toList)
 
-              atPos(alt.pos)(treeMakers.foldRight (genOne(CODE.REF(prevBinder))) (_ genFlatMap _))
+              // `one(x) : T` where x is the binder before this pattern, which will be replaced by the binder for the alternative by singleBinderProtoTreeMaker below
+              // T is the widened type of the previous binder -- this ascription is necessary to infer a clean type for `or` -- the alternative combinator -- in the presence of existential types
+              // see pos/virtpatmat_exist1.scala
+              val one = genOne(Typed(CODE.REF(prevBinder), TypeTree(prevBinder.info.widen)))
+              atPos(alt.pos)(treeMakers.foldRight (one) (_ genFlatMap _))
             }
 
             res += singleBinderProtoTreeMaker(prevBinder, altTrees : _*)
@@ -669,7 +669,16 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genGuard(t: Tree, then: Tree = UNIT): Tree = (matchingStrategy DOT "guard".toTermName)(t, then) // matchingStrategy.guard(t, then)
     def genRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchingStrategy.runOrElse(scrut)(matcher)
     def genCast(expectedTp: Type, binder: Symbol): Tree = genTypedGuard(gen.mkIsInstanceOf(REF(binder), expectedTp, true, false), expectedTp, binder) // TODO: use genTypeDirectedEquals(binder, binder.info.widen, expectedTp) instead of gen.mkIsInstanceOf?
-    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false))
+    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = {
+      // repack existential types, otherwise they sometimes get unpacked in the wrong location (type inference comes up with an unexpected skolem)
+      // TODO: I don't really know why this happens -- maybe because the owner hierarchy changes?
+      // the other workaround is to explicitly pass expectedTp as the type argument for the call to guard, but repacking the existential somehow feels more robust
+      val exists = (expectedTp filter {tp => tp.typeSymbol.isExistentiallyBound}) map (_.typeSymbol)
+      val expectedTpOk = existentialAbstraction(exists, expectedTp)
+      genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTpOk, true, false))
+    }
+      // specify expectedType explicitly, because if it's an existential type, type inference will mess up
+      // genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false), expectedTp)
 
 
     // methods in the monad instance

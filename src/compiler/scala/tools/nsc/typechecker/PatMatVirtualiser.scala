@@ -630,7 +630,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def freshSym(pos: Position, tp: Type = NoType, prefix: String = "x") = {ctr += 1;
       // assert(owner ne null)
       // assert(owner ne NoSymbol)
-      new TermSymbol(NoSymbol, pos, (prefix+ctr).toTermName) setInfo tp
+      new TermSymbol(NoSymbol, pos, (prefix+ctr).toTermName) setInfo repackExistential(tp)
     }
 
     // We must explicitly type the trees that we replace inside some other tree, since the latter may already have been typed,
@@ -675,14 +675,16 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genRunOrElse(scrut: Tree, matcher: Tree): Tree = (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher) // matchingStrategy.runOrElse(scrut)(matcher)
     def genCast(expectedTp: Type, binder: Symbol): Tree = genTypedGuard(gen.mkIsInstanceOf(REF(binder), expectedTp, true, false), expectedTp, binder) // TODO: use genTypeDirectedEquals(binder, binder.info.widen, expectedTp) instead of gen.mkIsInstanceOf?
     def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = {
-      // repack existential types, otherwise they sometimes get unpacked in the wrong location (type inference comes up with an unexpected skolem)
-      // TODO: I don't really know why this happens -- maybe because the owner hierarchy changes?
-      // the other workaround is to explicitly pass expectedTp as the type argument for the call to guard, but repacking the existential somehow feels more robust
-      val exists = (expectedTp filter {tp => tp.typeSymbol.isExistentiallyBound}) map (_.typeSymbol)
-      val expectedTpOk = existentialAbstraction(exists, expectedTp)
-      genGuard(cond, genAsInstanceOf(REF(binder), expectedTpOk))
+      // the other workaround (besides repackExistential) is to explicitly pass expectedTp as the type argument for the call to guard, but repacking the existential somehow feels more robust
+      genGuard(cond, genAsInstanceOf(REF(binder), expectedTp))
     }
-    def genAsInstanceOf(t: Tree, tp: Type): Tree = gen.mkAsInstanceOf(t, tp, true, false)
+    
+    // repack existential types, otherwise they sometimes get unpacked in the wrong location (type inference comes up with an unexpected skolem)
+    // TODO: I don't really know why this happens -- maybe because the owner hierarchy changes?
+    def repackExistential(tp: Type): Type = 
+      existentialAbstraction((tp filter {t => t.typeSymbol.isExistentiallyBound}) map (_.typeSymbol), tp)
+
+    def genAsInstanceOf(t: Tree, tp: Type): Tree = gen.mkAsInstanceOf(t, repackExistential(tp), true, false)
       // specify expectedType explicitly, because if it's an existential type, type inference will mess up
       // genGuard(cond, gen.mkAsInstanceOf(REF(binder), expectedTp, true, false), expectedTp)
 
@@ -690,7 +692,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     // methods in the monad instance
     def genFlatMap(a: Tree, b: Tree): Tree = (a DOT "flatMap".toTermName)(b)
     def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree = {
-      def tpd(t: Tree) = if(pt == NoType) t else Typed(t, TypeTree(pt))
+      def tpd(t: Tree) = if(pt == NoType) t else Typed(t, TypeTree(repackExistential(pt)))
       (tpd(thisCase) DOT "orElse".toTermName)(tpd(elseCase))
     }
 

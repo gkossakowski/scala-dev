@@ -596,7 +596,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
     def maybeOuterCheck(expectedTp: Type, prevBinder: Symbol): Option[Tree] =  // println("needs outer test? "+(needsOuterTest(expectedTp, prevBinder.info, context.owner), expectedTp, prevBinder, prevBinder.info, context.owner))
-      if (needsOuterTest(expectedTp, prevBinder.info, context.owner))
+      if (!expectedTp.prefix.typeSymbol.isPackageClass && needsOuterTest(expectedTp, prevBinder.info, context.owner))
         Some(genOuterCheck(prevBinder, expectedTp))
       else None
 

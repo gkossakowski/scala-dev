@@ -369,8 +369,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                error("cannot find unapply member for "+ fun +" with args "+ args) // TODO: ErrorTree
                (Nil, Nil)
             } else {
-              val extractorSel = genSelect(orig, extractor)
-
               // this is a tricky balance: pos/t602.scala, pos/sudoku.scala, run/virtpatmat_alts.scala must all be happy
               // bypass typing at own risk: val extractorCall = genSelect(orig, extractor) setType caseClassApplyToUnapplyTp(fun.tpe)
               // can't always infer type arguments (pos/t602):
@@ -385,12 +383,18 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               val savedUndets = context.undetparams
               val extractorCall = try {
                 context.undetparams = Nil
-                silent(_.typed(Apply(extractorSel, List(Ident(nme.SELECTOR_DUMMY) setType fun.tpe.finalResultType)), EXPRmode, WildcardType)) match {
+                silent(_.typed(Apply(genSelect(orig, extractor), List(Ident(nme.SELECTOR_DUMMY) setType fun.tpe.finalResultType)), EXPRmode, WildcardType), reportAmbiguousErrors = false) match {
                   case extractorCall: Tree if !extractorCall.containsError() => extractorCall
-                  case ex =>
-                   // error("cannot type unapply call for "+ extractorSel +" error: "+ ex) // TODO: ErrorTree
-                   overrideUnsafe = true // all bets are off when you have unbound type params floating around
-                   Apply(typedOperator(extractorSel), List(Ident(nme.SELECTOR_DUMMY))) // no need to set the type of the dummy arg, it will be replaced anyway
+                  case _ =>
+                    // this fails to resolve overloading properly...
+                    // Apply(typedOperator(genSelect(orig, extractor)), List(Ident(nme.SELECTOR_DUMMY))) // no need to set the type of the dummy arg, it will be replaced anyway
+
+                    overrideUnsafe = true // all bets are off when you have unbound type params floating around
+                    val tgt = typed(orig, EXPRmode | QUALmode | POLYmode, HasMethodMatching(extractor.name, List(fun.tpe.finalResultType), WildcardType))
+                    // println("tgt = "+ (tgt, tgt.tpe, tgt.containsError()))
+                    val oper = typed(Select(tgt, extractor.name), EXPRmode | FUNmode | POLYmode | TAPPmode, WildcardType)
+                    // println("oper: "+ (oper, oper.tpe, oper.containsError()))
+                    Apply(oper, List(Ident(nme.SELECTOR_DUMMY))) // no need to set the type of the dummy arg, it will be replaced anyway
                 }
               } finally context.undetparams = savedUndets
 

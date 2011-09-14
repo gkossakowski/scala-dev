@@ -85,10 +85,15 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       //  and the only place that emits Matches after typers is for exception handling anyway)
       assert(phase.id <= currentRun.typerPhase.id)
 
+      def repeatedToSeq(tp: Type): Type = (tp baseType RepeatedParamClass) match {
+        case TypeRef(_, RepeatedParamClass, args) => appliedType(SeqClass.typeConstructor, args)
+        case _ => tp
+      }
+
       val xTree = tree match {
         case Match(scrut, cases) =>
           // TODO: deal with scrut == EmptyTree
-          val scrutType = if(scrut.tpe ne null) elimAnonymousClass(scrut.tpe.widen) else {error("TODO: support match with empty scrut"); NoType} // TODO: ErrorTree
+          val scrutType = if(scrut.tpe ne null) repeatedToSeq(elimAnonymousClass(scrut.tpe.widen)) else {error("TODO: support match with empty scrut"); NoType} // TODO: ErrorTree
           val scrutSym = freshSym(tree.pos, scrutType)
           // when specified, need to propagate pt explicitly, type inferencer can't handle it
           val optPt = if(!isFullyDefined(pt)) NoType else appliedType(matchingMonadType, List(pt))

@@ -701,8 +701,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genZero: Tree                                                     = ( matchingStrategy DOT "zero".toTermName                                      ) // matchingStrategy.zero
     def genOne(res: Tree): Tree                                           = ( (matchingStrategy DOT "one".toTermName)(res)                                ) // matchingStrategy.one(res)
     def genOr(f: Tree, as: List[Tree]): Tree                              = ( (matchingStrategy DOT "or".toTermName)((f :: as): _*)                       ) // matchingStrategy.or(f, as)
-    def genGuard(t: Tree, then: Tree = UNIT): Tree                        = ( (matchingStrategy DOT "guard".toTermName)(t, then)                          ) // matchingStrategy.guard(t, then)
-    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = ( genGuard(cond, genAsInstanceOf(REF(binder), expectedTp))                    )
+    def genGuard(t: Tree, then: Tree = UNIT, tp: Type = NoType): Tree     = ( genTypeApply((matchingStrategy DOT "guard".toTermName), tp) APPLY (t, then) ) // matchingStrategy.guard(t, then)
+    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = ( genGuard(cond, genAsInstanceOf(REF(binder), expectedTp), expectedTp)        )
     def genCast(expectedTp: Type, binder: Symbol): Tree                   = ( genTypedGuard(genIsInstanceOf(REF(binder), expectedTp), expectedTp, binder) )
 
     // methods in the monad instance
@@ -710,6 +710,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree    = ( (genTyped(thisCase, pt) DOT "orElse".toTermName)(genTyped(elseCase, pt))    )
 
     // misc
+    def genTypeApply(tfun: Tree, args: Type*): Tree                       = ( if(args contains NoType) tfun else TypeApply(tfun, args.toList map TypeTree))
     def genApply(fun: Tree, arg: Symbol): Tree                            = ( fun APPLY REF(arg)                                                          )
     def genSelect(tgt: Tree, mem: Symbol): Tree                           = ( tgt DOT mem                                                                 )
     def genFun(arg: Symbol, body: Tree): Tree                             = ( Function(List(ValDef(arg)), body)                                           )

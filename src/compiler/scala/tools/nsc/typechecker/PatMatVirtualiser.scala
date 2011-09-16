@@ -128,6 +128,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
                 assert(d.symbol.lazyAccessor != NoSymbol && d.symbol.lazyAccessor.owner == d.symbol.owner)
                 d.symbol.lazyAccessor.owner = currentOwner
               }
+              if(d.symbol.moduleClass ne NoSymbol)
+                d.symbol.moduleClass.owner = currentOwner
+
               d.symbol.owner = currentOwner
             // case _ if (t.symbol != NoSymbol) && (t.symbol ne null) =>
             //   println("untouched "+ (t, t.getClass, t.symbol.ownerChain, currentOwner.ownerChain))

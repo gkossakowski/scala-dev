@@ -405,7 +405,8 @@ trait Infer {
     def isPlausiblyCompatible(tp: Type, pt: Type) = checkCompatibility(true, tp, pt)
     def normSubType(tp: Type, pt: Type) = checkCompatibility(false, tp, pt)
 
-    @tailrec private def checkCompatibility(fast: Boolean, tp: Type, pt: Type): Boolean = tp match {
+    // @tailrec 
+    private def checkCompatibility(fast: Boolean, tp: Type, pt: Type): Boolean = tp match {
       case mt @ MethodType(params, restpe) =>
         if (mt.isImplicit)
           checkCompatibility(fast, restpe, pt)

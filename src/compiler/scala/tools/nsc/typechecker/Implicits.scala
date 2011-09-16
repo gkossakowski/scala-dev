@@ -748,7 +748,8 @@ trait Implicits {
        *   - find the most likely one
        *   - if it matches, forget about all others it improves upon
        */
-      @tailrec private def rankImplicits(pending: Infos, acc: Infos): Infos = pending match {
+      // @tailrec
+      private def rankImplicits(pending: Infos, acc: Infos): Infos = pending match {
         case Nil      => acc
         case i :: is  =>
           def tryImplicitInfo(i: ImplicitInfo) =

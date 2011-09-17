@@ -114,8 +114,10 @@ object Predef extends LowPriorityImplicits {
   @inline def implicitly[T](implicit e: T) = e    // for summoning implicit values from the nether world -- TODO: when dependent method types are on by default, give this result type `e.type`, so that inliner has better chance of knowing which method to inline in calls like `implicitly[MatchingStrategy[Option]].zero`
   @inline def locally[T](x: T): T  = x    // to communicate intent and avoid unmoored statements
 
+  /*@XML*/
   // Apparently needed for the xml library
   val $scope = scala.xml.TopScope
+  /*XML@*/
 
   // Deprecated
 

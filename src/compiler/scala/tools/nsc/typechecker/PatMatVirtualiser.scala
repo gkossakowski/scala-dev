@@ -284,10 +284,9 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         val prevBinderOrCasted =
           if(!(prevBinder.info.widen <:< extractorParamType)) {
             val castedBinder = freshSym(pos, extractorParamType, "cp")
-            // cast
             // TODO: what's the semantics for outerchecks on user-defined extractors?
-            // maybeWithOuterCheck(prevBinder, extractorParamType)(genIsInstanceOf(CODE.REF(prevBinder), extractorParamType))
-            val cond = genTypeDirectedEquals(prevBinder, prevBinder.info.widen, extractorParamType)
+            val cond = maybeWithOuterCheck(prevBinder, extractorParamType)(genIsInstanceOf(CODE.REF(prevBinder), extractorParamType))
+            // val cond = genTypeDirectedEquals(prevBinder, prevBinder.info.widen, extractorParamType) -- this seems to slow down compilation A LOT
             // chain a cast before the actual extractor call
             // need to substitute since binder may be used outside of the next extractor call (say, in the body of the case)
             res += (List(genTypedGuard(cond, extractorParamType, prevBinder)),

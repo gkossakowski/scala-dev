@@ -34,10 +34,10 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - existentials and skolems, oh my! 
-  - library/scala/collection/immutable/TrieIterator.scala 
-      --> something goes wrong when locker is compiling the lib,
-          but all is well when the quick.comp (built from the same source as locker) is building TrieIterator stand-alone
+ - typing of extractorCall subtly broken again: pos/t602.scala
+ - typing of indexing (subpatref) gone awry -- possibly due to existentials? pos/t3856.scala
+ - object def in body of casedef
+
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
 
   * (longer-term) TODO:

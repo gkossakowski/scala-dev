@@ -34,15 +34,11 @@ import scala.collection.mutable.ListBuffer
           d => body)))))(scrut)
 
 TODO:
- - argh: explicitouter
- java.lang.NoSuchMethodError: scala.reflect.internal.Types$NoPrefix$.scala$reflect$internal$Types$NoPrefix$$$outer()Lscala/reflect/internal/SymbolTable;
-        at scala.tools.nsc.symtab.classfile.Pickler$Pickle$$anonfun$writeBody$1$1$$anonfun$apply$333.apply(Pickler.scala:577)
-
  - typing of extractorCall subtly broken again: pos/t602.scala
  - typing of indexing (subpatref) gone awry -- possibly due to existentials? pos/t3856.scala
- - object def in body of casedef
-
  - stackoverflow with actors: jvm/t3412, jvm/t3412-channel
+ - OOM when virtpatmat compiler runs test suite
+ - optimizer loops on virtpatmat compiler?
 
   * (longer-term) TODO:
   *  - recover GADT typing by locally inserting implicit witnesses to type equalities derived from the current case, and considering these witnesses during subtyping (?)

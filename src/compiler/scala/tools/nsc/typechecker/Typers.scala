@@ -2109,9 +2109,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       
       var body1: Tree = typed(cdef.body, pt)
       if (!context.savedTypeBounds.isEmpty) {
-        val oldBodyTp = body1.tpe
         body1.tpe = context.restoreTypeBounds(body1.tpe)
-        //println("gadt: "+ (body1.tpe, isFullyDefined(pt), oldBodyTp, pt))
         if (isFullyDefined(pt) && !(body1.tpe <:< pt)) {
           body1 = typed {
             atPos(body1.pos) {
@@ -2147,7 +2145,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         if ((isFunctionType(pt)
              || 
              pt.typeSymbol == PartialFunctionClass && 
-             numVparams == 1 && (fun.body.isInstanceOf[Match] || {println("typedFunction: not a Match? "+ (fun.body.getClass, fun.body)); true}))
+             numVparams == 1 && fun.body.isInstanceOf[Match])
              && // see bug901 for a reason why next conditions are needed
             (pt.normalize.typeArgs.length - 1 == numVparams
              || 

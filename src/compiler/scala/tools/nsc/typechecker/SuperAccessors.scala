@@ -131,6 +131,7 @@ abstract class SuperAccessors extends transform.Transform with transform.TypingT
 
     override def transform(tree: Tree): Tree = {
       val sym = tree.symbol
+
       def mayNeedProtectedAccessor(sel: Select, args: List[Tree], goToSuper: Boolean) =
         if (needsProtectedAccessor(sym, tree.pos)) {
           debuglog("Adding protected accessor for " + tree)

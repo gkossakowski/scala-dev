@@ -234,8 +234,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def Xpat(scrutSym: Symbol)(pattern: Tree): List[ProtoTreeMaker] = {
       def doUnapply(args: List[Tree], extractorCallIncludingDummy: Tree, prevBinder: Symbol, patTreeOrig: Tree)(implicit res: ListBuffer[ProtoTreeMaker]): (List[Symbol], List[Tree]) = {
         val Some(Apply(extractorCall, _)) = extractorCallIncludingDummy.find{ case Apply(_, List(Ident(nme.SELECTOR_DUMMY))) => true case _ => false }
-        assert((extractorCall.tpe ne null) && (extractorCall.tpe ne NoType) && (extractorCall.tpe ne ErrorType), "args: "+ args +" extractorCall: "+ extractorCall)
         val pos = patTreeOrig.pos
+
+        if((extractorCall.tpe eq NoType) || !extractorCall.isTyped)
+          throw new TypeError(pos, "Could not typecheck extractor call: "+ extractorCall +": "+ extractorCall.tpe +" (symbol= "+ extractorCall.symbol +").")
+
         val extractorType = extractorCall.tpe
         val isSeq = extractorCall.symbol.name == nme.unapplySeq
 
@@ -243,7 +246,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         val typeInMonad = extractorResultInMonad(extractorType)
 
         if(typeInMonad == ErrorType) {
-          error("Unsupported extractor type: "+ extractorType)
+          throw new TypeError(pos, "Unsupported extractor type: "+ extractorType)
           return (Nil, Nil)
         }
 
@@ -702,7 +705,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genOne(res: Tree): Tree                                           = ( (matchingStrategy DOT "one".toTermName)(res)                                ) // matchingStrategy.one(res)
     def genOr(f: Tree, as: List[Tree]): Tree                              = ( (matchingStrategy DOT "or".toTermName)((f :: as): _*)                       ) // matchingStrategy.or(f, as)
     def genGuard(t: Tree, then: Tree = UNIT, tp: Type = NoType): Tree     = ( genTypeApply((matchingStrategy DOT "guard".toTermName), tp) APPLY (t, then) ) // matchingStrategy.guard(t, then)
-    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = ( genGuard(cond, genAsInstanceOf(REF(binder), expectedTp), expectedTp)        )
+    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = ( genGuard(cond, genAsInstanceOf(REF(binder), expectedTp), repackExistential(expectedTp))        )
     def genCast(expectedTp: Type, binder: Symbol): Tree                   = ( genTypedGuard(genIsInstanceOf(REF(binder), expectedTp), expectedTp, binder) )
 
     // methods in the monad instance

@@ -760,7 +760,7 @@ class Worker(val fileManager: FileManager, params: TestRunParams) extends Actor 
             settings.classpath.value = fileManager.CLASSPATH
             reporter = new ConsoleReporter(settings, scala.Console.in, logConsoleWriter)
             val command = new CompilerCommand(argList, settings)
-            object compiler extends Global(command.settings, reporter)
+            val compiler = new Global(command.settings, reporter)
 
             val resCompile = (line: String) => {
               NestUI.verbose("compiling "+line)

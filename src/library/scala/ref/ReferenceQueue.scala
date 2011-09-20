@@ -19,13 +19,9 @@ class ReferenceQueue[+T <: AnyRef] {
   override def toString = underlying.toString
 
   protected def Wrapper(jref: java.lang.ref.Reference[_]): Option[Reference[T]] =
-    jref match {
-      case null => None
-      case ref => Some(ref.asInstanceOf[ReferenceWithWrapper[T]].wrapper)
-    }
+    if(jref eq null) None else Some(jref.asInstanceOf[ReferenceWithWrapper[T]].wrapper)
 
   def poll: Option[Reference[T]] = Wrapper(underlying.poll)
   def remove: Option[Reference[T]] = Wrapper(underlying.remove)
   def remove(timeout: Long): Option[Reference[T]] = Wrapper(underlying.remove(timeout))
-
 }

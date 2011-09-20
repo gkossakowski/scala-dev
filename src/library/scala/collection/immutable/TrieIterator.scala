@@ -36,15 +36,15 @@ private[collection] abstract class TrieIterator[+T](elems: Array[Iterable[T]]) e
   private[this] var posD                                      = initPosD
   private[this] var subIter                                   = initSubIter
   
-  private[this] def getElems(x: Iterable[T]): Array[Iterable[T]] = (x match {
-    case x: HashTrieMap[_, _] => x.elems
-    case x: HashTrieSet[_]    => x.elems
-  }).asInstanceOf[Array[Iterable[T]]]
+  private[this] def getElems(x: Iterable[T]): Array[Iterable[T]] = x match {
+    case x: HashTrieMap[_, _] => x.elems.asInstanceOf[Array[Iterable[T]]]
+    case x: HashTrieSet[_]    => x.elems.asInstanceOf[Array[Iterable[T]]]
+  }
 
-  private[this] def collisionToArray(x: Iterable[T]): Array[Iterable[T]] = (x match {
-    case x: HashMapCollision1[_, _] => x.kvs.map(x => HashMap(x)).toArray
-    case x: HashSetCollision1[_]    => x.ks.map(x => HashSet(x)).toArray
-  }).asInstanceOf[Array[Iterable[T]]]
+  private[this] def collisionToArray(x: Iterable[T]): Array[Iterable[T]] = x match {
+    case x: HashMapCollision1[_, _] => x.kvs.map(x => HashMap(x)).toArray.asInstanceOf[Array[Iterable[T]]]
+    case x: HashSetCollision1[_]    => x.ks.map(x => HashSet(x)).toArray.asInstanceOf[Array[Iterable[T]]]
+  }
   
   private type SplitIterators = ((Iterator[T], Int), Iterator[T])
   

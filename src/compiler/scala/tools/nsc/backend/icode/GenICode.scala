@@ -1171,7 +1171,7 @@ abstract class GenICode extends SubComponent  {
             if (param.name == nme.THIS) STORE_THIS(toTypeKind(ctx1.clazz.symbol.tpe))
             else STORE_LOCAL(local)
           
-          store setPos arg.pos
+          (store setPos arg.pos) : Instruction // TODO: workaround
       }
       
       // store arguments in reverse order on the stack

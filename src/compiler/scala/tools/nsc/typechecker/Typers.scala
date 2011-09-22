@@ -3277,9 +3277,9 @@ trait Typers extends Modes {
           }
         }
 
-        val repStructTp = appliedType(repTycon, List(elimAnonymousClass(structTp)))
-        // must supply type param explicitly as it can't be inferred from pt
-        val tree = typed1(Apply(TypeApply(Ident(nme._new),List(TypeTree(repStructTp))), args.toList), mode, repStructTp)
+        val repStructTp = appliedType(repTycon, List(elimAnonymousClass(structTp))) // TODO what's j.l.Object doing in: java.lang.Object with Test.Row[Test.Rep]{val xxx: Int; val y: String}
+        // TODO: remove type param? it's useless anyway... def new[T](meh: ...): T cannot be implemented without casting/looping/throwing
+        val tree = typed1(Apply(TypeApply(Ident(nme._new),List(TypeTree(repStructTp))), args.toList), mode, WildcardType)
         tree.setType(repStructTp)
       }
 

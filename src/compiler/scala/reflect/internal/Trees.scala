@@ -320,7 +320,7 @@ trait Trees extends api.Trees { self: SymbolTable =>
       case Ident(_) =>
         def subst(from: List[Symbol], to: List[Tree]): Tree =
           if (from.isEmpty) tree
-          else if (tree.symbol == from.head) to.head // TODO: does it ever make sense *not* to perform a shallowDuplicate on `to.head`?
+          else if (tree.symbol == from.head) to.head.shallowDuplicate // TODO: does it ever make sense *not* to perform a shallowDuplicate on `to.head`?
           else subst(from.tail, to.tail);
         subst(from, to)
       case _ =>

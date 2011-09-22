@@ -4424,6 +4424,7 @@ trait Typers extends Modes {
               }
               typed(newArrayApp, mode, pt)
             case tree1@Apply(Select(New(tpt), name), args) if tpt.tpe != null && shouldReifyNew(tpt.tpe, args) =>
+// TODO: why is the refinement dropped from tpt.tpe when pt != WildcardType !??
               typedReifiedNew(tpt)
             case tree1 =>
               tree1

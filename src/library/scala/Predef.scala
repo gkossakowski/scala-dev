@@ -448,7 +448,7 @@ object Predef extends LowPriorityImplicits {
     implicit def dummyImplicit: DummyImplicit = new DummyImplicit
   }
 
-  trait MatchingStrategy[M[+x]] {
+  abstract class MatchingStrategy[M[+x]] {
     def zero: M[Nothing]
     def one[T](x: T): M[T] // TODO: switch to CBN so isSuccess doesn't actually have to run the case bodies
     def guard[T](cond: Boolean, then: => T): M[T] // = if(cond) one(then) else zero

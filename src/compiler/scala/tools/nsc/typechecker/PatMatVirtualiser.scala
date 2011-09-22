@@ -720,8 +720,32 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genCast(expectedTp: Type, binder: Symbol): Tree                   = ( genTypedGuard(genIsInstanceOf(REF(binder), expectedTp), expectedTp, binder) )
 
     // methods in the monad instance
-    def genFlatMap(a: Tree, b: Tree): Tree                                = ( (a DOT "flatMap".toTermName)(b)                                             )
-    def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree    = ( (genTyped(thisCase, pt) DOT "orElse".toTermName)(genTyped(elseCase, pt))    )
+    // def genFlatMap(a: Tree, b: Tree): Tree                                = ( (a DOT "flatMap".toTermName)(b)                                             )
+    // TODO: just experimenting to see how much can be gained by the hypothetical optimisation `o.flatMap(f)` to `if(o == None) None else f(o.get)` (but generalised to any sealed hierarchy with only two subclasses)
+    def genFlatMap(opt: Tree, fun: Tree): Tree = fun match {
+      case Function(List(x: ValDef), body) => 
+        val tp = appliedType(matchingMonadType, List(x.symbol.tpe))
+        val vs = freshSym(opt.pos, tp, "o")
+        val isEmpty = tp member "isEmpty".toTermName
+        val get = tp member "get".toTermName
+        val v = VAL(vs) === opt
+        BLOCK(
+          v,
+          IF (vs DOT isEmpty) THEN genZero ELSE typedSubst(List(x.symbol), List(vs DOT get))(body)
+        )
+      case _ => println("huh?")
+        (opt DOT "flatMap".toTermName)(fun)
+    }
+    // def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree    = ( (genTyped(thisCase, pt) DOT "orElse".toTermName)(genTyped(elseCase, pt))    )
+    def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree = {
+      val vs = freshSym(thisCase.pos, pt, "o")
+      val isEmpty = pt member "isEmpty".toTermName
+      val v = VAL(vs) === genTyped(thisCase, pt)
+      BLOCK(
+        v,
+        IF (vs DOT isEmpty) THEN genTyped(elseCase, pt) ELSE REF(vs)
+      )
+    }
 
     // misc
     def genTypeApply(tfun: Tree, args: Type*): Tree                       = ( if(args contains NoType) tfun else TypeApply(tfun, args.toList map TypeTree))

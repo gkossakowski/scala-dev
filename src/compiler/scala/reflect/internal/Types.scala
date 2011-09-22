@@ -237,7 +237,6 @@ trait Types extends api.Types { self: SymbolTable =>
 
   case object UnmappableTree extends TermTree {
     override def toString = "<unmappable>"
-    protected def errorSubtrees = Nil
     super.tpe_=(NoType)
     override def tpe_=(t: Type) = if (t != NoType) throw new UnsupportedOperationException("tpe_=("+t+") inapplicable for <empty>")
   }
@@ -2769,6 +2768,11 @@ A type's typeSymbol should never be inspected directly.
     override def safeToString = "<?>"    
     override def kind = "LazyType"
   }
+  
+  abstract class LazyPolyType(override val typeParams: List[Symbol]) extends LazyType {
+    override def safeToString = 
+      (if (typeParams.isEmpty) "" else typeParamsString(this)) + super.safeToString
+  } 
 
 // Creators ---------------------------------------------------------------
 

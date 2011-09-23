@@ -3450,15 +3450,14 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val body = treeCopy.Match(tree, selector1, cases)
           typed1(atPos(tree.pos) { Function(params, body) }, mode, pt)
         } else {
-          def repackExistential(tp: Type): Type = existentialAbstraction((tp filter {t => t.typeSymbol.isExistentiallyBound}) map (_.typeSymbol), tp)
-
           val selector1 = checkDead(typed(selector, EXPRmode | BYVALmode, WildcardType))
           var cases1 = typedCases(tree, cases, selector1.tpe.widen, pt)
+
+          def repackExistential(tp: Type): Type = existentialAbstraction((tp filter {t => t.typeSymbol.isExistentiallyBound}) map (_.typeSymbol), tp)
           val (owntype0, needAdapt) = ptOrLub(cases1 map (x => repackExistential(x.tpe)))
           val owntype = elimAnonymousClass(owntype0)
-          if (needAdapt) {
-            cases1 = cases1 map (adaptCase(_, owntype))
-          }
+          if (needAdapt) cases1 = cases1 map (adaptCase(_, owntype))
+
           if(phase.id <= currentRun.typerPhase.id) { // don't run translator after typers (see comments in PatMatVirtualiser)
             typed1(translator.X(treeCopy.Match(tree, selector1, cases1), owntype), mode, WildcardType) setType owntype // TODO: get rid of setType owntype -- it should all typecheck
             // object checker extends Traverser {

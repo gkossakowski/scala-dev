@@ -498,7 +498,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               // `one(x) : T` where x is the binder before this pattern, which will be replaced by the binder for the alternative by singleBinderProtoTreeMaker below
               // T is the widened type of the previous binder -- this ascription is necessary to infer a clean type for `or` -- the alternative combinator -- in the presence of existential types
               // see pos/virtpatmat_exist1.scala
-              val one = genOne(genTyped(CODE.REF(prevBinder), prevBinder.info.widen))
+              val one = genOne(CODE.REF(prevBinder), prevBinder.info.widen)
               atPos(alt.pos)(treeMakers.foldRight (one) (_ genFlatMap _))
             }
 
@@ -758,18 +758,25 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
     import CODE._
 
-    // methods in MatchingStrategy (the monad companion)
+    // only used below
+    def genTypeApply(tfun: Tree, args: Type*): Tree                       = ( if(args contains NoType) tfun else TypeApply(tfun, args.toList map TypeTree))
+    def genTyped(t: Tree, tp: Type): Tree                                 = ( if(tp == NoType) t else Typed(t, TypeTree(repackExistential(tp)))           )
+
+    // methods in MatchingStrategy (the monad companion) -- used directly in translation
     def genRunOrElse(scrut: Tree, matcher: Tree): Tree                    = ( (matchingStrategy DOT "runOrElse".toTermName)(scrut) APPLY (matcher)        ) // matchingStrategy.runOrElse(scrut)(matcher)
     def genZero: Tree                                                     = ( matchingStrategy DOT "zero".toTermName                                      ) // matchingStrategy.zero
-    def genOne(res: Tree): Tree                                           = ( (matchingStrategy DOT "one".toTermName)(res)                                ) // matchingStrategy.one(res)
+    def genOne(res: Tree, tp: Type = NoType): Tree                        = ( genTypeApply(matchingStrategy DOT "one".toTermName, tp) APPLY (res)         ) // matchingStrategy.one(res)
     def genOr(f: Tree, as: List[Tree]): Tree                              = ( (matchingStrategy DOT "or".toTermName)((f :: as): _*)                       ) // matchingStrategy.or(f, as)
-    def genGuard(t: Tree, then: Tree = UNIT, tp: Type = NoType): Tree     = ( genTypeApply((matchingStrategy DOT "guard".toTermName), repackExistential(tp)) APPLY (t, then) ) // matchingStrategy.guard(t, then)
     def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = ( genGuard(cond, genAsInstanceOf(REF(binder), expectedTp), expectedTp)        )
     def genCast(expectedTp: Type, binder: Symbol): Tree                   = ( genTypedGuard(genIsInstanceOf(REF(binder), expectedTp), expectedTp, binder) )
+    def genGuard(t: Tree, then: Tree = UNIT, tp: Type = NoType): Tree     = ( genTypeApply((matchingStrategy DOT "guard".toTermName), repackExistential(tp)) APPLY (t, then) ) // matchingStrategy.guard(t, then)
 
-    // methods in the monad instance
+    // methods in the monad instance -- used directly in translation
     def genFlatMap(a: Tree, b: Tree): Tree                                = ( (a DOT "flatMap".toTermName)(b)                                             )
+    def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree    = ( (genTyped(thisCase, pt) DOT "orElse".toTermName)(genTyped(elseCase, pt))    )
+
     // TODO: just experimenting to see how much can be gained by the hypothetical optimisation `o.flatMap(f)` to `if(o == None) None else f(o.get)` (but generalised to any sealed hierarchy with only two subclasses)
+    // def genGuard(t: Tree, then: Tree = UNIT, tp: Type = NoType): Tree     = IF (t) THEN genOne(then, tp) ELSE genZero
     // def genFlatMap(opt: Tree, fun: Tree): Tree = fun match {
     //   case Function(List(x: ValDef), body) =>
     //     val tp = appliedType(matchingMonadType, List(x.symbol.tpe))
@@ -784,7 +791,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     //   case _ => println("huh?")
     //     (opt DOT "flatMap".toTermName)(fun)
     // }
-    def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree    = ( (genTyped(thisCase, pt) DOT "orElse".toTermName)(genTyped(elseCase, pt))    )
     // def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree = {
     //   val vs = freshSym(thisCase.pos, pt, "o")
     //   val isEmpty = pt member "isEmpty".toTermName
@@ -795,18 +801,17 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     //   )
     // }
 
-    // misc
-    def genTypeApply(tfun: Tree, args: Type*): Tree                       = ( if(args contains NoType) tfun else TypeApply(tfun, args.toList map TypeTree))
-    def genApply(fun: Tree, arg: Symbol): Tree                            = ( fun APPLY REF(arg)                                                          )
-    def genSelect(tgt: Tree, mem: Symbol): Tree                           = ( tgt DOT mem                                                                 )
+    // misc -- used directly in translation
     def genFun(arg: Symbol, body: Tree): Tree                             = ( Function(List(ValDef(arg)), body)                                           )
     def genTupleSel(binder: Symbol)(i: Int): Tree                         = ( (REF(binder) DOT ("_"+i).toTermName)                                        ) // make tree that accesses the i'th component of the tuple referenced by binder
     def genIndex(tgt: Tree)(i: Int): Tree                                 = ( tgt APPLY (LIT(i))                                                          )
     def genDrop(tgt: Tree)(n: Int): Tree                                  = ( (tgt DOT "drop".toTermName) (LIT(n))                                        )
     def genEquals(checker: Tree, binder: Symbol): Tree                    = ( checker MEMBER_== REF(binder)                                               ) // NOTE: checker must be the target of the ==, that's the patmat semantics for ya
     def genAnd(a: Tree, b: Tree): Tree                                    = ( a AND b                                                                     )
-    def genTyped(t: Tree, tp: Type): Tree                                 = ( if(tp == NoType) t else Typed(t, TypeTree(repackExistential(tp)))           )
     def genAsInstanceOf(t: Tree, tp: Type): Tree                          = ( gen.mkAsInstanceOf(t, repackExistential(tp), true, false)                   )
     def genIsInstanceOf(t: Tree, tp: Type): Tree                          = ( gen.mkIsInstanceOf(t, repackExistential(tp), true, false)                   )
+
+    def genSelect(tgt: Tree, mem: Symbol): Tree                           = ( tgt DOT mem                                                                 )
+    // def genApply(fun: Tree, arg: Symbol): Tree                            = ( fun APPLY REF(arg)                                                          )
   }
 }

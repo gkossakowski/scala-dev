@@ -48,7 +48,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
   import global._
   import definitions._
 
-  private lazy val matchingStrategyTycon = getMember(PredefModule, "MatchingStrategy".toTypeName).typeConstructor
+  private lazy val matchingStrategyTycon = definitions.getClass("scala.MatchingStrategy").typeConstructor
 
   class MatchTranslator(typer: Typer) { translator =>
     import typer._

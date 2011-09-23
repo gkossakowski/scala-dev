@@ -410,12 +410,16 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               doUnapply(args, extractorCall, prevBinder, patTree)
             }
 
-          // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
+          /** A typed pattern x : T consists of a pattern variable x and a type pattern T. 
+              The type of x is the type pattern T, where each type variable and wildcard is replaced by a fresh, unknown type.
+              This pattern matches any value matched by the type pattern T (§8.2); it binds the variable name to that value.
+              must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
+          **/
           case MaybeBoundTyped(patBinder, tpe) =>
             val prevTp = prevBinder.info.widen
             val accumType = glb(List(prevTp, tpe))
 
-            val cond = genTypeDirectedEquals(prevBinder, prevTp, tpe)
+            val cond = genTypeDirectedEquals(prevBinder, prevTp, tpe) // implements the run-time aspects of (§8.2) (typedPattern has already done the necessary type transformations)
 
             val extractor = atPos(patTree.pos)(genTypedGuard(cond, accumType, prevBinder))
 
@@ -423,6 +427,13 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
 
             (Nil, Nil) // a typed pattern never has any subtrees
 
+
+          /** A pattern binder x@p consists of a pattern variable x and a pattern p. 
+              The type of the variable x is the static type T of the pattern p. 
+              This pattern matches any value v matched by the pattern p, 
+              provided the run-time type of v is also an instance of T, 
+              and it binds the variable name to that value.
+          **/
           case BoundSym(patBinder, p)          =>
             // don't generate an extractor, TreeMaker only performs the substitution patBinder --> prevBinder
             // println("rebind "+ patBinder +" to "+ prevBinder)
@@ -439,20 +450,22 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             (List(prevBinder), List(p)) // must be prevBinder, as patBinder has the wrong info: even if the bind assumes a better type, this is not guaranteed until we cast
           case Bind(n, p) => (Nil, Nil) // there's no symbol -- something wrong?
 
-          case Literal(Constant(_)) | Ident(_) | Select(_, _) => // it was folly to think we can unify this with type tests
+          /** 8.1.4 Literal Patterns
+                A literal pattern L matches any value that is equal (in terms of ==) to the literal L. 
+                The type of L must conform to the expected type of the pattern.
+
+              8.1.5 Stable Identifier Patterns  (a stable identifier r (see §3.1))
+                The pattern matches any value v such that r == v (§12.1).
+                The type of r must conform to the expected type of the pattern.
+          **/
+          case Literal(Constant(_)) | Ident(_) | Select(_, _) =>
             val prevTp = prevBinder.info.widen
 
-            val cond = genEquals(prevBinder, patTree)
-            // I don't think we need an outer check here, since we already test for equality
-            // I'd say you only need to check outer when discriminating using isInstanceOf,
-            // as that may yield false positives without considering outer
-            // val cond =
-              // if(patTree.isInstanceOf[Literal]) condEq // constants definitely don't need outercheck (let's not test our luck and assume the worst: needsOuterTest might think they do anyway)
-              // else maybeWithOuterCheck(prevBinder, patTree.tpe)(condEq)
+            // NOTE: generate `patTree == prevBinder`, since the extractor must be in control of the equals method (also, prevBinder may be null)
+            val cond = genEquals(patTree, prevBinder)
 
-            // NOTE: this generates `patTree == prevBinder`, since the extractor must be in control of the equals method
             // equals need not be well-behaved, so don't intersect with pattern's (stabilized) type (unlike MaybeBoundTyped's accumType, where it's required)
-            val extractor = atPos(patTree.pos)(genTypedGuard(cond, prevTp, prevBinder))
+            val extractor = atPos(patTree.pos)(genGuard(cond, CODE.REF(prevBinder), prevTp))
 
             res += singleBinderProtoTreeMakerWithTp(prevBinder, prevTp, unsafe = false, extractor)
 
@@ -580,6 +593,25 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       (subPatTypes, subPatRefs, unapplySeqLengthGuard)
     }
 
+    /** Type patterns consist of types, type variables, and wildcards. A type pattern T is of one of the following forms:
+        - A reference to a class C, p.C, or T#C. 
+          This type pattern matches any non-null instance of the given class.
+          Note that the prefix of the class, if it is given, is relevant for determining class instances.
+          For instance, the pattern p.C matches only instances of classes C which were created with the path p as prefix.
+          The bottom types scala.Nothing and scala.Null cannot be used as type pat- terns, because they would match nothing in any case.
+
+        - A singleton type p.type.
+          This type pattern matches only the value denoted by the path p (that is, a pattern match involved a comparison of the matched value with p using method eq in class AnyRef).
+
+        - A compound type pattern T1 with ... with Tn where each Ti is a type pat- tern. This type pattern matches all values that are matched by each of the type patterns Ti .
+
+        - AparameterizedtypepatternT[a1,...,an],wheretheai aretypevariablepat- terns or wildcards _. This type pattern matches all values which match T for some arbitrary instantiation of the type variables and wildcards. The bounds or alias type of these type variable are determined as described in (§8.3).
+
+        - A parameterized type pattern scala.Array[T1], where T1 is a type pattern. This type pattern matches any non-null instance of type scala.Array[U1], where U1 is a type matched by T1.
+        Types which are not of one of the forms described above are also accepted as type patterns. However, such type patterns will be translated to their erasure (§3.7). The Scala compiler will issue an “unchecked” warning for these patterns to flag the pos- sible loss of type-safety.
+        A type variable pattern is a simple identifier which starts with a lower case letter. However, the predefined primitive type aliases unit, boolean, byte, short, char, int, long, float, and double are not classified as type variable patterns.
+    **/
+
     // generate the tree for the run-time test that follows from the fact that
     // a `scrut` of known type `scrutTp` is expected to have type `expectedTp`
     // uses genOuterCheck to check the type's prefix
@@ -587,7 +619,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
       def isMatchUnlessNull = scrutTp <:< expectedTp && (expectedTp <:< AnyRefClass.tpe)
       def isRef             = scrutTp <:< AnyRefClass.tpe
       def genEqualsAndInstanceOf(sym: Symbol): Tree
-        = genEquals(scrut, REF(sym)) AND genIsInstanceOf(REF(scrut), expectedTp.widen)
+        = genEquals(REF(sym), scrut) AND genIsInstanceOf(REF(scrut), expectedTp.widen)
 
       expectedTp match {
 // TODO: align with spec -- the cases below implement what the full pattern matcher does, not the spec
@@ -597,7 +629,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
           case ThisType(sym) if sym.isModule            => genEqualsAndInstanceOf(sym)
           case ThisType(sym)                            => REF(scrut) OBJ_EQ This(sym) // TODO: this matches the actual pattern matcher, but why not use equals as in the object case above? (see run/t576)
           case ConstantType(Constant(null)) if isRef    => REF(scrut) OBJ_EQ NULL
-          case ConstantType(const)                      => genEquals(scrut, Literal(const))
+          case ConstantType(const)                      => genEquals(Literal(const), scrut)
           case _ if isMatchUnlessNull                   => maybeWithOuterCheck(scrut, expectedTp)(REF(scrut) OBJ_NE NULL)
           case _                                        => maybeWithOuterCheck(scrut, expectedTp)(genIsInstanceOf(REF(scrut), expectedTp))
         }
@@ -695,8 +727,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     // repack existential types, otherwise they sometimes get unpacked in the wrong location (type inference comes up with an unexpected skolem)
     // TODO: I don't really know why this happens -- maybe because the owner hierarchy changes?
     // the other workaround (besides repackExistential) is to explicitly pass expectedTp as the type argument for the call to guard, but repacking the existential somehow feels more robust
-    def repackExistential(tp: Type): Type                              = 
-      existentialAbstraction((tp filter {t => t.typeSymbol.isExistentiallyBound}) map (_.typeSymbol), tp)
+    def repackExistential(tp: Type): Type = if(tp == NoType) tp
+      else existentialAbstraction((tp filter {t => t.typeSymbol.isExistentiallyBound}) map (_.typeSymbol), tp)
 
     // object noShadowedUntyped extends Traverser {
     //   override def traverse(t: Tree) {
@@ -715,8 +747,8 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genZero: Tree                                                     = ( matchingStrategy DOT "zero".toTermName                                      ) // matchingStrategy.zero
     def genOne(res: Tree): Tree                                           = ( (matchingStrategy DOT "one".toTermName)(res)                                ) // matchingStrategy.one(res)
     def genOr(f: Tree, as: List[Tree]): Tree                              = ( (matchingStrategy DOT "or".toTermName)((f :: as): _*)                       ) // matchingStrategy.or(f, as)
-    def genGuard(t: Tree, then: Tree = UNIT, tp: Type = NoType): Tree     = ( genTypeApply((matchingStrategy DOT "guard".toTermName), tp) APPLY (t, then) ) // matchingStrategy.guard(t, then)
-    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = ( genGuard(cond, genAsInstanceOf(REF(binder), expectedTp), repackExistential(expectedTp))        )
+    def genGuard(t: Tree, then: Tree = UNIT, tp: Type = NoType): Tree     = ( genTypeApply((matchingStrategy DOT "guard".toTermName), repackExistential(tp)) APPLY (t, then) ) // matchingStrategy.guard(t, then)
+    def genTypedGuard(cond: Tree, expectedTp: Type, binder: Symbol): Tree = ( genGuard(cond, genAsInstanceOf(REF(binder), expectedTp), expectedTp)        )
     def genCast(expectedTp: Type, binder: Symbol): Tree                   = ( genTypedGuard(genIsInstanceOf(REF(binder), expectedTp), expectedTp, binder) )
 
     // methods in the monad instance
@@ -755,7 +787,7 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genTupleSel(binder: Symbol)(i: Int): Tree                         = ( (REF(binder) DOT ("_"+i).toTermName)                                        ) // make tree that accesses the i'th component of the tuple referenced by binder
     def genIndex(tgt: Tree)(i: Int): Tree                                 = ( tgt APPLY (LIT(i))                                                          )
     def genDrop(tgt: Tree)(n: Int): Tree                                  = ( (tgt DOT "drop".toTermName) (LIT(n))                                        )
-    def genEquals(binder: Symbol, checker: Tree): Tree                    = ( checker MEMBER_== REF(binder)                                               ) // NOTE: checker must be the target of the ==, that's the patmat semantics for ya
+    def genEquals(checker: Tree, binder: Symbol): Tree                    = ( checker MEMBER_== REF(binder)                                               ) // NOTE: checker must be the target of the ==, that's the patmat semantics for ya
     def genAnd(a: Tree, b: Tree): Tree                                    = ( a AND b                                                                     )
     def genTyped(t: Tree, tp: Type): Tree                                 = ( if(tp == NoType) t else Typed(t, TypeTree(repackExistential(tp)))           )
     def genAsInstanceOf(t: Tree, tp: Type): Tree                          = ( gen.mkAsInstanceOf(t, repackExistential(tp), true, false)                   )

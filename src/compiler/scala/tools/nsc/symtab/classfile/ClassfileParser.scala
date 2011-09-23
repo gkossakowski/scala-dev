@@ -248,11 +248,15 @@ abstract class ClassfileParser {
           if (f == NoSymbol)
             f = owner.info.findMember(newTermName(origName + nme.LOCAL_SUFFIX_STRING), 0, 0, false).suchThat(_.tpe =:= tpe)
           if (f == NoSymbol) {
-            // if it's an impl class, try to find it's static member inside the class
+            // if it's an impl class, try to find its static member inside the class
             if (ownerTpe.typeSymbol.isImplClass) {
 //              println("impl class, member: " + owner.tpe.member(origName) + ": " + owner.tpe.member(origName).tpe)
               f = ownerTpe.findMember(origName, 0, 0, false).suchThat(_.tpe =:= tpe)
-            } else {
+            } else if (!static && ownerTpe.typeSymbol.isModuleClass) { // in case we're looking at a module class that didn't get forwarders (whyyy?!?)
+              f = owner.linkedClassOfClass.info.findMember(origName, 0, 0, false).suchThat(_.tpe.widen =:= tpe)
+            }
+
+            if (f == NoSymbol) {
               log("Couldn't find " + name + ": " + tpe + " inside: \n" + ownerTpe)
               f = if (tpe.isInstanceOf[MethodType]) owner.newMethod(owner.pos, name).setInfo(tpe)
                   else owner.newValue(owner.pos, name).setInfo(tpe).setFlag(MUTABLE)

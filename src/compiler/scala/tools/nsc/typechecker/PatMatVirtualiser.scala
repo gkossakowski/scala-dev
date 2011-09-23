@@ -369,6 +369,19 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             // println("unfun: "+ (unfun.tpe, unfun.symbol.ownerChain, unfun.symbol.info, prevBinder.info))
             doUnapply(args, unfun, prevBinder, patTree)
 
+          /** A constructor pattern is of the form c(p1, ..., pn) where n ≥ 0.
+            It consists of a stable identifier c, followed by element patterns p1, ..., pn.
+            The constructor c is a simple or qualified name which denotes a case class (§5.3.2).
+
+            If the case class is monomorphic, then it must conform to the expected type of the pattern,
+            and the formal parameter types of x’s primary constructor (§5.3) are taken as the expected types of the element patterns p1, ..., pn.
+
+            If the case class is polymorphic, then its type parameters are instantiated so that the instantiation of c conforms to the expected type of the pattern.
+            The instantiated formal parameter types of c’s primary constructor are then taken as the expected types of the component patterns p1, ..., pn.
+
+            The pattern matches all objects created from constructor invocations c(v1, ..., vn) where each element pattern pi matches the corresponding value vi .
+            A special case arises when c’s formal parameter types end in a repeated parameter. This is further discussed in (§8.1.9).
+          **/
           case Apply(fun, args)     =>
             // undo rewrite performed in (5) of adapt
             val orig = fun match {case tpt: TypeTree => tpt.original case _ => fun}
@@ -410,11 +423,11 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
               doUnapply(args, extractorCall, prevBinder, patTree)
             }
 
-          /** A typed pattern x : T consists of a pattern variable x and a type pattern T. 
+          /** A typed pattern x : T consists of a pattern variable x and a type pattern T.
               The type of x is the type pattern T, where each type variable and wildcard is replaced by a fresh, unknown type.
               This pattern matches any value matched by the type pattern T (§8.2); it binds the variable name to that value.
-              must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
           **/
+          // must treat Typed and Bind together -- we need to know the prevBinder of the Bind pattern to get at the actual type
           case MaybeBoundTyped(patBinder, tpe) =>
             val prevTp = prevBinder.info.widen
             val accumType = glb(List(prevTp, tpe))
@@ -428,14 +441,14 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             (Nil, Nil) // a typed pattern never has any subtrees
 
 
-          /** A pattern binder x@p consists of a pattern variable x and a pattern p. 
-              The type of the variable x is the static type T of the pattern p. 
-              This pattern matches any value v matched by the pattern p, 
-              provided the run-time type of v is also an instance of T, 
+          /** A pattern binder x@p consists of a pattern variable x and a pattern p.
+              The type of the variable x is the static type T of the pattern p.
+              This pattern matches any value v matched by the pattern p,
+              provided the run-time type of v is also an instance of T,  <-- TODO! https://issues.scala-lang.org/browse/SI-1503
               and it binds the variable name to that value.
           **/
           case BoundSym(patBinder, p)          =>
-            // don't generate an extractor, TreeMaker only performs the substitution patBinder --> prevBinder
+            // TreeMaker with empty list of trees only performs the substitution patBinder --> prevBinder
             // println("rebind "+ patBinder +" to "+ prevBinder)
             res += (List(),
                       { outerSubst: TreeXForm =>
@@ -448,10 +461,12 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
             // it's the responsibility of the treemaker (added to res in the previous line) to replace this symbol by a reference that
             // selects that result on the function symbol of the flatMap call that binds to the result of this extractor
             (List(prevBinder), List(p)) // must be prevBinder, as patBinder has the wrong info: even if the bind assumes a better type, this is not guaranteed until we cast
-          case Bind(n, p) => (Nil, Nil) // there's no symbol -- something wrong?
+
+          case Bind(n, p) => // TODO: remove?
+            (Nil, Nil) // there's no symbol -- something wrong?
 
           /** 8.1.4 Literal Patterns
-                A literal pattern L matches any value that is equal (in terms of ==) to the literal L. 
+                A literal pattern L matches any value that is equal (in terms of ==) to the literal L.
                 The type of L must conform to the expected type of the pattern.
 
               8.1.5 Stable Identifier Patterns  (a stable identifier r (see §3.1))
@@ -594,24 +609,28 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     }
 
     /** Type patterns consist of types, type variables, and wildcards. A type pattern T is of one of the following forms:
-        - A reference to a class C, p.C, or T#C. 
+        - A reference to a class C, p.C, or T#C.
           This type pattern matches any non-null instance of the given class.
           Note that the prefix of the class, if it is given, is relevant for determining class instances.
           For instance, the pattern p.C matches only instances of classes C which were created with the path p as prefix.
           The bottom types scala.Nothing and scala.Null cannot be used as type pat- terns, because they would match nothing in any case.
 
         - A singleton type p.type.
-          This type pattern matches only the value denoted by the path p (that is, a pattern match involved a comparison of the matched value with p using method eq in class AnyRef).
+          This type pattern matches only the value denoted by the path p
+          (that is, a pattern match involved a comparison of the matched value with p using method eq in class AnyRef). // TODO: the actual pattern matcher uses ==, so that's what I'm using for now
 
-        - A compound type pattern T1 with ... with Tn where each Ti is a type pat- tern. This type pattern matches all values that are matched by each of the type patterns Ti .
+        - A compound type pattern T1 with ... with Tn where each Ti is a type pat- tern.
+          This type pattern matches all values that are matched by each of the type patterns Ti.
 
-        - AparameterizedtypepatternT[a1,...,an],wheretheai aretypevariablepat- terns or wildcards _. This type pattern matches all values which match T for some arbitrary instantiation of the type variables and wildcards. The bounds or alias type of these type variable are determined as described in (§8.3).
+        - A parameterized type pattern T[a1,...,an], where the ai are type variable patterns or wildcards _.
+          This type pattern matches all values which match T for some arbitrary instantiation of the type variables and wildcards.
+          The bounds or alias type of these type variable are determined as described in (§8.3).
 
-        - A parameterized type pattern scala.Array[T1], where T1 is a type pattern. This type pattern matches any non-null instance of type scala.Array[U1], where U1 is a type matched by T1.
-        Types which are not of one of the forms described above are also accepted as type patterns. However, such type patterns will be translated to their erasure (§3.7). The Scala compiler will issue an “unchecked” warning for these patterns to flag the pos- sible loss of type-safety.
-        A type variable pattern is a simple identifier which starts with a lower case letter. However, the predefined primitive type aliases unit, boolean, byte, short, char, int, long, float, and double are not classified as type variable patterns.
+        - A parameterized type pattern scala.Array[T1], where T1 is a type pattern. // TODO
+          This type pattern matches any non-null instance of type scala.Array[U1], where U1 is a type matched by T1.
     **/
 
+    // TODO: align with spec (as quoted above)
     // generate the tree for the run-time test that follows from the fact that
     // a `scrut` of known type `scrutTp` is expected to have type `expectedTp`
     // uses genOuterCheck to check the type's prefix
@@ -622,9 +641,6 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
         = genEquals(REF(sym), scrut) AND genIsInstanceOf(REF(scrut), expectedTp.widen)
 
       expectedTp match {
-// TODO: align with spec -- the cases below implement what the full pattern matcher does, not the spec
-// A singleton type p.type. This type pattern matches only the value denoted by the path p
-// [...] comparison of the matched value with p using method eq in class AnyRef
           case SingleType(_, sym) => assert(sym.isStable); genEqualsAndInstanceOf(sym)
           case ThisType(sym) if sym.isModule            => genEqualsAndInstanceOf(sym)
           case ThisType(sym)                            => REF(scrut) OBJ_EQ This(sym) // TODO: this matches the actual pattern matcher, but why not use equals as in the object case above? (see run/t576)
@@ -752,32 +768,32 @@ trait PatMatVirtualiser extends ast.TreeDSL { self: Analyzer =>
     def genCast(expectedTp: Type, binder: Symbol): Tree                   = ( genTypedGuard(genIsInstanceOf(REF(binder), expectedTp), expectedTp, binder) )
 
     // methods in the monad instance
-    // def genFlatMap(a: Tree, b: Tree): Tree                                = ( (a DOT "flatMap".toTermName)(b)                                             )
+    def genFlatMap(a: Tree, b: Tree): Tree                                = ( (a DOT "flatMap".toTermName)(b)                                             )
     // TODO: just experimenting to see how much can be gained by the hypothetical optimisation `o.flatMap(f)` to `if(o == None) None else f(o.get)` (but generalised to any sealed hierarchy with only two subclasses)
-    def genFlatMap(opt: Tree, fun: Tree): Tree = fun match {
-      case Function(List(x: ValDef), body) => 
-        val tp = appliedType(matchingMonadType, List(x.symbol.tpe))
-        val vs = freshSym(opt.pos, tp, "o")
-        val isEmpty = tp member "isEmpty".toTermName
-        val get = tp member "get".toTermName
-        val v = VAL(vs) === opt
-        BLOCK(
-          v,
-          IF (vs DOT isEmpty) THEN genZero ELSE typedSubst(List(x.symbol), List(vs DOT get))(body)
-        )
-      case _ => println("huh?")
-        (opt DOT "flatMap".toTermName)(fun)
-    }
-    // def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree    = ( (genTyped(thisCase, pt) DOT "orElse".toTermName)(genTyped(elseCase, pt))    )
-    def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree = {
-      val vs = freshSym(thisCase.pos, pt, "o")
-      val isEmpty = pt member "isEmpty".toTermName
-      val v = VAL(vs) === genTyped(thisCase, pt)
-      BLOCK(
-        v,
-        IF (vs DOT isEmpty) THEN genTyped(elseCase, pt) ELSE REF(vs)
-      )
-    }
+    // def genFlatMap(opt: Tree, fun: Tree): Tree = fun match {
+    //   case Function(List(x: ValDef), body) =>
+    //     val tp = appliedType(matchingMonadType, List(x.symbol.tpe))
+    //     val vs = freshSym(opt.pos, tp, "o")
+    //     val isEmpty = tp member "isEmpty".toTermName
+    //     val get = tp member "get".toTermName
+    //     val v = VAL(vs) === opt
+    //     BLOCK(
+    //       v,
+    //       IF (vs DOT isEmpty) THEN genZero ELSE typedSubst(List(x.symbol), List(vs DOT get))(body)
+    //     )
+    //   case _ => println("huh?")
+    //     (opt DOT "flatMap".toTermName)(fun)
+    // }
+    def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree    = ( (genTyped(thisCase, pt) DOT "orElse".toTermName)(genTyped(elseCase, pt))    )
+    // def genTypedOrElse(pt: Type)(thisCase: Tree, elseCase: Tree): Tree = {
+    //   val vs = freshSym(thisCase.pos, pt, "o")
+    //   val isEmpty = pt member "isEmpty".toTermName
+    //   val v = VAL(vs) === genTyped(thisCase, pt)
+    //   BLOCK(
+    //     v,
+    //     IF (vs DOT isEmpty) THEN genTyped(elseCase, pt) ELSE REF(vs)
+    //   )
+    // }
 
     // misc
     def genTypeApply(tfun: Tree, args: Type*): Tree                       = ( if(args contains NoType) tfun else TypeApply(tfun, args.toList map TypeTree))

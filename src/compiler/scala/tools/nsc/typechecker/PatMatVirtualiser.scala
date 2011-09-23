@@ -40,6 +40,10 @@ TODO:
  - OOM when virtpatmat compiler runs test suite
  - optimizer loops on virtpatmat compiler?
 
+ - don't orElse a failure case at the end if there's a default case
+ - implement spec more closely (see TODO's below)
+ - fix inlining of methods in nested objects
+
   * (longer-term) TODO:
   *  - recover GADT typing by locally inserting implicit witnesses to type equalities derived from the current case, and considering these witnesses during subtyping (?)
   *  - recover exhaustivity and unreachability checking using a variation on the type-safe builder pattern

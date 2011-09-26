@@ -2,9 +2,10 @@ package scala.tools.nsc
 package dependencies
 
 import util.SourceFile
-import io.{ AbstractFile, Path }
+import io.Path
 import collection._
 import symtab.Flags
+import scala.tools.nsc.io.AbstractFile
 
 trait DependencyAnalysis extends SubComponent with Files {
   import global._

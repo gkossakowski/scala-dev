@@ -7,14 +7,14 @@ package scala.tools
 package nsc
 package util
 
-import java.io.{File, FileInputStream, PrintStream, IOException}
+import java.io.{File, FileInputStream, PrintStream}
 import java.lang.Long.toHexString
 import java.lang.Float.intBitsToFloat
 import java.lang.Double.longBitsToDouble
 
 import cmd.program.Simple
-import symtab.{ Flags, Names }
-import scala.reflect.generic.{ PickleBuffer, PickleFormat }
+import scala.reflect.internal.{Flags, Names}
+import scala.reflect.internal.pickling.{ PickleBuffer, PickleFormat }
 import interpreter.ByteCode.scalaSigBytesForPath
 
 object ShowPickled extends Names {
@@ -197,7 +197,7 @@ object ShowPickled extends Names {
       tag match {
         case TERMname =>
           out.print(" ")
-          out.print(newTermName(buf.bytes, buf.readIndex, len).toString())
+          out.print(newTermName(buf.bytes, buf.readIndex, len).toString)
           buf.readIndex = end
         case TYPEname =>
           out.print(" ")

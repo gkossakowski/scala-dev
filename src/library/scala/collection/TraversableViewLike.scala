@@ -16,6 +16,8 @@ import annotation.migration
 trait ViewMkString[+A] {
   self: Traversable[A] =>
   
+  // It is necessary to use thisSeq rather than toSeq to avoid cycles in the
+  // eager evaluation of vals in transformed view subclasses, see #4558.
   protected[this] def thisSeq: Seq[A] = new ArrayBuffer[A] ++= self result
   
   // Have to overload all three to work around #4299.  The overload
@@ -80,6 +82,27 @@ trait TraversableViewLike[+A,
   trait Transformed[+B] extends TraversableView[B, Coll] with super.Transformed[B] {
     def foreach[U](f: B => U): Unit
     
+    // Methods whose standard implementations use "isEmpty" need to be rewritten
+    // for views, else they will end up traversing twice in a situation like:
+    //   xs.view.flatMap(f).headOption
+    override def headOption: Option[B] = {
+      for (x <- this)
+        return Some(x)
+      
+      None
+    }
+    override def lastOption: Option[B] = {
+      // (Should be) better than allocating a Some for every element.
+      var empty = true
+      var result: B = null.asInstanceOf[B]
+      for (x <- this) {
+        empty = false
+        result = x
+      }
+      if (empty) None else Some(result)
+    }
+
+    // XXX: As yet not dealt with, tail and init both call isEmpty.
     override def stringPrefix = self.stringPrefix
     override def toString = viewToString
   }
@@ -157,17 +180,17 @@ trait TraversableViewLike[+A,
   override def splitAt(n: Int): (This, This) = (newTaken(n), newDropped(n))
 
   override def scanLeft[B, That](z: B)(op: (B, A) => B)(implicit bf: CanBuildFrom[This, B, That]): That =
-    newForced(self.toSeq.scanLeft(z)(op)).asInstanceOf[That]
+    newForced(thisSeq.scanLeft(z)(op)).asInstanceOf[That]
   
   @migration(2, 9,
     "This scanRight definition has changed in 2.9.\n" +
     "The previous behavior can be reproduced with scanRight.reverse."
   )
   override def scanRight[B, That](z: B)(op: (A, B) => B)(implicit bf: CanBuildFrom[This, B, That]): That =
-    newForced(self.toSeq.scanRight(z)(op)).asInstanceOf[That]
+    newForced(thisSeq.scanRight(z)(op)).asInstanceOf[That]
 
   override def groupBy[K](f: A => K): immutable.Map[K, This] =
-    self.toSeq.groupBy(f).mapValues(xs => newForced(xs).asInstanceOf[This])
+    thisSeq groupBy f mapValues (xs => newForced(xs))
   
   override def toString = viewToString
 }

@@ -15,7 +15,11 @@ import scala.io.Source
 
 /** A mutable Settings object.
  */
-class MutableSettings(val errorFn: String => Unit) extends AbsSettings with ScalaSettings with Mutable {  
+class MutableSettings(val errorFn: String => Unit)
+              extends scala.reflect.internal.settings.MutableSettings 
+                 with AbsSettings
+                 with ScalaSettings
+                 with Mutable {
   type ResultOfTryToSet = List[String]
 
   /** Iterates over the arguments applying them to settings where applicable.
@@ -49,6 +53,13 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
             errorFn("bad option: '" + x + "'")
             (false, args)
           }
+          // discard empties, sometimes they appear because of ant or etc.
+          // but discard carefully, because an empty string is valid as an argument
+          // to an option, e.g. -cp "" .  So we discard them only when they appear
+          // in option position.
+          else if (x == "") {
+            loop(xs, residualArgs)
+          }
           else lookupSetting(x) match {
             case Some(s) if s.shouldStopProcessing  => (checkDependencies, newArgs)
             case _                                  => loop(newArgs, residualArgs)
@@ -59,7 +70,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
           else (checkDependencies, args)
         }
     }
-    loop(arguments filterNot (_ == ""), Nil)
+    loop(arguments, Nil)
   }
   def processArgumentString(params: String) = processArguments(splitParams(params), true)
 
@@ -191,7 +202,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
   def IntSetting(name: String, descr: String, default: Int, range: Option[(Int, Int)], parser: String => Option[Int]) = add(new IntSetting(name, descr, default, range, parser))
   def MultiStringSetting(name: String, arg: String, descr: String) = add(new MultiStringSetting(name, arg, descr))
   def OutputSetting(outputDirs: OutputDirs, default: String) = add(new OutputSetting(outputDirs, default))
-  def PhasesSetting(name: String, descr: String) = add(new PhasesSetting(name, descr))
+  def PhasesSetting(name: String, descr: String, default: String = "") = add(new PhasesSetting(name, descr, default))
   def StringSetting(name: String, arg: String, descr: String, default: String) = add(new StringSetting(name, arg, descr, default))
   def PathSetting(name: String, descr: String, default: String): PathSetting = {
     val prepend = StringSetting(name + "/p", "", "", "").internalOnly()
@@ -200,21 +211,6 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     add(new PathSetting(name, descr, default, prepend, append))
   }
   def PrefixSetting(name: String, prefix: String, descr: String): PrefixSetting = add(new PrefixSetting(name, prefix, descr))
-
-  // basically this is a value which remembers if it's been modified
-  trait SettingValue extends AbsSettingValue {
-    protected var v: T
-    protected var setByUser: Boolean = false
-    def postSetHook(): Unit
-    
-    def isDefault: Boolean = !setByUser
-    def value: T = v
-    def value_=(arg: T) = {
-      setByUser = true
-      v = arg
-      postSetHook()
-    }
-  }
 
   /** A class for holding mappings from source directories to
    *  their output location. This functionality can be accessed
@@ -267,7 +263,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
 
     def add(src: AbstractFile, dst: AbstractFile) {
       singleOutDir = None
-      outputDirs ::= (src, dst)
+      outputDirs ::= ((src, dst))
     }
 
     /** Return the list of source-destination directory pairs. */
@@ -328,12 +324,12 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
   }
 
   /** A base class for settings of all types.
-   *  Subclasses each define a `value' field of the appropriate type.
+   *  Subclasses each define a `value` field of the appropriate type.
    */
   abstract class Setting(val name: String, val helpDescription: String) extends AbsSetting with SettingValue with Mutable {
     /** Will be called after this Setting is set for any extra work. */
     private var _postSetHook: this.type => Unit = (x: this.type) => ()
-    def postSetHook(): Unit = _postSetHook(this)
+    override def postSetHook(): Unit = _postSetHook(this)
     def withPostSetHook(f: this.type => Unit): this.type = { _postSetHook = f ; this }
 
     /** The syntax defining this setting in a help string */
@@ -365,7 +361,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     parser: String => Option[Int])
   extends Setting(name, descr) {
     type T = Int
-    protected var v = default
+    v = default
 
     // not stable values!
     val IntMin = Int.MinValue
@@ -412,6 +408,8 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     def unparse: List[String] =
       if (value == default) Nil
       else List(name, value.toString)
+
+    withHelpSyntax(name + " <n>")
   }
 
   /** A setting represented by a boolean flag (false, unless set) */
@@ -420,7 +418,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     descr: String)
   extends Setting(name, descr) {
     type T = Boolean
-    protected var v = false
+    v = false
 
     def tryToSet(args: List[String]) = { value = true ; Some(args) }
     def unparse: List[String] = if (value) List(name) else Nil
@@ -436,7 +434,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     descr: String)
   extends Setting(name, descr) {
     type T = List[String]
-    protected var v: List[String] = Nil
+    v = Nil
   
     def tryToSet(args: List[String]) = args match {
       case x :: xs if x startsWith prefix =>
@@ -449,7 +447,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     def unparse: List[String] = value
   }
 
-  /** A setting represented by a string, (`default' unless set) */
+  /** A setting represented by a string, (`default` unless set) */
   class StringSetting private[nsc](
     name: String,
     val arg: String,
@@ -457,7 +455,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     val default: String)
   extends Setting(name, descr) {
     type T = String
-    protected var v = default
+    v = default
 
     def tryToSet(args: List[String]) = args match {
       case Nil      => errorAndValue("missing argument", None)
@@ -507,7 +505,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     descr: String)
   extends Setting(name, descr) {
     type T = List[String]
-    protected var v: List[String] = Nil
+    v = Nil
     def appendToValue(str: String) { value ++= List(str) }
 
     def tryToSet(args: List[String]) = {
@@ -523,8 +521,8 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     withHelpSyntax(name + ":<" + arg + ">")
   }
 
-  /** A setting represented by a string in a given set of <code>choices</code>,
-   *  (<code>default</code> unless set).
+  /** A setting represented by a string in a given set of `choices`,
+   *  (`default` unless set).
    */
   class ChoiceSetting private[nsc](
     name: String,
@@ -534,7 +532,7 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     val default: String)
   extends Setting(name, descr + choices.mkString(" (", ",", ") default:" + default)) {
     type T = String
-    protected var v: String = default
+    v = default
     def indexOfChoice: Int = choices indexOf value
 
     private def usageErrorMessage = {
@@ -556,17 +554,26 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     withHelpSyntax(name + ":<" + helpArg + ">")
   }
 
+  private def mkPhasesHelp(descr: String, default: String) = {
+    descr + " <phases>" + (
+      if (default == "") "" else " (default: " + default + ")"
+    )
+  }
+
   /** A setting represented by a list of strings which should be prefixes of
    *  phase names. This is not checked here, however.  Alternatively the string
-   *  "all" can be used to represent all phases.
+   *  `"all"` can be used to represent all phases.
    *  (the empty list, unless set)
    */
   class PhasesSetting private[nsc](
     name: String,
-    descr: String)
-  extends Setting(name, descr + " <phase>.") {
+    descr: String,
+    default: String
+  ) extends Setting(name, mkPhasesHelp(descr, default)) {
+    private[nsc] def this(name: String, descr: String) = this(name, descr, "")
+
     type T = List[String]
-    protected var v: List[String] = Nil
+    v = Nil
     override def value = if (v contains "all") List("all") else super.value
     private lazy val (numericValues, stringValues) =
       value filterNot (_ == "" ) partition (_ forall (ch => ch.isDigit || ch == '-'))
@@ -592,9 +599,12 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
         case fns    => fns.reduceLeft((f1, f2) => id => f1(id) || f2(id))
       }
     
-    def tryToSet(args: List[String]) = errorAndValue("missing phase", None)
+    def tryToSet(args: List[String]) =
+      if (default == "") errorAndValue("missing phase", None)
+      else { tryToSetColon(List(default)) ; Some(args) }
+
     override def tryToSetColon(args: List[String]) = args match {
-      case Nil  => errorAndValue("missing phase", None)
+      case Nil  => if (default == "") errorAndValue("missing phase", None) else tryToSetColon(List(default))
       case xs   => value = (value ++ xs).distinct.sorted ; Some(Nil)
     }
     // we slightly abuse the usual meaning of "contains" here by returning
@@ -607,6 +617,9 @@ class MutableSettings(val errorFn: String => Unit) extends AbsSettings with Scal
     def doAllPhases = stringValues contains "all"
     def unparse: List[String] = value map (name + ":" + _)
 
-    withHelpSyntax(name + ":<phase>")
+    withHelpSyntax(
+      if (default == "") name + ":<phases>"
+      else name + "[:phases]"
+    )
   }
 }

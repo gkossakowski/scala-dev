@@ -3375,12 +3375,33 @@ trait Typers extends Modes with Adaptations {
         // make tree for `(label, rhs)`
         def mkArg(label: String, rhs: Tree) = gen.mkTuple(List(Literal(Constant(label)), rhs))
 
-        // make args
+        // make args -- have to locate the original classdef tree and its template for that, this is reallllly ugly....
         val classDefTree = context.outer.tree
-        val args = defSyms filter (!_.isConstructor) flatMap { sym => 
-          classDefTree.find(_.symbol == sym) map { tree => 
-            mkArg(nme.getterName(sym.name).toString, tree.asInstanceOf[ValOrDefDef].rhs)
+        val templ = classDefTree find { case x: Template => x.body.nonEmpty && (x.body.head.symbol ne NoSymbol) && x.body.head.symbol.owner == origClass case _ => false } getOrElse EmptyTree
+
+        val statsUntyped = defSyms filter (!_.isConstructor) flatMap { sym =>
+          classDefTree.filter(_.symbol == sym) collect {
+            case vd@ValDef(mods, name, tpt, rhs) => vd
           }
+        }
+        // type the stats so that selections on the self-variable can be rewritten next
+        val stats = newTyper(context.make(templ, origClass, new Scope)).typedStats(statsUntyped.toList, templ.symbol)
+
+        val args = stats map { case vd@ValDef(mods, name, tpt, rhs) =>
+          val selfSym = origClass.owner.newValueParameter(rhs.pos, "self".toTermName) setInfo repStructTp
+          object substSelf extends Transformer {
+            def apply(tree: Tree): Tree = transform(tree)
+            override def transform(tree: Tree): Tree = tree match {
+              case This(x) if tree.symbol == origClass =>
+                CODE.REF(selfSym) setType repStructTp
+              case _ =>
+                tree.tpe = null // reset all other types -- need to re-typecheck (so implicits can be inserted where needed to stage)
+                if (tree.hasSymbol) tree.symbol = NoSymbol
+                super.transform(tree)
+            }
+          }
+          val rhsTpe = appliedType(repTycon, List(elimAnonymousClass(rhs.tpe.widen)))
+          mkArg(name.toString, Function(List(ValDef(selfSym)), Typed(substSelf(rhs), TypeTree(rhsTpe))))
         }
 
         // must supply type param explicitly as it can't be inferred from pt

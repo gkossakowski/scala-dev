@@ -3984,7 +3984,7 @@ trait Typers extends Modes with Adaptations {
               // _ <- Some(println("mkInvoke repTp="+ repTp));
               // if so, generate an invocation and give it type `Rep[T]`, where T is the type given to member `name` in `decls`
               repSym = repTp.typeSymbolDirect;
-              qualRowTp = qual.tpe.baseType(repSym).typeArgs.head; // this specifies `decls`
+              qualRowTp <- qual.tpe.baseType(repSym).typeArgs.headOption; // this specifies `decls`
               member <- symOpt(qualRowTp.member(name))
             ) yield {
               val memberTp = qualRowTp.memberType(member).resultType // this is `T` from the comment above

@@ -93,7 +93,8 @@ trait ScalaSettings extends AbsScalaSettings
 
   // Experimental Extensions
   val Xexperimental = BooleanSetting    ("-Xexperimental", "Enable experimental extensions.") .
-                          withPostSetHook(set => List(YmethodInfer, overrideObjects) foreach (_.value = set.value)) // YdepMethTpes, YvirtClasses, 
+                          withPostSetHook(set => List(YmethodInfer, overrideObjects) foreach (_.value = set.value))
+                                                   // YdepMethTpes, YvirtClasses,
 
   /** Compatibility stubs for options whose value name did
    *  not previously match the option name.
@@ -180,6 +181,7 @@ trait ScalaSettings extends AbsScalaSettings
    */
   val YpresentationVerbose = BooleanSetting("-Ypresentation-verbose", "Print information about presentation compiler tasks.")
   val YpresentationDebug   = BooleanSetting("-Ypresentation-debug",  "Enable debugging output for the presentation compiler.")
+  val YpresentationStrict  = BooleanSetting("-Ypresentation-strict", "Do not report type errors in sources with syntax errors.")
   
   val YpresentationLog     = StringSetting("-Ypresentation-log", "file", "Log presentation compiler events into file", "")
   val YpresentationReplay  = StringSetting("-Ypresentation-replay", "file", "Replay presentation compiler events from file", "")

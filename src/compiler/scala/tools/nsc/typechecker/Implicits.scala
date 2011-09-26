@@ -641,7 +641,7 @@ trait Implicits {
                 }
 
                 // println("sois: "+secondOrderImplicitsSatisfiable)
-                if (!secondOrderImplicitsSatisfiable) SearchFailure
+                if (!secondOrderImplicitsSatisfiable || checked.containsError()) SearchFailure
                 else {
                   val result = new SearchResult(checked, subst)
                   incCounter(foundImplicits)

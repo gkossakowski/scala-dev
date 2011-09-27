@@ -1342,29 +1342,33 @@ trait Typers extends Modes with Adaptations {
       assert(clazz != NoSymbol)
       reenterTypeParams(cdef.tparams)
       val tparams1 = cdef.tparams mapConserve (typedTypeDef)
-      val impl1 = newTyper(context.make(cdef.impl, clazz, new Scope))
-        .typedTemplate(cdef.impl, parentTypes(cdef.impl))
-      if(impl1.symbol == NoSymbol) { // discard the class definition since the new call is going to be reified
-        EmptyTree
-      } else {
-        val impl2 = typerAddSyntheticMethods(impl1, clazz, context)
 
-        if ((clazz != ClassfileAnnotationClass) &&
-            (clazz isNonBottomSubClass ClassfileAnnotationClass))
-          restrictionWarning(cdef.pos, unit,
-            "subclassing Classfile does not\n"+
-            "make your annotation visible at runtime.  If that is what\n"+ 
-            "you want, you must write the annotation class in Java.")
-        if (phase.id <= currentRun.typerPhase.id) {
-          for (ann <- clazz.getAnnotation(DeprecatedAttr)) {
-            val m = companionModuleOf(clazz, context)
-            if (m != NoSymbol)
-              m.moduleClass.addAnnotation(AnnotationInfo(ann.atp, ann.args, List()))
-          }
+      val impl1 = 
+        newTyper(context.make(cdef.impl, clazz, new Scope)).silent(
+             _.typedTemplate(cdef.impl, parentTypes(cdef.impl))) match {
+          case t: Template   => t
+          case ex: TypeError =>
+              if (clazz.isAnonymousClass && shouldReifyNew(clazz.typeOfThis)) null // TODO: ensure clazz isn't used anywhere but in typedReifiedNew
+              else throw ex
         }
-        treeCopy.ClassDef(cdef, typedMods, cdef.name, tparams1, impl2)
-          .setType(NoType)
+      if(impl1 == null) return EmptyTree
+
+      val impl2 = typerAddSyntheticMethods(impl1, clazz, context)
+      if ((clazz != ClassfileAnnotationClass) &&
+          (clazz isNonBottomSubClass ClassfileAnnotationClass))
+        restrictionWarning(cdef.pos, unit,
+          "subclassing Classfile does not\n"+
+          "make your annotation visible at runtime.  If that is what\n"+ 
+          "you want, you must write the annotation class in Java.")
+      if (phase.id <= currentRun.typerPhase.id) {
+        for (ann <- clazz.getAnnotation(DeprecatedAttr)) {
+          val m = companionModuleOf(clazz, context)
+          if (m != NoSymbol)
+            m.moduleClass.addAnnotation(AnnotationInfo(ann.atp, ann.args, List()))
+        }
       }
+      treeCopy.ClassDef(cdef, typedMods, cdef.name, tparams1, impl2)
+        .setType(NoType)
     }
  
     /**
@@ -1558,43 +1562,32 @@ trait Typers extends Modes with Adaptations {
               treeCopy.TypeTree(tpt).setOriginal(tpt) setType vd.symbol.tpe)
           treeCopy.ValDef(vd, mods, name, tpt1, EmptyTree) setType NoType
       }
-
 // was: 
 //          val tpt1 = checkNoEscaping.privates(clazz.thisSym, typedType(tpt))
 //          treeCopy.ValDef(vd, mods, name, tpt1, EmptyTree) setType NoType
 // but this leads to cycles for existential self types ==> #2545
-      if (self1.name != nme.WILDCARD) context.scope enter self1.symbol
-
+    if (self1.name != nme.WILDCARD) context.scope enter self1.symbol
       val selfType =
         if (clazz.isAnonymousClass && !phase.erasedTypes) 
           intersectionType(clazz.info.parents, clazz.owner)
         else clazz.typeOfThis
-
       // the following is necessary for templates generated later
       assert(clazz.info.decls != EmptyScope)
       enterSyms(context.outer.make(templ, clazz, clazz.info.decls), templ.body)
-
-      // the restrictions below don't apply since we're going to discard the corresponding class definition
-      if(shouldReifyNew(selfType)) {
-        Template(Nil, ValDef(NoSymbol), Nil) setSymbol NoSymbol
-      } else {
-        validateParentClasses(parents1, selfType)
-        if (clazz.isCase)
-          validateNoCaseAncestor(clazz)
-
-        if ((clazz isSubClass ClassfileAnnotationClass) && !clazz.owner.isPackageClass)
-          unit.error(clazz.pos, "inner classes cannot be classfile annotations")
-        if (!phase.erasedTypes && !clazz.info.resultType.isError) // @S: prevent crash for duplicated type members
-          checkFinitary(clazz.info.resultType.asInstanceOf[ClassInfoType])
-
-        val body = 
-          if (phase.id <= currentRun.typerPhase.id && !reporter.hasErrors) 
-            templ.body flatMap addGetterSetter
-          else templ.body
-
-        val body1 = typedStats(body, templ.symbol)
-        treeCopy.Template(templ, parents1, self1, body1) setType clazz.tpe
-      }
+      validateParentClasses(parents1, selfType)
+      if (clazz.isCase)
+        validateNoCaseAncestor(clazz)
+      
+      if ((clazz isSubClass ClassfileAnnotationClass) && !clazz.owner.isPackageClass)
+        unit.error(clazz.pos, "inner classes cannot be classfile annotations")
+      if (!phase.erasedTypes && !clazz.info.resultType.isError) // @S: prevent crash for duplicated type members
+        checkFinitary(clazz.info.resultType.asInstanceOf[ClassInfoType])
+      val body = 
+        if (phase.id <= currentRun.typerPhase.id && !reporter.hasErrors) 
+          templ.body flatMap addGetterSetter
+        else templ.body 
+      val body1 = typedStats(body, templ.symbol)
+      treeCopy.Template(templ, parents1, self1, body1) setType clazz.tpe
     }
 
     /** Remove definition annotations from modifiers (they have been saved
@@ -3301,6 +3294,19 @@ trait Typers extends Modes with Adaptations {
       }
 
       def typedNew(tpt: Tree): Tree = {
+        val (allowAbstract, tpt1) = {
+          val tpt0 = typedTypeConstructor(tpt)
+          if(shouldReifyNew(tpt0.tpe)) (true, tpt0)
+          else (false, {
+            checkClassType(tpt0, false, true)
+            if (tpt0.hasSymbol && !tpt0.symbol.typeParams.isEmpty) {
+              context.undetparams = cloneSymbols(tpt0.symbol.typeParams)
+              TypeTree().setOriginal(tpt0)
+                        .setType(appliedType(tpt0.tpe, context.undetparams map (_.tpeHK))) // @PP: tpeHK! #3343, #4018, #4347.
+            } else tpt0
+          })
+        }
+
         /** If current tree <tree> appears in <val x(: T)? = <tree>>
          *  return `tp with x.type' else return `tp`.
          */
@@ -3314,35 +3320,20 @@ trait Typers extends Modes with Adaptations {
             case _ => tp
           }}
 
-        val tptTyped = typedTypeConstructor(tpt)
-
-        if(shouldReifyNew(tptTyped.tpe)) {
-          treeCopy.New(tree, tptTyped).setType(tptTyped.tpe)
-        } else {
-          checkClassType(tptTyped, false, true)
-
-          val tptApplied =
-            if (tptTyped.hasSymbol && !tptTyped.symbol.typeParams.isEmpty) {
-              context.undetparams = cloneSymbols(tptTyped.symbol.typeParams)
-              TypeTree().setOriginal(tptTyped)
-                        .setType(appliedType(tptTyped.tpe, context.undetparams map (_.tpeHK))) // @PP: tpeHK! #3343, #4018, #4347.
-            } else tptTyped
-
-          val tp = tptApplied.tpe
-          val sym = tp.typeSymbol
-          if (sym.isAbstractType || sym.hasAbstractFlag)
-            error(tree.pos, sym + " is abstract; cannot be instantiated")
-          else if (!(  tp == sym.initialize.thisSym.tpe // when there's no explicit self type -- with (#3612) or without self variable
-                       // sym.thisSym.tpe == tp.typeOfThis (except for objects)
-                    || narrowRhs(tp) <:< tp.typeOfThis
-                    || phase.erasedTypes
-                    )) {
-            error(tree.pos, sym + 
-                  " cannot be instantiated because it does not conform to its self-type "+
-                  tp.typeOfThis)
-          }
-          treeCopy.New(tree, tptApplied).setType(tp)
+        val tp = tpt1.tpe
+        val sym = tp.typeSymbol
+        if (!allowAbstract && (sym.isAbstractType || sym.hasAbstractFlag))
+          error(tree.pos, sym + " is abstract; cannot be instantiated")
+        else if (!(  tp == sym.initialize.thisSym.tpe // when there's no explicit self type -- with (#3612) or without self variable
+                     // sym.thisSym.tpe == tp.typeOfThis (except for objects)
+                  || narrowRhs(tp) <:< tp.typeOfThis
+                  || phase.erasedTypes
+                  )) {
+          error(tree.pos, sym + 
+                " cannot be instantiated because it does not conform to its self-type "+
+                tp.typeOfThis)
         }
+        treeCopy.New(tree, tpt1).setType(tp)
       }
 
       def typedReifiedNew(tpt: Tree): Tree = {

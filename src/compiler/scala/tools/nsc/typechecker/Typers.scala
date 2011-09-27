@@ -3970,14 +3970,15 @@ trait Typers extends Modes with Adaptations {
         @inline private def listOpt[T](xs: List[T]) = xs match { case x :: Nil => Some(x) case _ => None }
         @inline private def symOpt[T](sym: Symbol) = if(sym == NoSymbol) None else Some(sym) // TODO: handle overloading?
 
-        def mkInvoke(qual: Tree, name: Name, wrapInApply: Boolean): Option[Tree] = {
+        def mkInvoke(qual: Tree, name: Name, selectOnly: Boolean): Option[Tree] = {
           def invocation(tp: Type = null): Tree = {
-            val applyDynamic = Select(qual, nme.applyDynamic)
-            val res = Apply(if (tp != null) TypeApply(applyDynamic, List(TypeTree(tp))) else applyDynamic, List(Literal(Constant(name.decode))))
-            atPos(qual.pos)(if (wrapInApply) Apply(res, List()) else res)
+            val adSelect  = if (selectOnly) Select(qual, nme.selectDynamic) else Select(qual, nme.applyDynamic)
+            val adTypeApp = if (tp == null) adSelect else TypeApply(adSelect, List(TypeTree(tp))) // tp != null ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
+            atPos(qual.pos)(Apply(adTypeApp, List(Literal(Constant(name.decode)))))
           }
 
-          if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))
+          if (name == nme.applyDynamic || name == nme.selectDynamic) None // don't applyDynamic applyDynamic
+          else if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))
             Some(invocation())
           else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
             val myPrefix = ThisType(context.enclClass.owner)

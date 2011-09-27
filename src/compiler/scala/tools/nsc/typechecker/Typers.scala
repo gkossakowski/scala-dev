@@ -3697,9 +3697,10 @@ trait Typers extends Modes with Adaptations {
                   // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
                   // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
                   val rhs = args.tail
-                  // without resetAllAttrs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
-                  // probable cause: re-rooting a tree from an argument position to the target position requires changes to the tree's symbols
-                  atPos(tree.pos)(typed(Apply(Select(resetAllAttrs(lhs), nme.EQ) setPos fun.pos, rhs map (resetAllAttrs(_)))))
+                  // I once thought that without resetAllAttrs for lhs and rhs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
+                  // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
+                  // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
+                  atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
                 } else if (phase.id <= currentRun.typerPhase.id &&
                     fun2.isInstanceOf[Select] &&
                     !isImplicitMethod(fun2.tpe) &&

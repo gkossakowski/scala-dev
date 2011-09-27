@@ -712,8 +712,7 @@ trait Typers extends Modes with Adaptations {
      *  (11) Widen numeric literals to their expected type, if necessary
      *  (12) When in mode EXPRmode, convert E to { E; () } if expected type is scala.Unit.
      *  (13) When in mode EXPRmode, apply AnnotationChecker conversion if expected type is annotated.
-     *  (14) When in more EXPRmode, convert E to Code.lift(E) if expected type is Code[_]
-     *  (15) When in mode EXPRmode, apply a view
+     *  (14) When in mode EXPRmode, apply a view
      *  If all this fails, error
      */
     protected def adapt(tree: Tree, mode: Int, pt: Type, original: Tree = EmptyTree): Tree = {
@@ -972,8 +971,6 @@ trait Typers extends Modes with Adaptations {
                       new ApplyImplicitView(coercion, List(tree)) setPos tree.pos, mode, pt)
                   }
                 }
-                if (isCodeType(pt) && !isCodeType(tree.tpe) && !tree.tpe.isError) 
-                  return adapt(lifted(tree), mode, pt, original)
               }
               if (settings.debug.value) {
                 log("error tree = " + tree)
@@ -1216,8 +1213,26 @@ trait Typers extends Modes with Adaptations {
 */
 
         //Console.println("parents("+clazz") = "+supertpt :: mixins);//DEBUG
-        supertpt :: mixins mapConserve (tpt => checkNoEscaping.privates(clazz, tpt))
-      } catch {
+
+        // Certain parents are added in the parser before it is known whether
+        // that class also declared them as parents.  For instance, this is an
+        // error unless we take corrective action here:
+        //
+        //   case class Foo() extends Serializable
+        //
+        // So we strip the duplicates before typer.
+        def fixDuplicates(remaining: List[Tree]): List[Tree] = remaining match {
+          case Nil      => Nil
+          case x :: xs  =>
+            val sym = x.symbol
+            x :: fixDuplicates(
+              if (isPossibleSyntheticParent(sym)) xs filterNot (_.symbol == sym)
+              else xs
+            )
+        }
+        fixDuplicates(supertpt :: mixins) mapConserve (tpt => checkNoEscaping.privates(clazz, tpt))
+      }
+      catch {
         case ex: TypeError =>
           templ.tpe = null
           reportTypeError(templ.pos, ex)
@@ -3781,9 +3796,10 @@ trait Typers extends Modes with Adaptations {
                   // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
                   // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
                   val rhs = args.tail
-                  // without resetAllAttrs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
-                  // probable cause: re-rooting a tree from an argument position to the target position requires changes to the tree's symbols
-                  atPos(tree.pos)(typed(Apply(Select(resetAllAttrs(lhs), nme.EQ) setPos fun.pos, rhs map (resetAllAttrs(_)))))
+                  // I once thought that without resetAllAttrs for lhs and rhs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
+                  // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
+                  // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
+                  atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
                 } else if (phase.id <= currentRun.typerPhase.id &&
                     fun2.isInstanceOf[Select] &&
                     !isImplicitMethod(fun2.tpe) &&

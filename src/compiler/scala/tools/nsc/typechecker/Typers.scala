@@ -3406,7 +3406,11 @@ trait Typers extends Modes with Adaptations {
                 super.transform(tree)
             }
           }
-          val rhsTpe = appliedType(repTycon, List(elimAnonymousClass(rhs.tpe.widen)))
+          val rhsTpeMaybeRep = elimAnonymousClass(rhs.tpe.widen)
+          val rhsTpe =
+            if(rhsTpeMaybeRep.baseType(repSym) == NoType) appliedType(repTycon, List(rhsTpeMaybeRep)) // nope: no Rep wrapper yet, so add it
+            else rhsTpeMaybeRep // was already in a Rep
+
           mkArg(name.toString, Function(List(ValDef(selfSym)), Typed(substSelf(rhs), TypeTree(rhsTpe))))
         }
 

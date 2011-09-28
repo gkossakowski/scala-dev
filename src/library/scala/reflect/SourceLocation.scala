@@ -13,7 +13,7 @@ package scala.reflect
  *  location in the source where the method is invoked, such as the source file name
  *  and line number.
  */
-trait SourceLocation {
+trait SourceLocation extends Serializable {
 
   /** The name of the source file in which this SourceLocation has been generated.
    */

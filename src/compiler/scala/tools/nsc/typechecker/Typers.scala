@@ -3407,7 +3407,7 @@ trait Typers extends Modes with Adaptations {
             }
           }
           val rhsTpeMaybeRep = elimAnonymousClass(rhs.tpe.widen)
-          val rhsTpe = // TODO does baseType work when repSym.isAbstractType?
+          val rhsTpe = // done: baseType works when repSym.isAbstractType
             if(rhsTpeMaybeRep.baseType(repSym) == NoType) appliedType(repTycon, List(rhsTpeMaybeRep)) // nope: no Rep wrapper yet, so add it
             else rhsTpeMaybeRep // was already in a Rep
 

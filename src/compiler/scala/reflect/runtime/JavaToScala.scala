@@ -37,7 +37,16 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
    */
   def javaClass(path: String): jClass[_] = 
     jClass.forName(path, false, java.lang.ClassLoader.getSystemClassLoader)
-
+    
+  /** Does `path` correspond to a Java class with that fully qualified name? */
+  def isJavaClass(path: String): Boolean = 
+    try {
+      javaClass(path)
+      true
+    } catch {
+      case (_: ClassNotFoundException) | (_: NoClassDefFoundError) => 
+      false
+    }
 
   /**
    * Generate types for top-level Scala root class and root companion object
@@ -58,16 +67,17 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
          else "error while loading " + clazz.name) + ", " + msg)
     }
     try {
-      info("unpickling " + clazz + " " + module) //debug
       markAbsent(NoType)
       val ssig = jclazz.getAnnotation(classOf[scala.reflect.ScalaSignature])
       if (ssig != null) {
+        info("unpickling Scala "+clazz + " and " + module+ ", owner = " + clazz.owner)
         val bytes = ssig.bytes.getBytes
         val len = ByteCodecs.decode(bytes)
         unpickler.unpickle(bytes take len, 0, clazz, module, jclazz.getName)
       } else {
         val slsig = jclazz.getAnnotation(classOf[scala.reflect.ScalaLongSignature])
         if (slsig != null) {
+          info("unpickling Scala "+clazz + " and " + module + " with long Scala signature")
           val byteSegments = slsig.bytes map (_.getBytes)
           val lens = byteSegments map ByteCodecs.decode
           val bytes = Array.ofDim[Byte](lens.sum)
@@ -78,7 +88,7 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
           }
           unpickler.unpickle(bytes, 0, clazz, module, jclazz.getName)
         } else { // class does not have a Scala signature; it's a Java class
-          info("no sig found for " + jclazz) //debug
+          info("translating reflection info for Java " + jclazz) //debug
           initClassModule(clazz, module, new FromJavaClassCompleter(clazz, module, jclazz))
         }
       }
@@ -133,7 +143,7 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
    */
   private class FromJavaClassCompleter(clazz: Symbol, module: Symbol, jclazz: jClass[_]) extends LazyType {
     override def load(sym: Symbol) = {
-      info("completing from Java " + sym + "/" + clazz.fullName)//debug
+      debugInfo("completing from Java " + sym + "/" + clazz.fullName)//debug
       assert(sym == clazz || (module != NoSymbol && (sym == module || sym == module.moduleClass)), sym)
       val flags = toScalaFlags(jclazz.getModifiers, isClass = true)
       clazz setFlag (flags | JAVA)
@@ -310,7 +320,6 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
    *  this one bypasses the cache.
    */
   def makeScalaPackage(fullname: String): Symbol = {
-    info("make scala pkg "+fullname)
     val split = fullname lastIndexOf '.'
     val owner = if (split > 0) packageNameToScala(fullname take split) else RootClass
     assert(owner.isModuleClass, owner+" when making "+fullname)
@@ -321,6 +330,7 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
       pkg.moduleClass setInfo new LazyPackageType
       pkg setInfo pkg.moduleClass.tpe
       owner.info.decls enter pkg
+      info("made Scala "+pkg)
     } else if (!pkg.isPackage) 
       throw new ReflectError(pkg+" is not a package")
     pkg.moduleClass
@@ -451,7 +461,7 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
    */
   private def jfieldAsScala(jfield: jField): Symbol = fieldCache.toScala(jfield) {
     val field = sOwner(jfield).newValue(NoPosition, newTermName(jfield.getName))
-      .setFlag(toScalaFlags(jfield.getModifiers, isClass = false) | JAVA)
+      .setFlag(toScalaFlags(jfield.getModifiers, isField = true) | JAVA)
       .setInfo(typeToScala(jfield.getGenericType))
     fieldCache enter (jfield, field)
     copyAnnotations(field, jfield)
@@ -471,7 +481,7 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
   private def jmethodAsScala(jmeth: jMethod): Symbol = methodCache.toScala(jmeth) {
     val clazz = sOwner(jmeth)
     val meth = clazz.newMethod(NoPosition, newTermName(jmeth.getName))
-      .setFlag(toScalaFlags(jmeth.getModifiers, isClass = false) | JAVA)
+      .setFlag(toScalaFlags(jmeth.getModifiers) | JAVA)
     methodCache enter (jmeth, meth)
     val tparams = jmeth.getTypeParameters.toList map createTypeParameter
     val paramtpes = jmeth.getGenericParameterTypes.toList map typeToScala
@@ -494,7 +504,7 @@ trait JavaToScala extends ConversionUtil { self: SymbolTable =>
     // [Martin] Note: I know there's a lot of duplication wrt jmethodAsScala, but don't think it's worth it to factor this out.
     val clazz = sOwner(jconstr)
     val constr = clazz.newMethod(NoPosition, nme.CONSTRUCTOR)
-      .setFlag(toScalaFlags(jconstr.getModifiers, isClass = false) | JAVA)
+      .setFlag(toScalaFlags(jconstr.getModifiers) | JAVA)
     constructorCache enter (jconstr, constr)
     val tparams = jconstr.getTypeParameters.toList map createTypeParameter
     val paramtpes = jconstr.getGenericParameterTypes.toList map typeToScala

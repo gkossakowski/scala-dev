@@ -1097,7 +1097,7 @@ trait Infer {
       //@M TODO: better place to check this? 
       //@M TODO: errors for getters & setters are reported separately
       val kindErrors = checkKindBounds(tparams, targs, pre, owner)
-           
+
       if (!kindErrors.isEmpty) {
         if (targs contains WildcardType) ()
         else error(pos,
@@ -1111,10 +1111,9 @@ trait Infer {
           //val bounds = instantiatedBounds(pre, owner, tparams, targs)//DEBUG
           //println("bounds = "+bounds+", targs = "+targs+", targclasses = "+(targs map (_.getClass))+", parents = "+(targs map (_.parents)))
           //println(List.map2(bounds, targs)((bound, targ) => bound containsType targ))
-          val ownerString = if (tparams.nonEmpty) tparams.head.owner.toString else "<tparams=Nil>"
           error(pos, 
                 prefix + "type arguments " + targs.mkString("[", ",", "]") + 
-                " do not conform to " + ownerString + "'s type parameter bounds " + 
+                " do not conform to " + tparams.head.owner + "'s type parameter bounds " + 
                 (tparams map (_.defString)).mkString("[", ",", "]"))
           if (settings.explaintypes.value) {
             val bounds = tparams map (tp => tp.info.instantiateTypeParams(tparams, targs).bounds)
@@ -1863,7 +1862,7 @@ trait Infer {
       override def hasSymbol = forwardTo.hasSymbol
       override def symbol    = forwardTo.symbol
       override def symbol_=(x: Symbol) = forwardTo.symbol = x
-    }
+    } 
 
     case class AccessError(tree: Tree, sym: Symbol, pre: Type, explanation: String) extends TreeForwarder(tree) {
       setError(this)

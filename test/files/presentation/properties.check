@@ -3,7 +3,7 @@ reload: properties.scala
 askTypeCompletion at properties.scala(29,33)
 ================================================================================
 [response] aksTypeCompletion at (29,33)
-retrieved 48 members
+retrieved 49 members
 `method !=(x$1: Any)Boolean`
 `method !=(x$1: AnyRef)Boolean`
 `method ##()Int`
@@ -11,6 +11,7 @@ retrieved 48 members
 `method ->[B](y: B)(properties.Property[java.lang.String], B)`
 `method ==(x$1: Any)Boolean`
 `method ==(x$1: AnyRef)Boolean`
+`method _1=> java.lang.String`
 `method apply()java.lang.String`
 `method asInstanceOf[T0]=> T0`
 `method canEqual(that: Any)Boolean`
@@ -40,7 +41,7 @@ retrieved 48 members
 `method wait()Unit`
 `method wait(x$1: Long)Unit`
 `method wait(x$1: Long, x$2: Int)Unit`
-`method ?[B](y: B)(properties.Property[java.lang.String], B)`
+`method →[B](y: B)(properties.Property[java.lang.String], B)`
 `value initjava.lang.String`
 `value selfAny`
 `value xproperties.Property[java.lang.String]`
@@ -52,7 +53,7 @@ retrieved 48 members
 askTypeCompletion at properties.scala(29,67)
 ================================================================================
 [response] aksTypeCompletion at (29,67)
-retrieved 48 members
+retrieved 49 members
 `method !=(x$1: Any)Boolean`
 `method !=(x$1: AnyRef)Boolean`
 `method ##()Int`
@@ -60,6 +61,7 @@ retrieved 48 members
 `method ->[B](y: B)(properties.Property[java.lang.String], B)`
 `method ==(x$1: Any)Boolean`
 `method ==(x$1: AnyRef)Boolean`
+`method _1=> java.lang.String`
 `method apply()java.lang.String`
 `method asInstanceOf[T0]=> T0`
 `method canEqual(that: Any)Boolean`
@@ -89,7 +91,7 @@ retrieved 48 members
 `method wait()Unit`
 `method wait(x$1: Long)Unit`
 `method wait(x$1: Long, x$2: Int)Unit`
-`method ?[B](y: B)(properties.Property[java.lang.String], B)`
+`method →[B](y: B)(properties.Property[java.lang.String], B)`
 `value initjava.lang.String`
 `value selfAny`
 `value xproperties.Property[java.lang.String]`
@@ -129,7 +131,7 @@ retrieved 36 members
 `method wait()Unit`
 `method wait(x$1: Long)Unit`
 `method wait(x$1: Long, x$2: Int)Unit`
-`method ?[B](y: B)(properties.User, B)`
+`method →[B](y: B)(properties.User, B)`
 `value firstnameproperties.Property[java.lang.String]`
 `value lastnameproperties.Property[java.lang.String]`
 `value selfAny`
@@ -150,3 +152,5 @@ def get(newGetter: T => T): properties.Property[T] = {
   this
 }
 ================================================================================
+[properties.scala]: exception during background compile: scala.tools.nsc.interactive.ShutdownReq$
+[properties.scala] marking unit as crashed (crashedFiles: Set(/Users/adriaan/git/scala-dev/test/files/presentation/properties/src/properties.scala))

@@ -13,10 +13,9 @@ import scala.collection.mutable.ListBuffer
 import scala.tools.nsc.util.FreshNameCreator
 
 /** Translate expressions of the form reflect.Code.lift(exp)
- *  to the lifted "reflect trees" representation of exp.
+ *  to the reified "reflect trees" representation of exp.
  *  Also: mutable variables that are accessed from a local function are wrapped in refs.
  *
- *  @author Gilles Dubochet
  *  @author Martin Odersky
  *  @version 2.10
  */
@@ -32,9 +31,12 @@ abstract class LiftCode extends Transform with TypingTransformers {
   val phaseName: String = "liftcode"
 
   def newTransformer(unit: CompilationUnit): Transformer =
-    new Lifter(unit)
-
-  class Lifter(unit: CompilationUnit) extends TypingTransformer(unit) {
+    new Codifier(unit)
+   
+  class Codifier(unit: CompilationUnit) extends TypingTransformer(unit) {
+    
+    val reifyDebug = settings.Yreifydebug.value
+    val debugTrace = util.trace when reifyDebug
     
     /** Set of mutable local variables that are free in some inner method. */
     private val freeMutableVars: mutable.Set[Symbol] = new mutable.HashSet
@@ -46,20 +48,22 @@ abstract class LiftCode extends Transform with TypingTransformers {
       atPhase(phase.next) {
         super.transformUnit(unit)
       }
-      for (v <- freeMutableVars)
+      for (v <- freeMutableVars) //!!! remove
         assert(converted contains v, "unconverted: "+v+" in "+v.owner+" in unit "+unit)
     }
 
     override def transform(tree: Tree): Tree = {
       val sym = tree.symbol
       tree match {
-        case Apply(lift, List(tree)) if sym == Code_lift =>
-          //printTypings = true //debug
-          val result = transform(localTyper.typedPos(tree.pos)(codify(tree)))
-          //println("transformed = "+result) //debug
-          //printTypings = false //debug
-          result
-        case ValDef(mods, name, tpt, rhs) if (freeMutableVars(sym)) =>
+        case Apply(_, List(tree)) if sym == Code_lift => // reify Code.lift[T](expr) instances
+          val saved = printTypings
+          try {
+            printTypings = reifyDebug
+            debugTrace("transformed = ") {
+              transform(localTyper.typedPos(tree.pos)(codify(tree)))
+            }
+          } finally printTypings = saved
+        case ValDef(mods, name, tpt, rhs) if (freeMutableVars(sym)) => // box mutable variables that are accessed from a local closure
           val tpt1 = TypeTree(sym.tpe) setPos tpt.pos
           /* Creating a constructor argument if one isn't present. */
           val constructorArg = rhs match {
@@ -67,16 +71,15 @@ abstract class LiftCode extends Transform with TypingTransformers {
             case _ => transform(rhs)
           }
           val rhs1 = typer.typedPos(rhs.pos) {
-            /*util.errtrace("lifted rhs for "+tree+" in "+unit)*/ (
-            Apply(Select(New(TypeTree(sym.tpe)), nme.CONSTRUCTOR), List(constructorArg)))
+            Apply(Select(New(TypeTree(sym.tpe)), nme.CONSTRUCTOR), List(constructorArg))
           }
           sym resetFlag MUTABLE
           sym removeAnnotation VolatileAttr
-          converted += sym
+          converted += sym// dereference boxed variables
           treeCopy.ValDef(tree, mods &~ MUTABLE, name, tpt1, rhs1)
         case Ident(name) if freeMutableVars(sym) =>
           localTyper.typedPos(tree.pos) { 
-            /*util.errtrace("lifting ")*/(Select(tree setType sym.tpe, nme.elem))
+            Select(tree setType sym.tpe, nme.elem)
           }
         case _ =>
           super.transform(tree)
@@ -87,76 +90,266 @@ abstract class LiftCode extends Transform with TypingTransformers {
      *
      */
     class Reifier() {
+      
+      final val mirrorFullName = "scala.reflect.runtime.Mirror"
+      final val mirrorShortName = "$mr"
+      final val mirrorPrefix = mirrorShortName + "."
+      final val scalaPrefix = "scala."
+      final val localPrefix = "$local"
+      final val memoizerName = "$memo"
+        
+      private val reifiableSyms = mutable.ArrayBuffer[Symbol]() // the symbols that are reified with the tree
+      private val symIndex = mutable.HashMap[Symbol, Int]() // the index of a reifiable symbol in `reifiableSyms`
+      private var boundSyms = Set[Symbol]() // set of all symbols that are bound in tree to be reified
 
-      private val boundVars: mutable.Set[Symbol] = mutable.Set()
-
-      // todo: review & rework
-      // todo replace className by caseName in CaseClass once we have switched to nsc.
-      def className(value: AnyRef): String = value match {
-        case _ :: _ => "scala.$colon$colon"
-        case MethodType(_, _) => "scala.reflect.runtime.Mirror.MethodType"
-        case x: Product => "scala.reflect.runtime.Mirror." + x.productPrefix
-        case _ => ""
-      }
-
-      // todo: review & rework
-      def objectName(value: Any): String = value match {
-        case Nil => "scala.collection.immutable.Nil"
-        case EmptyTree => "scala.reflect.runtime.Mirror.EmptyTree"
-        case NoSymbol => "scala.reflect.runtime.Mirror.NoSymbol"
-        case definitions.RootClass => "scala.reflect.runtime.Mirror.definitions.RootClass"
-        case NoPrefix => "scala.reflect.runtime.Mirror.NoPrefix"
-        case NoType => "scala.reflect.runtime.Mirror.NoType"
-        case _ => ""
-      }
-
-      /** Reify a free reference. The result will be either a mirror reference
-       *  to a global value, or else a mirror Literal.
+      /** Generate tree of the form
+       * 
+       *    { val $mr = scala.reflect.runtime.Mirror
+       *      val $memo = new scala.reflext.runtime.Memoizer
+       *      $local1 = new TypeSymbol(owner1, NoPosition, name1)
+       *      ...
+       *      $localN = new TermSymbol(ownerN, NoPositiion, nameN)
+       *      $local1.setInfo(tpe1)
+       *      ...
+       *      $localN.setInfo(tpeN)
+       *      $localN.setAnnotations(annotsN)
+       *      rtree
+       *    }
+       *  
+       *  where 
+       *  
+       *   - `$localI` are free type symbols in the environment, as well as local symbols 
+       *      of refinement types.
+       *   - `tpeI` are the info's of `symI`
+       *   - `rtree` is code that generates `tree` at runtime, maintaining all attributes.
        */
-      def reifyFree(tree: Tree): Tree =
-        if (tree.symbol.hasFlag(MODULE) && tree.symbol.isStatic)
-          reifiedPath(tree.symbol.fullName)
-        else 
-          Apply(termPath("scala.reflect.runtime.Mirror.freeValue"), List(tree))
+      def reifyTopLevel(tree: Tree): Tree = {
+        val rtree = reify(tree)
+        Block(mirrorAlias :: reifySymbolTableSetup, rtree)
+      }
+            
+      private def isLocatable(sym: Symbol) = 
+        sym.isPackageClass || sym.owner.isClass || sym.isTypeParameter && sym.paramPos >= 0
+        
+      private def registerReifiableSymbol(sym: Symbol): Unit = {
+        sym.owner.ownersIterator.find(!isLocatable(_)) match {
+          case Some(outer) => registerReifiableSymbol(outer)
+          case None =>
+        }
+        symIndex(sym) = reifiableSyms.length
+        reifiableSyms += sym
+      }
+      
+      // helper methods
+      
+      private def localName(sym: Symbol) = localPrefix + symIndex(sym)
+      
+      private def call(fname: String, args: Tree*): Tree = 
+        Apply(termPath(fname), args.toList)
+        
+      private def mirrorSelect(name: String): Tree = 
+        termPath(mirrorPrefix + name)
 
-      /** Reify an arbitary value */
-      def reify(value: Any): Tree = {
-        //println("reifing "+value) //debug
-        /*util.trace("reified "+value+" --> ")*/ {
-          value match {
-            case tree: DefTree =>
-              boundVars += tree.symbol
-              reify1(tree)
-            case tree @ This(_) if !(boundVars contains tree.symbol) =>
-              reifyFree(tree)
-            case tree @ Ident(_) if !(boundVars contains tree.symbol) =>
-              reifyFree(tree)
-            case tree @ TypeTree() if tree.original != null =>
-              reify(tree.original)
-            // todo: should we also reify inferred types?
-            case _ =>
-              reify1(value)
-          }
+      private def mirrorCall(name: String, args: Tree*): Tree = 
+        call(mirrorPrefix + name, args: _*)
+        
+      private def mirrorFactoryCall(value: Product, args: Tree*): Tree =
+        mirrorCall(value.productPrefix, args: _*)
+        
+      private def scalaFactoryCall(name: String, args: Tree*): Tree = 
+        call(scalaPrefix + name + ".apply", args: _*)     
+
+      private def mkList(args: List[Tree]): Tree = 
+        scalaFactoryCall("collection.immutable.List", args: _*)
+
+      /** Reify a case object defined in Mirror
+       */
+      private def reifyCaseObject(value: Product) = mirrorSelect(value.productPrefix)
+
+      /** Reify an instance of a case class defined in Mirror  
+       */
+      private def reifyCaseClassInstance(value: Product) = 
+        mirrorFactoryCall(value, (value.productIterator map reify).toList: _*)
+        
+      private def reifyAggregate(name: String, args: Any*) = 
+        scalaFactoryCall(name, (args map reify).toList: _*)
+        
+      /** Reify a list
+       */
+      private def reifyList(xs: List[Any]): Tree = 
+        mkList(xs map reify)  
+        
+      /** Reify a name */
+      private def reifyName(name: Name) = 
+        mirrorCall(if (name.isTypeName) "newTypeName" else "newTermName", Literal(Constant(name.toString)))
+        
+      private def isFree(sym: Symbol) =
+        !(symIndex contains sym)
+        
+      /** Reify a reference to a symbol
+       */
+      private def reifySymRef(sym: Symbol): Tree = {
+        symIndex get sym match {
+          case Some(idx) => 
+            Ident(localName(sym))
+          case None =>
+            if (sym.isModuleClass) 
+              Select(reifySymRef(sym.sourceModule), "moduleClass")
+            else if (sym.isStatic && sym.isClass)
+              mirrorCall("staticClass", reify(sym.fullName))
+            else if (sym.isStatic && sym.isModule)
+              mirrorCall("staticModule", reify(sym.fullName))
+            else if (isLocatable(sym))
+              if (sym.isTypeParameter)
+                mirrorCall("selectParam", reify(sym.owner), reify(sym.paramPos))
+              else {
+                if (reifyDebug) println("locatable: "+sym+" "+sym.isPackageClass+" "+sym.owner+" "+sym.isTypeParameter)
+                val rowner = reify(sym.owner)
+                val rname = reify(sym.name.toString)
+                if (sym.isType) 
+                  mirrorCall("selectType", rowner, rname)
+                else if (sym.isMethod && sym.owner.isClass && sym.owner.info.decl(sym.name).isOverloaded) {
+                  val index = sym.owner.info.decl(sym.name).alternatives indexOf sym
+                  assert(index >= 0, sym)
+                  mirrorCall("selectOverloadedMethod", rowner, rname, reify(index))
+                } else 
+                  mirrorCall("selectTerm", rowner, rname)
+              } 
+            else {
+              if (sym.isTerm) {
+                if (reifyDebug) println("Free: "+sym)
+                mirrorCall("freeVar", reify(sym.name.toString), reify(sym.tpe), Ident(sym))
+              } else {
+                if (reifyDebug) println("Late local: "+sym)
+                registerReifiableSymbol(sym)
+                reifySymRef(sym)
+              }
+            }
         }
       }
       
-      /** Second part of reify */
-      def reify1(value: Any): Tree = {
-        def treatProduct(c: Product): Tree = {
-          val fullname = objectName(c)
-          if (fullname.length != 0)
-            termPath(fullname)
-          else {
-            val fullname = className(c)
-            if (fullname.length == 0) abort("don't know how to inject " + value + " of class " + value.getClass)
-            val injectedArgs = new ListBuffer[Tree]
-            for (i <- 0 until c.productArity)
-              injectedArgs += reify(c.productElement(i))
-            New(typePath(fullname), List(injectedArgs.toList))
-          }
+      /** reify the creation of a symbol 
+       */
+      private def reifySymbolDef(sym: Symbol): Tree = {
+        if (reifyDebug) println("reify sym def "+sym)
+        var rsym: Tree = New(
+            typePath(mirrorPrefix + (if (sym.isType) "TypeSymbol" else "TermSymbol")), 
+            List(List(reify(sym.owner), reify(sym.pos), reify(sym.name))))
+        if (sym.flags != 0L) 
+          rsym = Apply(Select(rsym, "setFlag"), List(Literal(Constant(sym.flags))))
+        ValDef(NoMods, localName(sym), TypeTree(), rsym)
+      }
+          
+      /** Generate code to add type and annotation info to a reified symbol 
+       */
+      private def fillInSymbol(sym: Symbol): Tree = {
+        val rset = Apply(Select(reifySymRef(sym), "setInfo"), List(reifyType(sym.info)))
+        if (sym.annotations.isEmpty) rset
+        else Apply(Select(rset, "setAnnotations"), List(reify(sym.annotations)))
+      }
+            
+      /** Reify a scope */ 
+      private def reifyScope(scope: Scope): Tree = {
+        scope foreach registerReifiableSymbol
+        mirrorCall("newScopeWith", scope.toList map reifySymRef: _*)
+      }
+      
+      /** Reify a list of symbols that need to be created */
+      private def reifySymbols(syms: List[Symbol]): Tree = {
+        syms foreach registerReifiableSymbol
+        mkList(syms map reifySymRef)
+      }
+      
+      /** Reify a type that defines some symbols */
+      private def reifyTypeBinder(value: Product, bound: List[Symbol], underlying: Type): Tree = 
+        mirrorFactoryCall(value, reifySymbols(bound), reify(underlying))
+          
+      /** Reify a type */
+      private def reifyType(tpe0: Type): Tree = {
+        val tpe = tpe0.normalize
+        val tsym = tpe.typeSymbol
+        if (tsym.isClass && tpe == tsym.typeConstructor && tsym.isStatic)
+          Select(reifySymRef(tpe.typeSymbol), "typeConstructor")
+        else tpe match {
+          case NoType | NoPrefix =>
+            reifyCaseObject(tpe.asInstanceOf[Product])
+          case tpe @ ThisType(clazz) =>
+            if (clazz.isModuleClass && clazz.isStatic) mirrorCall("thisModuleType", reify(clazz.fullName))
+            else reifyCaseClassInstance(tpe)
+          case SuperType(_, _) | SingleType(_, _) | ConstantType(_) |
+            TypeRef(_, _, _) | AnnotatedType(_, _, _) |
+            TypeBounds(_, _) | NullaryMethodType(_) | OverloadedType(_, _) =>
+            reifyCaseClassInstance(tpe.asInstanceOf[Product])
+          case t @ RefinedType(parents, decls) =>
+            registerReifiableSymbol(tpe.typeSymbol)
+            mirrorFactoryCall(t, reify(parents), reify(decls), reify(t.typeSymbol))
+          case t @ ExistentialType(tparams, underlying) =>
+            reifyTypeBinder(t, tparams, underlying)
+          case t @ PolyType(tparams, underlying) =>
+            reifyTypeBinder(t, tparams, underlying)
+          case t @ MethodType(params, restpe) =>
+            reifyTypeBinder(t, params, restpe)
+          case _ =>
+            abort("cannot reify type " + tpe + " of class " + tpe.getClass)
         }
+      }
+      
+      /** Reify a tree */
+      private def reifyTree(tree: Tree): Tree = tree match {
+        case EmptyTree =>
+          reifyCaseObject(tree)
+        case This(_) if !(boundSyms contains tree.symbol) =>
+          reifyFree(tree)
+        case Ident(_) if !(boundSyms contains tree.symbol) =>
+          reifyFree(tree)
+        case TypeTree() if (tree.tpe != null) =>
+          mirrorCall("TypeTree", reifyType(tree.tpe))
+        case _ =>   
+          if (tree.isDef) boundSyms += tree.symbol
+          reifyCaseClassInstance(tree.asInstanceOf[Product])
+/*
+          if (tree.isDef || tree.isInstanceOf[Function])
+            registerReifiableSymbol(tree.symbol)
+          if (tree.hasSymbol)
+            rtree = Apply(Select(rtree, "setSymbol"), List(reifySymRef(tree.symbol)))
+          Apply(Select(rtree, "setType"), List(reifyType(tree.tpe)))
+*/
+      }
+      
+      /** Reify a free reference. The result will be either a mirror reference
+       *  to a global value, or else a mirror Literal.
+       */
+      private def reifyFree(tree: Tree): Tree = 
+        if (tree.symbol.isStaticModule)
+          reify(termPath(tree.symbol.fullName))
+        else // make an Ident to a freeVar 
+          mirrorCall("Ident", reifySymRef(tree.symbol))
 
+      /** Reify an arbitary value */
+      private def reify(value: Any): Tree = {
         value match {
+          case tree: Tree =>
+            reifyTree(tree)
+          case sym: Symbol =>
+            reifySymRef(sym)
+          case tpe: Type =>
+            reifyType(tpe)
+          case xs: List[_] =>
+            scalaFactoryCall("collection.immutable.List", xs map reify: _*)
+          case xs: Array[_] =>
+            scalaFactoryCall("Array", xs map reify: _*)
+          case scope: Scope =>
+            reifyScope(scope)
+          case x: Name =>
+            reifyName(x)
+          case pos: Position => // todo: consider whether we should also reify positions
+            reifyCaseObject(NoPosition)
+          case Constant(_) | AnnotationInfo(_, _, _) | Modifiers(_, _, _) =>
+            reifyCaseClassInstance(value.asInstanceOf[Product])
+          case arg: ClassfileAnnotArg =>
+            reifyCaseClassInstance(arg.asInstanceOf[Product])
+          case x: Product if x.getClass.getName startsWith "scala.Tuple" =>
+            reifyCaseClassInstance(x)
           case () => Literal(Constant(()))
           case x: String => Literal(Constant(x))
           case x: Boolean => Literal(Constant(x))
@@ -167,39 +360,10 @@ abstract class LiftCode extends Transform with TypingTransformers {
           case x: Long => Literal(Constant(x))
           case x: Float => Literal(Constant(x))
           case x: Double => Literal(Constant(x))
-          case x: Name => reifiedName(x)
-          case c: Product => treatProduct(c)
-          case _ =>
-            abort("don't know how to inject " + value + " of class " + value.getClass)
+          case _ => cannotReify(value)
         }
-      }
-     
-     /** The reified version of given name */
-      def reifiedName(name: Name) = {
-        val fn = "scala.reflect.runtime.Mirror.new"+(if (name.isTypeName) "TypeName" else "TermName")
-        Apply(termPath(fn), List(Literal(Constant(name.toString))))
       }
       
-      /** A reified identifier with given name */
-      def reifiedIdent(name: Name) =
-        New(typePath("scala.reflect.runtime.Mirror.Ident"), List(List(reifiedName(name))))
-        
-      /** A reified selection over given qualifier and name */
-      def reifiedSelect(qual: Tree, name: Name) = 
-        New(typePath("scala.reflect.runtime.Mirror.Select"), List(List(qual, reifiedName(name))))
-
-      /** A reified path that selects definition with given fully qualified name */
-      def reifiedPath(fullname: String): Tree = {
-        val parts = fullname split "\\."
-        val prefixParts = parts.init
-        val lastName = parts.last
-        if (prefixParts.isEmpty) reifiedIdent(lastName)
-        else {
-          val prefixTree = ((reifiedIdent(prefixParts.head): Tree) /: prefixParts.tail)(reifiedSelect(_, _))
-          reifiedSelect(prefixTree, lastName)
-        }
-      }
-
       /** An (unreified) path that refers to definition with given fully qualified name 
        *  @param mkName   Creator for last portion of name (either TermName or TypeName)
        */
@@ -215,15 +379,38 @@ abstract class LiftCode extends Transform with TypingTransformers {
       }
 
       /** An (unreified) path that refers to term definition with given fully qualified name */
-      def termPath(fullname: String) = path(fullname, newTermName)
+      private def termPath(fullname: String): Tree = path(fullname, newTermName)
       
       /** An (unreified) path that refers to type definition with given fully qualified name */
-      def typePath(fullname: String) = path(fullname, newTypeName)
+      private def typePath(fullname: String): Tree = path(fullname, newTypeName)
+      
+      private def mirrorAlias = 
+        ValDef(NoMods, mirrorShortName, TypeTree(), termPath(mirrorFullName))
+
+      /** Generate code that generates a symbol table of all symbols registered in `reifiableSyms`
+       */
+      private def reifySymbolTableSetup: List[Tree] = {
+        val symDefs, fillIns = new mutable.ArrayBuffer[Tree]
+        var i = 0
+        while (i < reifiableSyms.length) {
+          // fillInSymbol might create new reifiableSyms, that's why this is done iteratively
+          symDefs += reifySymbolDef(reifiableSyms(i))
+          fillIns += fillInSymbol(reifiableSyms(i))
+          i += 1
+        }
+         
+        symDefs.toList ++ fillIns.toList
+      }
+      
+      private def cannotReify(value: Any): Nothing = 
+        abort("don't know how to reify " + value + " of class " + value.getClass)
+     
     }
 
-    def codify(tree: Tree): Tree = /*util.trace("codified " + tree + " -> ")*/ {
+    def codify(tree: Tree): Tree = debugTrace("codified " + tree + " -> ") {
       val targetType = definitions.CodeClass.primaryConstructor.info.paramTypes.head
-      val arg = gen.mkAsInstanceOf(new Reifier().reify(tree), targetType, wrapInApply = false)
+      val reifier = new Reifier()
+      val arg = gen.mkAsInstanceOf(reifier.reifyTopLevel(tree), targetType, wrapInApply = false)
       New(TypeTree(appliedType(definitions.CodeClass.typeConstructor, List(tree.tpe))),
         List(List(arg)))
     }
@@ -235,6 +422,9 @@ abstract class LiftCode extends Transform with TypingTransformers {
      *  would only emerge under more complicated conditions such as #3855.
      *  I'll try to figure it all out, but if someone who already knows the
      *  whole story wants to fill it in, that too would be great.
+     *
+     *  XXX I found this had been cut and pasted between LiftCode and UnCurry,
+     *  and seems to be running in both.
      */
     private val freeLocalsTraverser = new Traverser {
       var currentMethod: Symbol = NoSymbol
@@ -256,12 +446,13 @@ abstract class LiftCode extends Transform with TypingTransformers {
         /** A method call with a by-name parameter represents escape. */
         case Apply(fn, args) if fn.symbol.paramss.nonEmpty =>
           traverse(fn)
-          (fn.symbol.paramss.head, args).zipped foreach { (param, arg) =>
+          for ((param, arg) <- treeInfo.zipMethodParamsAndArgs(tree)) {
             if (param.tpe != null && isByNameParamType(param.tpe))
               withEscaping(traverse(arg))
             else
               traverse(arg)
           }
+          
         /** The rhs of a closure represents escape. */
         case Function(vparams, body) =>
           vparams foreach traverse
@@ -293,36 +484,3 @@ abstract class LiftCode extends Transform with TypingTransformers {
     }
   }
 }
-
-// case EmptyTree =>
-// case LiftPoint(tree) =>
-// case PackageDef(pid, stats) => 
-// case ClassDef(mods, name, tparams, impl) => 
-// case ValDef(mods, name, tpt, rhs) => 
-// case DefDef(mods, name, tparams, vparamss, tpt, rhs) =>
-// case TypeDef(mods, name, tparams, rhs) =>
-// case LabelDef(name, params, rhs) =>
-// case Template(parents, self, body) =>
-// case Block(stats, expr) =>
-// case ArrayValue(elemtpt, trees) =>
-// case Assign(lhs, rhs) =>
-// case If(cond, thenp, elsep) =>
-// case Match(selector, cases) => 
-// case Return(expr) =>          
-// case Try(block, catches, finalizer) =>
-// case Throw(expr) =>
-// case New(tpt) =>
-// case Typed(expr, tpt) =>
-// case TypeApply(fun, args) =>
-// case Apply(fun, args) =>
-// case Super(qual, mix) =>
-// case This(qual) =>
-// case Select(qualifier, selector) =>
-// case Ident(name) =>
-// case Literal(value) =>
-// case TypeTree() =>
-// /* Pattern matching */
-// case CaseDef(pat, guard, body) =>
-// case Alternative(trees) =>
-// case Star(elem) =>
-// case Bind(name, body) =>

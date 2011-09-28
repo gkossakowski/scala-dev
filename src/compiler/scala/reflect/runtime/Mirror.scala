@@ -6,11 +6,13 @@ import java.lang.reflect.Array
 
 /** The mirror for standard runtime reflection from Java.
  */
-class Mirror extends Universe with RuntimeTypes with api.Mirror {
+class Mirror extends Universe with RuntimeTypes with TreeBuildUtil with ToolBoxes with api.Mirror {
+  
+  definitions.init()
   
   import definitions._
     
-  def classWithName(name: String): Symbol = classToScala(java.lang.Class.forName(name))
+  def classWithName(name: String): Symbol = classToScala(javaClass(name))
   def getClass(obj: AnyRef): Symbol = classToScala(obj.getClass) 
   def getType(obj: AnyRef): Type = typeToScala(obj.getClass)
   // to do add getClass/getType for instances of primitive types, probably like this:
@@ -42,6 +44,7 @@ object Mirror extends Mirror
 
 /** test code; should go to tests once things settle down a bit
  *
+ 
 object Test extends Mirror with App {
   val sym = classToScala(classOf[scala.collection.Iterable[_]])
   println(sym)

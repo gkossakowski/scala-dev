@@ -342,7 +342,7 @@ abstract class ClassfileParser {
         val start = starts(index)
         value = (in.buf(start).toInt: @switch) match {
           case CONSTANT_STRING =>
-            Constant(getName(in.getChar(start + 1).toInt).toString())
+            Constant(getName(in.getChar(start + 1).toInt).toString)
           case CONSTANT_INTEGER =>
             Constant(in.getInt(start + 1))
           case CONSTANT_FLOAT =>
@@ -437,7 +437,7 @@ abstract class ClassfileParser {
     def loadClassSymbol(name: Name) = {
       val s = name.toString
       val file = global.classPath findSourceFile s getOrElse {
-        throw new MissingRequirementError("class " + s)
+        MissingRequirementError.notFound("class " + s)
       }
       val completer = new global.loaders.ClassfileLoader(file)
       var owner: Symbol = definitions.RootClass
@@ -673,27 +673,6 @@ abstract class ClassfileParser {
     }
   }
 
-  /** Convert array parameters denoting a repeated parameter of a Java method
-   *  to `JavaRepeatedParamClass` types.
-   */
-  private def arrayToRepeated(tp: Type): Type = tp match {
-    case MethodType(params, rtpe) =>
-      val formals = tp.paramTypes
-      assert(formals.last.typeSymbol == definitions.ArrayClass)
-      val method = params.last.owner
-      val elemtp = formals.last.typeArgs.head match {
-        case RefinedType(List(t1, t2), _) if (t1.typeSymbol.isAbstractType && t2.typeSymbol == definitions.ObjectClass) => 
-          t1 // drop intersection with Object for abstract types in varargs. UnCurry can handle them.
-        case t => 
-          t
-      }
-      val newParams = method.newSyntheticValueParams(
-        formals.init :+ appliedType(definitions.JavaRepeatedParamClass.typeConstructor, List(elemtp)))
-      MethodType(newParams, rtpe)
-    case PolyType(tparams, rtpe) =>
-      PolyType(tparams, arrayToRepeated(rtpe))
-  }
-
   private def sigToType(sym: Symbol, sig: Name): Type = {
     var index = 0
     val end = sig.length
@@ -903,13 +882,13 @@ abstract class ClassfileParser {
         case tpnme.ScalaSignatureATTR =>
           if (!isScalaAnnot) {
             debuglog("warning: symbol " + sym.fullName + " has pickled signature in attribute")
-            unpickler.unpickle(in.buf, in.bp, clazz, staticModule, in.file.toString())
+            unpickler.unpickle(in.buf, in.bp, clazz, staticModule, in.file.toString)
           }
           in.skip(attrLen)
         case tpnme.ScalaATTR =>
           isScalaRaw = true
         case tpnme.JacoMetaATTR =>
-          val meta = pool.getName(in.nextChar).toString().trim()
+          val meta = pool.getName(in.nextChar).toString.trim()
           metaParser.parse(meta, sym, symtype)
           this.hasMeta = true
          // Attribute on methods of java annotation classes when that method has a default
@@ -925,7 +904,7 @@ abstract class ClassfileParser {
                 case Some(san: AnnotationInfo) =>
                   val bytes =
                     san.assocs.find({ _._1 == nme.bytes }).get._2.asInstanceOf[ScalaSigBytes].bytes
-                  unpickler.unpickle(bytes, 0, clazz, staticModule, in.file.toString())
+                  unpickler.unpickle(bytes, 0, clazz, staticModule, in.file.toString)
                 case None =>
                   throw new RuntimeException("Scala class file does not contain Scala annotation")
               }
@@ -960,7 +939,7 @@ abstract class ClassfileParser {
       val index = in.nextChar
       tag match {
         case STRING_TAG =>
-          Some(LiteralAnnotArg(Constant(pool.getName(index).toString())))
+          Some(LiteralAnnotArg(Constant(pool.getName(index).toString)))
         case BOOL_TAG | BYTE_TAG | CHAR_TAG | SHORT_TAG | INT_TAG |
              LONG_TAG | FLOAT_TAG | DOUBLE_TAG =>
           Some(LiteralAnnotArg(pool.getConstant(index)))

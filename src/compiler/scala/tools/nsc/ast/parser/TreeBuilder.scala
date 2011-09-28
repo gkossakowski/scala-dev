@@ -266,7 +266,7 @@ abstract class TreeBuilder {
     case Select(qual, nme.EQ) => // reroute == to __equal
       // don't tuple exprs, as we can't (easily) undo it when it turns out 
       // there was a regular == method that takes this number of args (see t3736 in pos/ and neg/)
-      Apply(Ident(nme._equal), qual :: exprs)
+      Apply(Ident(nme._equal) setPos sel.pos, qual :: exprs)
     case _ =>
       Apply(sel, exprs)
   }
@@ -547,7 +547,7 @@ abstract class TreeBuilder {
     require(cases.nonEmpty)
 
     val selectorName = freshTermName()
-    val valdef = atPos(selector.pos)(ValDef(Modifiers(PRIVATE | LOCAL | SYNTHETIC), selectorName, TypeTree(), selector))
+    val valdef = atPos(selector.pos)(ValDef(Modifiers(PrivateLocal | SYNTHETIC), selectorName, TypeTree(), selector))
     val nselector = Ident(selectorName)
 
     def loop(cds: List[CaseDef]): Match = {
@@ -596,7 +596,7 @@ abstract class TreeBuilder {
           val tmp = freshTermName()
           val firstDef =
             atPos(matchExpr.pos) {
-              ValDef(Modifiers(PRIVATE | LOCAL | SYNTHETIC | (mods.flags & LAZY)),
+              ValDef(Modifiers(PrivateLocal | SYNTHETIC | (mods.flags & LAZY)),
                      tmp, TypeTree(), matchExpr)
             }
           var cnt = 0
@@ -613,22 +613,18 @@ abstract class TreeBuilder {
     AppliedTypeTree(rootScalaDot(newTypeName("Function" + argtpes.length)), argtpes ::: List(restpe))
 
   /** Append implicit parameter section if `contextBounds` nonempty */
-  def addEvidenceParams(owner: Name, vparamss: List[List[ValDef]], contextBounds: List[Tree]): List[List[ValDef]] =
+  def addEvidenceParams(owner: Name, vparamss: List[List[ValDef]], contextBounds: List[Tree]): List[List[ValDef]] = {
     if (contextBounds.isEmpty) vparamss
     else {
       val mods = Modifiers(if (owner.isTypeName) PARAMACCESSOR | LOCAL | PRIVATE else PARAM)
       def makeEvidenceParam(tpt: Tree) = ValDef(mods | IMPLICIT, freshTermName(nme.EVIDENCE_PARAM_PREFIX), tpt, EmptyTree)
       val evidenceParams = contextBounds map makeEvidenceParam
-      if (vparamss.isEmpty)
-        List(evidenceParams)
-      else {
-        val lastParams = vparamss(vparamss.size - 1)
-        if (!lastParams.isEmpty && (lastParams(0).mods hasFlag IMPLICIT))
-          // append lastParams to evidenceParams
-          (vparamss take (vparamss.size - 1)) ::: List(evidenceParams ::: lastParams)
-        else
-          vparamss ::: List(evidenceParams)
-      }
-  }
 
+      val vparamssLast = if(vparamss.nonEmpty) vparamss.last else Nil
+      if(vparamssLast.nonEmpty && vparamssLast.head.mods.hasFlag(IMPLICIT))
+        vparamss.init ::: List(evidenceParams ::: vparamssLast)
+      else
+        vparamss ::: List(evidenceParams)
+    }
+  }
 }

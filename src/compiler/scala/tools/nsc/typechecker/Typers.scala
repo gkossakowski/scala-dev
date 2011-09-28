@@ -3395,11 +3395,16 @@ trait Typers extends Modes with Adaptations {
 
         val args = stats map { case vd@ValDef(mods, name, tpt, rhs) =>
           val selfSym = origClass.owner.newValueParameter(rhs.pos, "self".toTermName) setInfo repStructTp
+          // can't reuse ResetAttrsTraverser as it would either blow away the this reference (when run before the subst), or the reference to selfSym
+          // also, reuse ResetAttrsTraverser does not drop TypeApply's, but we may want to re-infer types
+          // in any case, if we don't drop TypeApply's pos/virtnew_repinference.scala fails
           object substSelf extends Transformer {
             def apply(tree: Tree): Tree = transform(tree)
             override def transform(tree: Tree): Tree = tree match {
               case This(x) if tree.symbol == origClass =>
                 CODE.REF(selfSym) setType repStructTp
+              case TypeApply(fun, args) =>
+                transform(fun)
               case _ =>
                 tree.tpe = null // reset all other types -- need to re-typecheck (so implicits can be inserted where needed to stage)
                 if (tree.hasSymbol) tree.symbol = NoSymbol
@@ -3414,10 +3419,10 @@ trait Typers extends Modes with Adaptations {
           mkArg(name.toString, Function(List(ValDef(selfSym)), Typed(substSelf(rhs), TypeTree(rhsTpe))))
         }
 
-        // TODO what's j.l.Object doing in: java.lang.Object with Test.Row[Test.Rep]{val xxx: Int; val y: String}
-        // TODO: remove type param? it's useless anyway... def new[T](meh: ...): T cannot be implemented without casting/looping/throwing
-        // must supply type param explicitly as it can't be inferred from pt
-        typed1(Apply(TypeApply(Ident(nme._new) setPos tpt.pos, List(TypeTree(repStructTp), TypeTree(repTycon))) setPos tree.pos, args.toList) setPos tree.pos, mode, WildcardType)
+        typed1(Apply(TypeApply(Ident(nme._new) setPos tpt.pos,
+                               List(TypeTree(repStructTp), TypeTree(repTycon))) setPos tree.pos,
+                     args.toList) setPos tree.pos,
+               mode, WildcardType) setType repStructTp
       }
 
       def typedEta(expr1: Tree): Tree = expr1.tpe match {

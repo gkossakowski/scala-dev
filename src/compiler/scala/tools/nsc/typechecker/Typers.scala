@@ -3417,7 +3417,7 @@ trait Typers extends Modes with Adaptations {
         // TODO what's j.l.Object doing in: java.lang.Object with Test.Row[Test.Rep]{val xxx: Int; val y: String}
         // TODO: remove type param? it's useless anyway... def new[T](meh: ...): T cannot be implemented without casting/looping/throwing
         // must supply type param explicitly as it can't be inferred from pt
-        typed1(Apply(TypeApply(Ident(nme._new) setPos tpt.pos, List(TypeTree(repStructTp))) setPos tree.pos, args.toList) setPos tree.pos, mode, WildcardType)
+        typed1(Apply(TypeApply(Ident(nme._new) setPos tpt.pos, List(TypeTree(repStructTp), TypeTree(repTycon))) setPos tree.pos, args.toList) setPos tree.pos, mode, WildcardType)
       }
 
       def typedEta(expr1: Tree): Tree = expr1.tpe match {

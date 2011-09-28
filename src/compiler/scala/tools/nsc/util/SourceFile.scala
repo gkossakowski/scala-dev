@@ -12,7 +12,7 @@ import scala.collection.mutable.ArrayBuffer
 import annotation.tailrec
 import java.util.regex.Pattern
 import java.io.IOException
-import Chars._
+import scala.reflect.internal.Chars._
 
 /** abstract base class of a source file used in the compiler */
 abstract class SourceFile {
@@ -22,12 +22,14 @@ abstract class SourceFile {
   def isSelfContained: Boolean
   def length : Int
   def position(offset: Int) : Position = {
-    assert(offset < length)
+    assert(offset < length, file + ": " + offset + " >= " + length)
     new OffsetPosition(this, offset)
   }
   def position(line: Int, column: Int) : Position = new OffsetPosition(this, lineToOffset(line) + column)
+
   def offsetToLine(offset: Int): Int 
   def lineToOffset(index : Int): Int
+      
   /** Map a position to a position in the underlying source file.
    *  For regular source files, simply return the argument.
    */
@@ -47,6 +49,19 @@ abstract class SourceFile {
     if (content(offset).isWhitespace) skipWhitespace(offset + 1) else offset
   
   def identifier(pos: Position): Option[String] = None
+}
+
+/** An object representing a missing source file.
+ */
+object NoSourceFile extends SourceFile {
+  def content                   = Array()
+  def file                      = null    // TODO: push NPE-defense out another level or two
+  def isLineBreak(idx: Int)     = false
+  def isSelfContained           = true
+  def length                    = -1
+  def offsetToLine(offset: Int) = -1
+  def lineToOffset(index : Int) = -1
+  override def toString = "NoSourceFile"
 }
 
 object ScriptSourceFile {

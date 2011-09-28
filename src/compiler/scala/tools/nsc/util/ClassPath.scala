@@ -8,7 +8,7 @@ package scala.tools.nsc
 package util
 
 import java.net.URL
-import scala.collection.mutable
+import scala.collection.{ mutable, immutable }
 import io.{ File, Directory, Path, Jar, AbstractFile, ClassAndJarInfo }
 import scala.tools.util.StringOps.splitWhere
 import Jar.isJarOrZip
@@ -25,6 +25,8 @@ object ClassPath {
   def scalaLibrary  = locate[ScalaObject]
   def scalaCompiler = locate[Global]
   
+  def infoFor[T](value: T)        = info(value.getClass)
+  def info[T](clazz: Class[T])    = new ClassAndJarInfo()(ClassManifest fromClass clazz)
   def info[T: ClassManifest]      = new ClassAndJarInfo[T]
   def locate[T: ClassManifest]    = info[T] rootClasspath
   def locateJar[T: ClassManifest] = info[T].rootPossibles find (x => isJarOrZip(x)) map (x => File(x))
@@ -103,8 +105,10 @@ object ClassPath {
   
   /** Expand dir out to contents, a la extdir */
   def expandDir(extdir: String): List[String] = {
-    val dir = Option(AbstractFile getDirectory extdir) getOrElse (return Nil)
-    dir filter (_.isClassContainer) map (dir.sfile.get / _.name path) toList
+    AbstractFile getDirectory extdir match {
+      case null => Nil
+      case dir  => dir filter (_.isClassContainer) map (x => new java.io.File(dir.file, x.name) getPath) toList
+    }
   }
   
   /** A useful name filter. */
@@ -163,26 +167,28 @@ object ClassPath {
   class JavaContext extends ClassPathContext[AbstractFile] {
     def toBinaryName(rep: AbstractFile) = {
       val name = rep.name
-      assert(name.length > 6 && name.substring(name.length - 6) == ".class", name)
+      assert(endsClass(name), name)
       name.substring(0, name.length - 6)
     }
     def newClassPath(dir: AbstractFile) = new DirectoryClassPath(dir, this)
   }
   
   object DefaultJavaContext extends JavaContext {
-    override def isValidName(name: String) = !isTraitImplementation(name)
+    override def isValidName(name: String) = !isTraitImplementation(name) //TR: imho this doesn't really make sense but is unsafe to turn off (#4784)
   }
+  
+  @inline private def endsClass(s: String) = s.length > 6 && s.substring(s.length - 6) == ".class"
+  @inline private def endsScala(s: String) = s.length > 6 && s.substring(s.length - 6) == ".scala"
+  @inline private def endsJava(s: String)  = s.length > 5 && s.substring(s.length - 5) == ".java"
   
   /** From the source file to its identifier.
    */
   def toSourceName(f: AbstractFile): String = {
     val name = f.name
-    if (name.length > 6 && name.substring(name.length - 6) == ".scala")
-      name.substring(0, name.length - 6)
-    else if (name.length > 5 && name.substring(name.length - 5) == ".java")
-      name.substring(0, name.length - 5)
-    else
-      throw new FatalError("Unexpected source file ending: " + name)
+
+    if (endsScala(name)) name.substring(0, name.length - 6)
+    else if (endsJava(name)) name.substring(0, name.length - 5)
+    else throw new FatalError("Unexpected source file ending: " + name)
   }
 }
 import ClassPath._
@@ -257,10 +263,9 @@ abstract class ClassPath[T] {
   
   /** Filters for assessing validity of various entities.
    */
-  def validClassFile(name: String)  = (name endsWith ".class") && context.isValidName(name)
-  def validPackage(name: String)    = (name != "META-INF") && (name != "") && (name(0) != '.')
-  def validSourceFile(name: String) = validSourceExtensions exists (name endsWith _)
-  def validSourceExtensions         = List(".scala", ".java")
+  def validClassFile(name: String)  = endsClass(name) && context.isValidName(name)
+  def validPackage(name: String)    = (name != "META-INF") && (name != "") && (name.charAt(0) != '.')
+  def validSourceFile(name: String) = endsScala(name) || endsJava(name)
 
   /**
    * Find a ClassRep given a class name of the form "package.subpackage.ClassName".
@@ -284,12 +289,12 @@ abstract class ClassPath[T] {
       case _                                        => None
     }
 
-  def sortString = asURLs map (_.toString) sorted
+  def sortString = join(split(asClasspathString).sorted: _*)
   override def equals(that: Any) = that match {
     case x: ClassPath[_]  => this.sortString == x.sortString
     case _                => false
   }
-  override def hashCode = sortString.hashCode
+  override def hashCode = sortString.hashCode()
 }
 
 /**
@@ -298,20 +303,23 @@ abstract class ClassPath[T] {
 class SourcePath[T](dir: AbstractFile, val context: ClassPathContext[T]) extends ClassPath[T] {  
   def name = dir.name
   override def origin = dir.underlyingSource map (_.path)
-  def asURLs = dir.sfile.toList map (_.toURL)
+  def asURLs = if (dir.file == null) Nil else List(dir.toURL)
   def asClasspathString = dir.path
   val sourcepaths: IndexedSeq[AbstractFile] = IndexedSeq(dir)
-
-  lazy val classes: IndexedSeq[ClassRep] = dir flatMap { f =>
-    if (f.isDirectory || !validSourceFile(f.name)) Nil
-    else List(ClassRep(None, Some(f)))
-  } toIndexedSeq
   
-  lazy val packages: IndexedSeq[SourcePath[T]] = dir flatMap { f =>
-    if (f.isDirectory && validPackage(f.name)) List(new SourcePath[T](f, context))
-    else Nil
-  } toIndexedSeq
+  private def traverse() = {
+    val classBuf   = immutable.Vector.newBuilder[ClassRep]
+    val packageBuf = immutable.Vector.newBuilder[SourcePath[T]]
+    dir foreach { f =>
+      if (!f.isDirectory && validSourceFile(f.name))
+        classBuf += ClassRep(None, Some(f))
+      else if (f.isDirectory && validPackage(f.name))
+        packageBuf += new SourcePath[T](f, context)
+    }
+    (packageBuf.result, classBuf.result)
+  }
 
+  lazy val (packages, classes) = traverse()
   override def toString() = "sourcepath: "+ dir.toString()
 }
 
@@ -321,21 +329,25 @@ class SourcePath[T](dir: AbstractFile, val context: ClassPathContext[T]) extends
 class DirectoryClassPath(val dir: AbstractFile, val context: ClassPathContext[AbstractFile]) extends ClassPath[AbstractFile] {
   def name = dir.name
   override def origin = dir.underlyingSource map (_.path)
-  def asURLs = dir.sfile.toList map (_.toURL)
+  def asURLs = if (dir.file == null) Nil else List(dir.toURL)
   def asClasspathString = dir.path
   val sourcepaths: IndexedSeq[AbstractFile] = IndexedSeq()
   
-  lazy val classes: IndexedSeq[ClassRep] = dir flatMap { f =>
-    if (f.isDirectory || !validClassFile(f.name)) Nil
-    else List(ClassRep(Some(f), None))
-  } toIndexedSeq
+  // calculates (packages, classes) in one traversal.
+  private def traverse() = {
+    val classBuf   = immutable.Vector.newBuilder[ClassRep]
+    val packageBuf = immutable.Vector.newBuilder[DirectoryClassPath]
+    dir foreach { f =>
+      if (!f.isDirectory && validClassFile(f.name))
+        classBuf += ClassRep(Some(f), None)
+      else if (f.isDirectory && validPackage(f.name))
+        packageBuf += new DirectoryClassPath(f, context)
+    }
+    (packageBuf.result, classBuf.result)
+  }
   
-  lazy val packages: IndexedSeq[DirectoryClassPath] = dir flatMap { f =>
-    if (f.isDirectory && validPackage(f.name)) List(new DirectoryClassPath(f, context))
-    else Nil
-  } toIndexedSeq
-  
-  override def toString() = "directory classpath: "+ dir
+  lazy val (packages, classes) = traverse()
+  override def toString() = "directory classpath: "+ origin.getOrElse("?")
 }
 
 /**

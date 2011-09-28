@@ -773,13 +773,9 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
      *  be set if PRIVATE is currently set.
      */
     final def setNotFlag(flag: Int) = if (hasFlag(flag)) setFlag((flag: @annotation.switch) match {
-      case FINAL     => notFINAL
       case PRIVATE   => notPRIVATE
-      case DEFERRED  => notDEFERRED
       case PROTECTED => notPROTECTED
-      case ABSTRACT  => notABSTRACT
       case OVERRIDE  => notOVERRIDE
-      case METHOD    => notMETHOD
       case _         => abort("setNotFlag on invalid flag: " + flag)
     })
 
@@ -871,7 +867,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     }
     catch {
       case ex: CyclicReference =>
-        if (settings.debug.value) println("... trying to complete "+this)
+        debugwarn("... hit cycle trying to complete " + this.fullLocationString)
         throw ex
     }
 
@@ -1615,6 +1611,9 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       else owner.ancestors map overriddenSymbol filter (_ != NoSymbol)
       
     /** Equivalent to allOverriddenSymbols.nonEmpty, but more efficient. */
+    // !!! When if ever will this answer differ from .isOverride?
+    // How/where is the OVERRIDE flag managed, as compared to how checks
+    // based on type membership will evaluate?
     def isOverridingSymbol = owner.isClass && (
       owner.ancestors exists (cls => matchingSymbol(cls, owner.thisType) != NoSymbol)
     )
@@ -1795,6 +1794,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       else if (isTrait) "trait"
       else if (isClass) "class"
       else if (isType) "type"
+      else if (isInstanceOf[FreeVar]) "free variable"
       else if (isTerm && isLazy) "lazy value"
       else if (isVariable) "variable"
       else if (isClassConstructor) "constructor"
@@ -2134,7 +2134,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
      *
      * If typeParams is nonEmpty, calling tpe may hide errors or
      * introduce spurious ones. (For example, when deriving a type from
-     * the symbol of a type argument that must be higher-kinded.) As far
+     * the symbol of a type argument that may be higher-kinded.) As far
      * as I can tell, it only makes sense to call tpe in conjunction
      * with a substitution that replaces the generated dummy type
      * arguments by their actual types.
@@ -2349,6 +2349,17 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     override def sourceModule_=(module: Symbol) { this.module = module }
   }
 
+  class FreeVar(name: TermName, tpe: Type, val value: Any) extends TermSymbol(definitions.RootClass, NoPosition, name) {
+    setInfo(tpe)
+    
+    override def hashCode = value.hashCode
+    
+    override def equals(other: Any): Boolean = other match {
+      case that: FreeVar => this.value.asInstanceOf[AnyRef] eq that.value.asInstanceOf[AnyRef]
+      case _ => false
+    }
+  }
+  
   /** An object representing a missing symbol */
   object NoSymbol extends Symbol(null, NoPosition, nme.NO_NAME) {
     setInfo(NoType)

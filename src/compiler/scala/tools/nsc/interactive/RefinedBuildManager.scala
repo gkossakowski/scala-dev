@@ -113,8 +113,8 @@ class RefinedBuildManager(val settings: Settings) extends Changes with BuildMana
     // See if we really have corresponding symbols, not just those
     // which share the name
     def isCorrespondingSym(from: Symbol, to: Symbol): Boolean =
-      (from.hasTraitFlag == to.hasTraitFlag) &&
-      (from.hasModuleFlag == to.hasModuleFlag)
+      (from.hasFlag(Flags.TRAIT) == to.hasFlag(Flags.TRAIT)) && // has to run in 2.8, so no hasTraitFlag
+      (from.hasFlag(Flags.MODULE) == to.hasFlag(Flags.MODULE))
       
     // For testing purposes only, order irrelevant for compilation
     def toStringSet(set: Set[AbstractFile]): String =
@@ -330,7 +330,7 @@ class RefinedBuildManager(val settings: Settings) extends Changes with BuildMana
 
   /** Update the map of definitions per source file */
   private def updateDefinitions(files: Set[AbstractFile]) {
-    for (src <- files; val localDefs = compiler.dependencyAnalysis.definitions(src)) {
+    for (src <- files; localDefs = compiler.dependencyAnalysis.definitions(src)) {
       definitions(src) = (localDefs map (s => {
         this.classes += s.fullName -> src
         SymWithHistory(
@@ -352,7 +352,7 @@ class RefinedBuildManager(val settings: Settings) extends Changes with BuildMana
     success
   }
   
-  /** Save dependency information to `file'. */
+  /** Save dependency information to `file`. */
   def saveTo(file: AbstractFile, fromFile: AbstractFile => String) {
     compiler.dependencyAnalysis.dependenciesFile = file
     compiler.dependencyAnalysis.saveDependencies(fromFile)

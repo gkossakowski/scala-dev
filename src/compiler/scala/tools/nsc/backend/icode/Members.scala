@@ -10,7 +10,6 @@ package icode
 
 import java.io.PrintWriter
 import scala.collection.{ mutable, immutable }
-import mutable.{ HashMap, ListBuffer }
 import symtab.Flags.{ DEFERRED }
   
 trait ReferenceEquality {
@@ -29,7 +28,7 @@ trait Members { self: ICodes =>
     def this(method: IMethod) = this(method.symbol.simpleName.toString, method)
 
     /** The set of all blocks */
-    val blocks: ListBuffer[BasicBlock] = new ListBuffer
+    val blocks = mutable.ListBuffer[BasicBlock]()
 
     /** The start block of the method */
     var startBlock: BasicBlock = null
@@ -39,6 +38,9 @@ trait Members { self: ICodes =>
     
     private var currentLabel: Int = 0
     private var _touched = false
+    
+    def blockCount       = blocks.size
+    def instructionCount = blocks map (_.length) sum
 
     def touched = _touched
     def touched_=(b: Boolean): Unit = {
@@ -222,7 +224,7 @@ trait Members { self: ICodes =>
       val nextBlock: mutable.Map[BasicBlock, BasicBlock] = mutable.HashMap.empty
       for (b <- code.blocks.toList
         if b.successors.length == 1; 
-        val succ = b.successors.head; 
+        succ = b.successors.head; 
         if succ ne b;
         if succ.predecessors.length == 1;
         if succ.predecessors.head eq b;
@@ -252,10 +254,9 @@ trait Members { self: ICodes =>
     }
     
     def dump() {
-      val printer = new TextPrinter(new PrintWriter(Console.out, true),
-                                    new DumpLinearizer)
-      printer.printMethod(this)
-    }    
+      Console.println("dumping IMethod(" + symbol + ")")
+      newTextPrinter() printMethod this
+    }
   }
 
   /** Represent local variables and parameters */

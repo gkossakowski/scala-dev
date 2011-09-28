@@ -10,7 +10,7 @@ package classfile
 import java.lang.Float.floatToIntBits
 import java.lang.Double.doubleToLongBits
 import scala.io.Codec
-import reflect.generic.{ PickleBuffer, PickleFormat }
+import scala.reflect.internal.pickling.{ PickleBuffer, PickleFormat }
 import scala.collection.mutable.LinkedHashMap
 import PickleFormat._
 import Flags._
@@ -29,6 +29,8 @@ abstract class Pickler extends SubComponent {
   private final val showSig = false
 
   val phaseName = "pickler"
+    
+  currentRun
 
   def newPhase(prev: Phase): StdPhase = new PicklePhase(prev)
 
@@ -37,7 +39,7 @@ abstract class Pickler extends SubComponent {
       def pickle(tree: Tree) {
         def add(sym: Symbol, pickle: Pickle) = {
           if (currentRun.compiles(sym) && !currentRun.symData.contains(sym)) {
-            if (settings.debug.value) log("pickling " + sym)
+            debuglog("pickling " + sym)
             pickle putSymbol sym
             currentRun.symData(sym) = pickle
           }
@@ -420,7 +422,7 @@ abstract class Pickler extends SubComponent {
      *  argument of some Annotation */
     private def putMods(mods: Modifiers) = if (putEntry(mods)) {
       // annotations in Modifiers are removed by the typechecker
-      val Modifiers(flags, privateWithin, Nil, _) = mods
+      val Modifiers(flags, privateWithin, Nil) = mods
       putEntry(privateWithin)
     }
 
@@ -964,7 +966,7 @@ abstract class Pickler extends SubComponent {
           writeRefs(whereClauses)
           TREE
 
-        case Modifiers(flags, privateWithin, _, _) =>
+        case Modifiers(flags, privateWithin, _) =>
           val pflags = rawFlagsToPickled(flags)
           writeNat((pflags >> 32).toInt)
           writeNat((pflags & 0xFFFFFFFF).toInt)

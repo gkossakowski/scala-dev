@@ -42,11 +42,11 @@ trait Unapplies extends ast.TreeDSL
     tp.typeSymbol match {                             // unapplySeqResultToMethodSig
       case BooleanClass             => Nil
       case OptionClass | SomeClass  =>
-        val prod = tp.typeArgs.head
-        getProductArgs(prod) match {
-          case Some(xs) if xs.size > 1  => xs         // n > 1
-          case _                        => List(prod) // special n == 0 ||  n == 1
-        }
+        val prod  = tp.typeArgs.head
+        val targs = getProductArgs(prod)
+
+        if (targs.isEmpty || targs.tail.isEmpty) List(prod) // special n == 0 ||  n == 1
+        else targs  // n > 1
       case _                        =>
         throw new TypeError("result type "+tp+" of unapply not in {Boolean, Option[_], Some[_]}")
     }
@@ -192,7 +192,7 @@ trait Unapplies extends ast.TreeDSL
     val cparamss  = constrParamss(cdef)
     val flat      = cparamss flatten
     
-    if (flat.isEmpty || cdef.symbol.hasAbstractFlag || (flat exists isDisallowed)) None
+    if (cdef.symbol.hasAbstractFlag || (flat exists isDisallowed)) None
     else {
       val tparams = cdef.tparams map copyUntypedInvariant
       // the parameter types have to be exactly the same as the constructor's parameter types; so it's

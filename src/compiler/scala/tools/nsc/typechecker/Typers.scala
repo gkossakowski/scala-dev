@@ -3407,7 +3407,7 @@ trait Typers extends Modes with Adaptations {
             }
           }
           val rhsTpeMaybeRep = elimAnonymousClass(rhs.tpe.widen)
-          val rhsTpe =
+          val rhsTpe = // TODO does baseType work when repSym.isAbstractType?
             if(rhsTpeMaybeRep.baseType(repSym) == NoType) appliedType(repTycon, List(rhsTpeMaybeRep)) // nope: no Rep wrapper yet, so add it
             else rhsTpeMaybeRep // was already in a Rep
 
@@ -4874,6 +4874,8 @@ trait Typers extends Modes with Adaptations {
       // don't run after typers
       //  (see pos/t0586 for a scenario that makes us run during cleanup, where Row is no longer in EmbeddedControls)
       //  also, haven't figured out yet how to deal with varargs after erasure
+
+      !tp.typeSymbol.owner.isJavaDefined && // avoid illegal cyclic references during quick.lib (e.g., no need to reify new AnyRef etc)
       tp.baseType(EmbeddedControls_Row) != NoType
       //  && tp.typeSymbol.info.isInstanceOf[ClassInfoType] // TODO: ??
     }

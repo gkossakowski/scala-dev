@@ -3383,40 +3383,94 @@ trait Typers extends Modes with Adaptations {
 
         // make args -- have to locate the original classdef tree and its template for that, this is reallllly ugly....
         val classDefTree = context.outer.tree
-        val templ = classDefTree find { case x: Template => x.body.nonEmpty && (x.body.head.symbol ne NoSymbol) && x.body.head.symbol.owner == origClass case _ => false } getOrElse EmptyTree
+        val templ = (classDefTree find { case x: Template => x.body.nonEmpty && (x.body.head.symbol ne NoSymbol) && x.body.head.symbol.owner == origClass case _ => false }).get.asInstanceOf[Template]
 
+        // untyped, but expected type (tpt) has been determined already
         val statsUntyped = defSyms filter (!_.isConstructor) flatMap { sym =>
-          classDefTree.filter(_.symbol == sym) collect {
-            case vd@ValDef(mods, name, tpt, rhs) => vd
+          templ.filter(_.symbol == sym).collect[ValOrDefDef, List[ValOrDefDef]]{
+            case vd: ValDef => vd
+            case dd: DefDef if !dd.symbol.isGetter => dd
           }
         }
-        // type the stats so that selections on the self-variable can be rewritten next
-        val stats = newTyper(context.make(templ, origClass, new Scope)).typedStats(statsUntyped.toList, templ.symbol)
 
-        val args = stats map { case vd@ValDef(mods, name, tpt, rhs) =>
-          val selfSym = origClass.owner.newValueParameter(rhs.pos, "self".toTermName) setInfo repStructTp
-          // can't reuse ResetAttrsTraverser as it would either blow away the this reference (when run before the subst), or the reference to selfSym
-          // also, reuse ResetAttrsTraverser does not drop TypeApply's, but we may want to re-infer types
-          // in any case, if we don't drop TypeApply's pos/virtnew_repinference.scala fails
+        val symToRepSelfSelList = statsUntyped.map {d => 
+          val selfSym = origClass.owner.newValueParameter(d.pos, "self".toTermName) setInfo repStructTp
+          (d.symbol, (selfSym, Select(CODE.REF(selfSym) setType repStructTp, d.name)))
+        }
+        // val symToRepSelfSelSubst = {
+        //     val (from, to) = symToRepSelfSelList.unzip
+        //     println("from: "+ from)
+        //     new TreeSubstituter(from.toList, to.map(_._2).toList)
+        // }
+        val symToRepSelfSel = symToRepSelfSelList.toMap
+
+        println("origClass: " + origClass)
+        println("statsUntyped: "+ statsUntyped.map (d => d.symbol))
+
+        // type the stats so that selections on the self-variable can be rewritten next
+        val statTyper = newTyper(context.make(templ, origClass, new Scope)) //.typedStats(statsUntyped.toList, templ.symbol)
+        if (templ.symbol == NoSymbol) templ setSymbol origClass.newLocalDummy(templ.pos)
+        val self1 = templ.self match {
+          case vd @ ValDef(mods, name, tpt, EmptyTree) =>
+            val tpt1 = 
+              checkNoEscaping.privates(
+                origClass.thisSym, 
+                treeCopy.TypeTree(tpt).setOriginal(tpt) setType vd.symbol.tpe)
+            treeCopy.ValDef(vd, mods, name, tpt1, EmptyTree) setType NoType
+        }
+        if (self1.name != nme.WILDCARD) statTyper.context.scope enter self1.symbol
+        enterSyms(statTyper.context.outer.make(templ, origClass, origClass.info.decls), templ.body)
+
+        def toAccessed(sym: Symbol) = if(sym.isGetter) sym.accessed else sym
+
+        val args = statsUntyped map { origDef: ValOrDefDef =>
+          val selfSym = symToRepSelfSel(origDef.symbol)._1
+          // partially type origDef, only setting symbols 
+          origDef foreach { 
+            case tree@(This(_) | Ident(_) | Select(_, _)) =>
+              val typedTree = statTyper.typed(tree, EXPRmode | BYVALmode, WildcardType)
+              val sym = toAccessed(typedTree.symbol)
+              println("typed "+ (typedTree, sym))
+              if(typedTree.symbol == origClass || (symToRepSelfSel isDefinedAt sym)) {
+                tree setSymbol typedTree.symbol
+                println("setSym on "+ (tree, symToRepSelfSel.get(sym).map(_._2)))
+              }
+            case _ =>
+          }
+
+          // refer to selfSym.name instead of This(origClass).name
           object substSelf extends Transformer {
             def apply(tree: Tree): Tree = transform(tree)
             override def transform(tree: Tree): Tree = tree match {
-              case This(x) if tree.symbol == origClass =>
+              case This(_) if tree.symbol == origClass =>
                 CODE.REF(selfSym) setType repStructTp
-              case TypeApply(fun, args) =>
-                transform(fun)
+              case t@(Ident(_) | Select(_, _)) if symToRepSelfSel isDefinedAt toAccessed(tree.symbol) =>
+                symToRepSelfSel(toAccessed(tree.symbol))._2
               case _ =>
-                tree.tpe = null // reset all other types -- need to re-typecheck (so implicits can be inserted where needed to stage)
-                if (tree.hasSymbol) tree.symbol = NoSymbol
                 super.transform(tree)
             }
           }
-          val rhsTpeMaybeRep = elimAnonymousClass(rhs.tpe.widen)
-          val rhsTpe = // done: baseType works when repSym.isAbstractType
-            if(rhsTpeMaybeRep.baseType(repSym) == NoType) appliedType(repTycon, List(rhsTpeMaybeRep)) // nope: no Rep wrapper yet, so add it
-            else rhsTpeMaybeRep // was already in a Rep
+          val substedDefSelf = substSelf(origDef) //symToRepSelfSelSubst.transform(origDef)
+          
+          println("substedDefSelf "+ substedDefSelf)
+          // treeBrowser browse substedDefSelf
 
-          mkArg(name.toString, Function(List(ValDef(selfSym)), Typed(substSelf(rhs), TypeTree(rhsTpe))))
+          // splice in the Rep[_]'ed expected type
+          val tptTpeMaybeRep = elimAnonymousClass(origDef.tpt.tpe)
+          val tptTpe = // done: baseType works when repSym.isAbstractType
+            if(tptTpeMaybeRep.baseType(repSym) == NoType) appliedType(repTycon, List(tptTpeMaybeRep)) // nope: no Rep wrapper yet, so add it
+            else tptTpeMaybeRep // was already in a Rep
+
+          val substedDef = substedDefSelf match {
+            case ValDef(mods, name, tp, rhs) => 
+              treeCopy.ValDef(origDef, mods, name, TypeTree(tptTpe), rhs)
+            case DefDef(mods, name, tparams, vparamss, tpt, rhs) => 
+              treeCopy.DefDef(origDef, mods, name, tparams, vparamss, TypeTree(tptTpe), rhs)
+          }
+
+          val typedDef = statTyper.typed(substedDef, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef]
+
+          mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), typedDef.rhs))
         }
 
         typed1(Apply(TypeApply(Ident(nme._new) setPos tpt.pos,

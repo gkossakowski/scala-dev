@@ -3461,6 +3461,10 @@ trait Typers extends Modes with Adaptations {
           // treeBrowser browse substedDefSelf
 
           // splice in the Rep[_]'ed expected type
+
+          // if tpt was specified by the user, it needs to be typed (if it was inferred, the .tpe has been set already)
+          if(origDef.tpt.tpe == null) origDef.tpt setType statTyper.typedType(origDef.tpt).tpe
+
           val tptTpeMaybeRep = elimAnonymousClass(origDef.tpt.tpe)
           val tptTpe = // done: baseType works when repSym.isAbstractType
             if(tptTpeMaybeRep.baseType(repSym) == NoType) appliedType(repTycon, List(tptTpeMaybeRep)) // nope: no Rep wrapper yet, so add it

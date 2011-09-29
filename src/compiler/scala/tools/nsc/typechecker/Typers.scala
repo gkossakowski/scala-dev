@@ -3360,13 +3360,17 @@ trait Typers extends Modes with Adaptations {
 
         val ClassInfoType(parents, defSyms, origClass) = sym.info
         val structTp = {
-          val o = origClass.outerClass
-          val structTpSym = o.newAnonymousClass(tpt.pos)
-          structTpSym.setInfo(ClassInfoType(parents, new Scope, structTpSym))
-          o.info.decls.enter(structTpSym) 
+          def commonOwner(t: Type): Symbol = { // TODO: make public in Types?
+            commonOwnerMap.init
+            commonOwnerMap.apply(t)
+            commonOwnerMap.result
+          }
+          val cowner = commonOwner(tp)
+          val res = refinedType(parents, cowner, new Scope, cowner.pos)
+          val owner = res.typeSymbol
 
           def cloneAndUnRep(sym: Symbol) = {
-            val sym1 = sym.cloneSymbol
+            val sym1 = sym.cloneSymbol(owner)
             sym1.resetFlag(PRIVATE | PROTECTED)
             sym1.privateWithin = NoSymbol
             sym1.info = unrep(sym1.info)
@@ -3375,10 +3379,9 @@ trait Typers extends Modes with Adaptations {
           // TODO: subst old symbols to new
           // TODO: if we filter out the getters, and leave in the backing fields, member lookup breaks... (e.g. when doing a selectDynamic)
           //  --> rethink handling of getters and their backing fields -- maybe drop the fields and keep the getters, instead of the other way around (current approach)?
-          defSyms filter (x => !x.isConstructor) foreach (sym => structTpSym.info.decls.enter(cloneAndUnRep(sym)))
+          defSyms filter (x => !x.isConstructor) foreach (sym => res.decls.enter(cloneAndUnRep(sym)))
 
-          // refinedType(List(rowBaseTp), structTpSym, structTpSym.info.decls, tpt.pos) // TODO: more precise parent types
-          structTpSym.tpe
+          res
         }
 
         val repStructTp = appliedType(repTycon, List(elimAnonymousClass(structTp)))
@@ -3413,7 +3416,7 @@ trait Typers extends Modes with Adaptations {
             treeCopy.ValDef(vd, mods, name, tpt1, EmptyTree) setType NoType
         }
         if (self1.name != nme.WILDCARD) statTyper.context.scope enter self1.symbol
-        enterSyms(statTyper.context.outer.make(templ, origClass, origClass.info.decls), templ.body)
+        enterSyms(context.make(templ, origClass, origClass.info.decls), templ.body) // statTyper.context.outer eq context
 
         def toAccessed(sym: Symbol) = if(sym.isGetter) sym.accessed else sym
 

@@ -3359,7 +3359,7 @@ trait Typers extends Modes with Adaptations {
         }
 
         val ClassInfoType(parents, defSyms, origClass) = sym.info
-        val structTp = if(true) { // TODO: detect when we need to un-rep some of the member infos
+        val structTp = {
           val o = origClass.outerClass
           val structTpSym = o.newAnonymousClass(tpt.pos)
           structTpSym.setInfo(ClassInfoType(parents, new Scope, structTpSym))
@@ -3367,14 +3367,19 @@ trait Typers extends Modes with Adaptations {
 
           def cloneAndUnRep(sym: Symbol) = {
             val sym1 = sym.cloneSymbol
+            sym1.resetFlag(PRIVATE | PROTECTED)
+            sym1.privateWithin = NoSymbol
             sym1.info = unrep(sym1.info)
             sym1
           }
           // TODO: subst old symbols to new
-          defSyms foreach (sym => structTpSym.info.decls.enter(cloneAndUnRep(sym)))
+          // TODO: if we filter out the getters, and leave in the backing fields, member lookup breaks... (e.g. when doing a selectDynamic)
+          //  --> rethink handling of getters and their backing fields -- maybe drop the fields and keep the getters, instead of the other way around (current approach)?
+          defSyms filter (x => !x.isConstructor) foreach (sym => structTpSym.info.decls.enter(cloneAndUnRep(sym)))
 
+          // refinedType(List(rowBaseTp), structTpSym, structTpSym.info.decls, tpt.pos) // TODO: more precise parent types
           structTpSym.tpe
-        } else tp
+        }
 
         val repStructTp = appliedType(repTycon, List(elimAnonymousClass(structTp)))
 
@@ -4042,14 +4047,15 @@ trait Typers extends Modes with Adaptations {
           else if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))
             Some(invocation())
           else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
-            val myPrefix = ThisType(context.enclClass.owner)
-            val rowPrefix = if(myPrefix.baseClasses.contains(EmbeddedControlsClass)) myPrefix else PredefModule.tpe
+            //println("mkInvoke context "+ (context, context.owner, context.owner.ownerChain))
+            val rowPrefix = context.owner.ownerChain find (o => o.isClass && ThisType(o).baseClasses.contains(EmbeddedControlsClass)) map (ThisType(_)) getOrElse PredefModule.tpe
             val rowTp = rowPrefix.memberType(EmbeddedControls_Row)
 
             val rep = NoSymbol.newTypeParameter(NoPosition, "Rep".toTypeName)
             val repTpar = rep.newTypeParameter(NoPosition, "T".toTypeName).setFlag(COVARIANT).setInfo(TypeBounds.empty)
             rep.setInfo(polyType(List(repTpar), TypeBounds.empty))
             val repVar = TypeVar(rep)
+            //println("mkInvoke: "+ (qual, name, selectOnly, rowTp))
 
             for( 
               _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!? 

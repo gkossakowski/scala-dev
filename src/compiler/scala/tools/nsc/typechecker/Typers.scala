@@ -3394,10 +3394,11 @@ trait Typers extends Modes with Adaptations {
         val templ = (classDefTree find { case x: Template => x.body.nonEmpty && (x.body.head.symbol ne NoSymbol) && x.body.head.symbol.owner == origClass case _ => false }).get.asInstanceOf[Template]
 
         // untyped, but expected type (tpt) has been determined already
+        // for each symbol in the anonymous type's decls, find the corresponding definition in the template
+        // we're looking for the user-specified rhs, so can't disregard ValDef's and just look at DefDef's, as the rhs of the getter DefDef for a value x is just this.`x `
         val statsUntyped = defSyms filter (!_.isConstructor) flatMap { sym =>
-          templ.filter(_.symbol == sym).collect[ValOrDefDef, List[ValOrDefDef]]{
-            case vd: ValDef => vd
-            case dd: DefDef if !dd.symbol.isGetter => dd
+          templ filter(_.symbol == sym) collect {
+            case d: ValOrDefDef if !d.symbol.isGetter => d
           }
         }
 
@@ -3427,7 +3428,7 @@ trait Typers extends Modes with Adaptations {
           val selfSym = origClass.owner.newValueParameter(origDef.pos, selfName) setInfo repStructTp
           // println("selfSym "+ selfSym)
           val selfRef = Ident(selfName) setSymbol selfSym setType repStructTp
-          def selOnSelf(d: Symbol) = Select(selfRef, d.name)
+          def selOnSelf(d: Symbol) = Select(selfRef, nme.getterName(d.name))
 
           // partially type origDef, only setting symbols 
           origDef foreach { 

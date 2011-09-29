@@ -3398,19 +3398,8 @@ trait Typers extends Modes with Adaptations {
           }
         }
 
-        val symToRepSelfSelList = statsUntyped.map {d => 
-          val selfSym = origClass.owner.newValueParameter(d.pos, "self".toTermName) setInfo repStructTp
-          (d.symbol, (selfSym, Select(CODE.REF(selfSym) setType repStructTp, d.name)))
-        }
-        // val symToRepSelfSelSubst = {
-        //     val (from, to) = symToRepSelfSelList.unzip
-        //     println("from: "+ from)
-        //     new TreeSubstituter(from.toList, to.map(_._2).toList)
-        // }
-        val symToRepSelfSel = symToRepSelfSelList.toMap
-
-        println("origClass: " + origClass)
-        println("statsUntyped: "+ statsUntyped.map (d => d.symbol))
+        //println("origClass: " + origClass)
+        //println("statsUntyped: "+ statsUntyped.map (d => d.symbol))
 
         // type the stats so that selections on the self-variable can be rewritten next
         val statTyper = newTyper(context.make(templ, origClass, new Scope)) //.typedStats(statsUntyped.toList, templ.symbol)
@@ -3428,17 +3417,26 @@ trait Typers extends Modes with Adaptations {
 
         def toAccessed(sym: Symbol) = if(sym.isGetter) sym.accessed else sym
 
+        val statSyms = statsUntyped map (_.symbol) toSet
+        val selfName = "self".toTermName
+
         val args = statsUntyped map { origDef: ValOrDefDef =>
-          val selfSym = symToRepSelfSel(origDef.symbol)._1
+          val selfSym = origClass.owner.newValueParameter(origDef.pos, selfName) setInfo repStructTp
+          // println("selfSym "+ selfSym)
+          val selfRef = Ident(selfName) setSymbol selfSym setType repStructTp
+          def selOnSelf(d: Symbol) = Select(selfRef, d.name)
+
           // partially type origDef, only setting symbols 
           origDef foreach { 
             case tree@(This(_) | Ident(_) | Select(_, _)) =>
-              val typedTree = statTyper.typed(tree, EXPRmode | BYVALmode, WildcardType)
-              val sym = toAccessed(typedTree.symbol)
-              println("typed "+ (typedTree, sym))
-              if(typedTree.symbol == origClass || (symToRepSelfSel isDefinedAt sym)) {
-                tree setSymbol typedTree.symbol
-                println("setSym on "+ (tree, symToRepSelfSel.get(sym).map(_._2)))
+              statTyper.silent(_.typed(tree, EXPRmode | BYVALmode, WildcardType)) match {
+                case typedTree: Tree =>
+                  val sym = toAccessed(typedTree.symbol)
+                  //println("typed "+ (typedTree, sym))
+                  if(typedTree.symbol == origClass || statSyms(sym)) {
+                    tree setSymbol typedTree.symbol
+                  }
+                case _ =>
               }
             case _ =>
           }
@@ -3448,16 +3446,16 @@ trait Typers extends Modes with Adaptations {
             def apply(tree: Tree): Tree = transform(tree)
             override def transform(tree: Tree): Tree = tree match {
               case This(_) if tree.symbol == origClass =>
-                CODE.REF(selfSym) setType repStructTp
-              case t@(Ident(_) | Select(_, _)) if symToRepSelfSel isDefinedAt toAccessed(tree.symbol) =>
-                symToRepSelfSel(toAccessed(tree.symbol))._2
+                selfRef
+              case t@(Ident(_) | Select(_, _)) if statSyms(toAccessed(tree.symbol)) =>
+                selOnSelf(toAccessed(tree.symbol))
               case _ =>
                 super.transform(tree)
             }
           }
-          val substedDefSelf = substSelf(origDef) //symToRepSelfSelSubst.transform(origDef)
+          val substedDefSelf = substSelf(origDef)
           
-          println("substedDefSelf "+ substedDefSelf)
+          //println("substedDefSelf "+ substedDefSelf)
           // treeBrowser browse substedDefSelf
 
           // splice in the Rep[_]'ed expected type
@@ -3477,7 +3475,9 @@ trait Typers extends Modes with Adaptations {
               treeCopy.DefDef(origDef, mods, name, tparams, vparamss, TypeTree(tptTpe), rhs)
           }
 
+          // treeBrowser browse substedDef
           val typedDef = statTyper.typed(substedDef, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef]
+          // println("typedDef: "+ typedDef)
 
           mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), typedDef.rhs))
         }

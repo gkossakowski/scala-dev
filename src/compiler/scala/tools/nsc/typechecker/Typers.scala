@@ -3429,7 +3429,7 @@ trait Typers extends Modes with Adaptations {
           // partially type origDef, only setting symbols 
           origDef foreach { 
             case tree@(This(_) | Ident(_) | Select(_, _)) =>
-              statTyper.silent(_.typed(tree, EXPRmode | BYVALmode, WildcardType)) match {
+              statTyper.silent(_.typed(tree, EXPRmode | BYVALmode, WildcardType), false) match {
                 case typedTree: Tree =>
                   val sym = toAccessed(typedTree.symbol)
                   //println("typed "+ (typedTree, sym))

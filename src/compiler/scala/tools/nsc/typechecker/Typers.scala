@@ -1116,14 +1116,14 @@ trait Typers extends Modes with Adaptations {
       namer.enterValueParams(context.owner, vparamss)
       typed(cbody)
     }
-    
+
     private def validateNoCaseAncestor(clazz: Symbol) = {
       if (!phase.erasedTypes) {
         for (ancestor <- clazz.ancestors find (_.isCase)) {
           unit.error(clazz.pos, ( 
-            "case class `%s' has case ancestor `%s'. Case-to-case inheritance is prohibited."+
-            " To overcome this limitation use extractors to pattern match on non-leaf nodes."
-          ).format(clazz, ancestor))
+            "case %s has case ancestor %s, but case-to-case inheritance is prohibited."+
+            " To overcome this limitation, use extractors to pattern match on non-leaf nodes."
+          ).format(clazz, ancestor.fullName))
         }
       }
     }
@@ -3974,7 +3974,7 @@ trait Typers extends Modes with Adaptations {
           // unit is null here sometimes; how are we to know when unit might be null? (See bug #2467.)
           if (settings.warnSelectNullable.value && isPotentialNullDeference && unit != null)
             unit.warning(tree.pos, "potential null pointer dereference: "+tree)
-
+          
           val selection = result match {
             // could checkAccessible (called by makeAccessible) potentially have skipped checking a type application in qual?
             case SelectFromTypeTree(qual@TypeTree(), name) if qual.tpe.typeArgs nonEmpty => // TODO: somehow the new qual is not checked in refchecks

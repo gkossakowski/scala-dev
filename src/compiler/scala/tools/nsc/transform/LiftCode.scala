@@ -60,7 +60,7 @@ abstract class LiftCode extends Transform with TypingTransformers {
           try {
             printTypings = reifyDebug
             debugTrace("transformed = ") {
-              transform(localTyper.typedPos(tree.pos)(codify(tree)))
+              localTyper.typedPos(tree.pos)(codify(super.transform(tree)))
             }
           } finally printTypings = saved
         case ValDef(mods, name, tpt, rhs) if (freeMutableVars(sym)) => // box mutable variables that are accessed from a local closure
@@ -131,14 +131,15 @@ abstract class LiftCode extends Transform with TypingTransformers {
       private def isLocatable(sym: Symbol) = 
         sym.isPackageClass || sym.owner.isClass || sym.isTypeParameter && sym.paramPos >= 0
         
-      private def registerReifiableSymbol(sym: Symbol): Unit = {
-        sym.owner.ownersIterator.find(!isLocatable(_)) match {
-          case Some(outer) => registerReifiableSymbol(outer)
-          case None =>
+      private def registerReifiableSymbol(sym: Symbol): Unit = 
+        if (!(symIndex contains sym)) {
+          sym.owner.ownersIterator.find(!isLocatable(_)) match {
+            case Some(outer) => registerReifiableSymbol(outer)
+            case None =>
+          }
+          symIndex(sym) = reifiableSyms.length
+          reifiableSyms += sym
         }
-        symIndex(sym) = reifiableSyms.length
-        reifiableSyms += sym
-      }
       
       // helper methods
       
@@ -193,7 +194,9 @@ abstract class LiftCode extends Transform with TypingTransformers {
           case Some(idx) => 
             Ident(localName(sym))
           case None =>
-            if (sym.isModuleClass) 
+            if (sym == NoSymbol)
+              mirrorSelect("NoSymbol")
+            else  if (sym.isModuleClass) 
               Select(reifySymRef(sym.sourceModule), "moduleClass")
             else if (sym.isStatic && sym.isClass)
               mirrorCall("staticClass", reify(sym.fullName))
@@ -320,10 +323,7 @@ abstract class LiftCode extends Transform with TypingTransformers {
        *  to a global value, or else a mirror Literal.
        */
       private def reifyFree(tree: Tree): Tree = 
-        if (tree.symbol.isStaticModule)
-          reify(termPath(tree.symbol.fullName))
-        else // make an Ident to a freeVar 
-          mirrorCall("Ident", reifySymRef(tree.symbol))
+        mirrorCall("Ident", reifySymRef(tree.symbol))
 
       /** Reify an arbitary value */
       private def reify(value: Any): Tree = {

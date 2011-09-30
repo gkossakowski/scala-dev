@@ -31,7 +31,7 @@ trait Loaders { self: SymbolTable =>
 //    }
     
     override def complete(sym: Symbol) = {
-      info("completing "+sym+"/"+clazz.fullName)
+      debugInfo("completing "+sym+"/"+clazz.fullName)
       assert(sym == clazz || sym == module || sym == module.moduleClass)
 //      try {
       atPhaseNotLaterThan(picklerPhase) {
@@ -106,16 +106,14 @@ trait Loaders { self: SymbolTable =>
         val path = 
           if (pkgClass.isEmptyPackageClass) name.toString 
           else pkgClass.fullName + "." + name
-        try {
-          javaClass(path)
+        if (isJavaClass(path)) {
           val (clazz, module) = createClassModule(pkgClass, name.toTypeName, new TopClassCompleter(_, _))
-          info("created "+module+"/"+module.moduleClass+" in "+pkgClass)
+          debugInfo("created "+module+"/"+module.moduleClass+" in "+pkgClass)
           lookupEntry(name)
-        } catch {
-          case (_: ClassNotFoundException) | (_: NoClassDefFoundError) => 
-            info("*** not found : "+path)
-            negatives += name
-            null
+        } else {
+          debugInfo("*** not found : "+path)
+          negatives += name
+          null
         }
       }
     }

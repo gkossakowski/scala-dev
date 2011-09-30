@@ -310,6 +310,12 @@ trait Definitions extends reflect.api.StandardDefinitions {
     def isVarArgsList(params: List[Symbol])  = params.nonEmpty && isRepeatedParamType(params.last.tpe)
     def isVarArgTypes(formals: List[Type])   = formals.nonEmpty && isRepeatedParamType(formals.last)
 
+    def hasRepeatedParam(tp: Type): Boolean = tp match {
+      case MethodType(formals, restpe) => isScalaVarArgs(formals) || hasRepeatedParam(restpe)
+      case PolyType(_, restpe)         => hasRepeatedParam(restpe)
+      case _                           => false
+    }
+
     def isPrimitiveArray(tp: Type) = tp match {
       case TypeRef(_, ArrayClass, arg :: Nil) => isValueClass(arg.typeSymbol)
       case _                                  => false
@@ -683,7 +689,6 @@ trait Definitions extends reflect.api.StandardDefinitions {
       val point = path lastPos('.', len - 1)
       val owner = 
         if (point > 0) getModuleOrClass(path.toTermName, point) 
-        else if (path.isTypeName) EmptyPackageClass
         else RootClass
       val name = path subName (point + 1, len)
       val sym = owner.info member name

@@ -3380,9 +3380,13 @@ trait Typers extends Modes with Adaptations {
             sym1
           }
           // TODO: subst old symbols to new
-          // TODO: if we filter out the getters, and leave in the backing fields, member lookup breaks... (e.g. when doing a selectDynamic)
-          //  --> rethink handling of getters and their backing fields -- maybe drop the fields and keep the getters, instead of the other way around (current approach)?
-          defSyms filter (x => !x.isConstructor && !x.isGetter) foreach (sym => res.decls.enter(cloneAndUnRep(sym)))
+          // if we filter out the getters, and leave in the backing fields, member lookup breaks (e.g. when doing a selectDynamic)
+          // and we get strange type errors... 
+          // found   : java.lang.Object with Row[Test.Rep]{val x: Int; val y: java.lang.String}
+          // required: Row[Test.Rep]{val x: Int; val y: String}
+          // to avoid duplicates, only retain methods
+          // the fields will only be used indirectly, since the corresponding ValDef holds the RHS with the information we're after
+          defSyms filter (x => !x.isConstructor && x.isMethod) foreach (sym => res.decls.enter(cloneAndUnRep(sym)))
 
           res
         }

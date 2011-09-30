@@ -3402,8 +3402,8 @@ trait Typers extends Modes with Adaptations {
           }
         }
 
-        //println("origClass: " + origClass)
-        //println("statsUntyped: "+ statsUntyped.map (d => d.symbol))
+        debuglog("[TRN] origClass: " + (origClass.info.decls, origClass.ownerChain))
+        debuglog("[TRN] statsUntyped: "+ statsUntyped.map (d => d.symbol))
 
         // type the stats so that selections on the self-variable can be rewritten next
         val statTyper = newTyper(context.make(templ, origClass, new Scope)) //.typedStats(statsUntyped.toList, templ.symbol)
@@ -3436,7 +3436,7 @@ trait Typers extends Modes with Adaptations {
               statTyper.silent(_.typed(tree, EXPRmode | BYVALmode, WildcardType), false) match {
                 case typedTree: Tree =>
                   val sym = toAccessed(typedTree.symbol)
-                  //println("typed "+ (typedTree, sym))
+                  // debuglog("[TRN] typed "+ (typedTree, sym))
                   if(typedTree.symbol == origClass || statSyms(sym)) {
                     tree setSymbol typedTree.symbol
                   }
@@ -3459,7 +3459,7 @@ trait Typers extends Modes with Adaptations {
           }
           val substedDefSelf = substSelf(origDef)
           
-          //println("substedDefSelf "+ substedDefSelf)
+          // debuglog("[TRN] substedDefSelf "+ substedDefSelf)
           // treeBrowser browse substedDefSelf
 
           // splice in the Rep[_]'ed expected type
@@ -3481,11 +3481,12 @@ trait Typers extends Modes with Adaptations {
 
           // treeBrowser browse substedDef
           val typedDef = statTyper.typed(substedDef, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef]
-          // println("typedDef: "+ typedDef)
+          debuglog("[TRN] typedDef: "+ typedDef)
 
           mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), typedDef.rhs))
         }
 
+        debuglog("[TRN] (struct, rep, args)= "+ (structTp, repTycon, args mkString("(", ", ", ")")))
         typed1(Apply(TypeApply(Ident(nme._new) setPos tpt.pos,
                                List(TypeTree(structTp), TypeTree(repTycon))) setPos tree.pos,
                      args.toList) setPos tree.pos,
@@ -4055,15 +4056,15 @@ trait Typers extends Modes with Adaptations {
           else if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))
             Some(invocation())
           else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
-            //println("mkInvoke context "+ (context, context.owner, context.owner.ownerChain))
+            debuglog("[DNR] dynatype on row for "+ qual +" : "+ qual.tpe +" <DOT> "+ name)
             val rowPrefix = context.owner.ownerChain find (o => o.isClass && ThisType(o).baseClasses.contains(EmbeddedControlsClass)) map (ThisType(_)) getOrElse PredefModule.tpe
             val rowTp = rowPrefix.memberType(EmbeddedControls_Row)
+            debuglog("[DNR] context, row prefix, tp "+ (context.owner.ownerChain, rowPrefix, rowTp))
 
             val rep = NoSymbol.newTypeParameter(NoPosition, "Rep".toTypeName)
             val repTpar = rep.newTypeParameter(NoPosition, "T".toTypeName).setFlag(COVARIANT).setInfo(TypeBounds.empty)
             rep.setInfo(polyType(List(repTpar), TypeBounds.empty))
             val repVar = TypeVar(rep)
-            //println("mkInvoke: "+ (qual, name, selectOnly, rowTp))
 
             for( 
               _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!? 
@@ -4075,7 +4076,7 @@ trait Typers extends Modes with Adaptations {
               member <- symOpt(qualRowTp.member(name))
             ) yield {
               val memberTp = qualRowTp.memberType(member).resultType // this is `T` from the comment above
-              // println("mkInvoke memberTp="+ memberTp)
+              debuglog("[DNR] (repTp, qualRowTp, member, memberTp)= "+ (repTp, qualRowTp, member, memberTp))
               invocation(memberTp)
             }
           }

@@ -1343,14 +1343,17 @@ trait Typers extends Modes with Adaptations {
       reenterTypeParams(cdef.tparams)
       val tparams1 = cdef.tparams mapConserve (typedTypeDef)
 
-      val impl1 = 
-        newTyper(context.make(cdef.impl, clazz, new Scope)).silent(
-             _.typedTemplate(cdef.impl, parentTypes(cdef.impl))) match {
-          case t: Template   => t
-          case ex: TypeError =>
-              if (clazz.isAnonymousClass && shouldReifyNew(clazz.typeOfThis)) null // TODO: ensure clazz isn't used anywhere but in typedReifiedNew
-              else throw ex
-        }
+      val implTyper = newTyper(context.make(cdef.impl, clazz, new Scope))
+      val impl1 =
+        // could looking at clazz.typeOfThis before typing the template cause spurious illegal cycle errors? 
+        // OTOH, always typing silently and rethrowing if we're not going to reify causes other problems
+        if (clazz.isAnonymousClass && shouldReifyNew(clazz.typeOfThis))
+          implTyper.silent(_.typedTemplate(cdef.impl, parentTypes(cdef.impl)), false) match {
+            case t: Template   => t
+            case ex: TypeError => null // TODO: ensure clazz isn't used anywhere but in typedReifiedNew
+          }
+        else
+          implTyper.typedTemplate(cdef.impl, parentTypes(cdef.impl))
       if(impl1 == null) return EmptyTree
 
       val impl2 = typerAddSyntheticMethods(impl1, clazz, context)
@@ -3379,7 +3382,7 @@ trait Typers extends Modes with Adaptations {
           // TODO: subst old symbols to new
           // TODO: if we filter out the getters, and leave in the backing fields, member lookup breaks... (e.g. when doing a selectDynamic)
           //  --> rethink handling of getters and their backing fields -- maybe drop the fields and keep the getters, instead of the other way around (current approach)?
-          defSyms filter (x => !x.isConstructor) foreach (sym => res.decls.enter(cloneAndUnRep(sym)))
+          defSyms filter (x => !x.isConstructor && !x.isGetter) foreach (sym => res.decls.enter(cloneAndUnRep(sym)))
 
           res
         }

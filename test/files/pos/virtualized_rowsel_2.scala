@@ -2,7 +2,7 @@ object Test extends App {
   trait Rep[T]
   class MyRow extends Row[Rep] // Predef.Row
   class ApplyDynamicOps {
-    def applyDynamic[T](n: String)(as: AnyRef*): Rep[T] = error(n + as.mkString("(", ",", ")"))
+    def selectDynamic[T](n: String): Rep[T] = error(n)
   }
   implicit def applyDynamicOps[T <: MyRow](qual: Rep[T]): ApplyDynamicOps = new ApplyDynamicOps
   

@@ -59,7 +59,7 @@ trait EmbeddedControls {
     * T is the Rep of the structural type that consist of a def for each i:
     * def <l_i> : <T'_i>
     */
-  def __new[T, Rep[x]](args: (String, T => (Rep[t] forSome{type t}))*): T =
+  def __new[T, Rep[x]](args: (String, Rep[T] => (Rep[t] forSome {type t}))*): Rep[T] =
     throw new UnsupportedOperationException("__new")
 
 }

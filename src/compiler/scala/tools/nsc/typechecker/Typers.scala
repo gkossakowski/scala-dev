@@ -3384,7 +3384,7 @@ trait Typers extends Modes with Adaptations {
           res
         }
 
-        val repStructTp = appliedType(repTycon, List(elimAnonymousClass(structTp)))
+        val repStructTp = appliedType(repTycon, List(structTp))
 
         // make tree for `(label, rhs)`
         def mkArg(label: String, rhs: Tree) = gen.mkTuple(List(Literal(Constant(label)), rhs))
@@ -3487,7 +3487,7 @@ trait Typers extends Modes with Adaptations {
         }
 
         typed1(Apply(TypeApply(Ident(nme._new) setPos tpt.pos,
-                               List(TypeTree(repStructTp), TypeTree(repTycon))) setPos tree.pos,
+                               List(TypeTree(structTp), TypeTree(repTycon))) setPos tree.pos,
                      args.toList) setPos tree.pos,
                mode, WildcardType) setType repStructTp
       }

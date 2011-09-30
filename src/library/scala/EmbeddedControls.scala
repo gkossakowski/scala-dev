@@ -50,6 +50,18 @@ trait EmbeddedControls {
   def __equal(expr1: Any, expr2: Any): Boolean = 
     throw new UnsupportedOperationException("__equal")
 
+  trait Row[+Rep[x]]
+
+  /** 
+    * Rep is determined by looking at
+    * for args(i) = (l_i, v_i) : (String, T_i)
+    * type T'_i = T_i match { case Rep[T] => T case _ => T_i }
+    * T is the Rep of the structural type that consist of a def for each i:
+    * def <l_i> : <T'_i>
+    */
+  def __new[T, Rep[x]](args: (String, Rep[T] => (Rep[t] forSome {type t}))*): Rep[T] =
+    throw new UnsupportedOperationException("__new")
+
 }
 
 trait ProxyControlsBase extends EmbeddedControls {

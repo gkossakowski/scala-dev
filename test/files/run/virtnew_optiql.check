@@ -1,0 +1,2 @@
+Self() DOT l_shipdate = Const(yesterday)
+Self() DOT l_shipdate = Const(the other day)

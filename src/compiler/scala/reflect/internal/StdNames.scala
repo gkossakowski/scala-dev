@@ -145,6 +145,7 @@ trait StdNames extends /*reflect.generic.StdNames with*/ NameManglers { self: Sy
 
     // embedding information
     val TransparentProxy: NameType = "TransparentProxy"
+    val Row: NameType = "Row"
 
     // Annotation types
     final val AnnotationDefaultATTR: NameType      = "AnnotationDefault"
@@ -230,6 +231,7 @@ trait StdNames extends /*reflect.generic.StdNames with*/ NameManglers { self: Sy
     val identity: NameType         = "identity"
     val inlinedEquals: NameType    = "inlinedEquals"
     val applyDynamic: NameType     = "applyDynamic"
+    val selectDynamic: NameType    = "selectDynamic"
     val isArray: NameType          = "isArray"
     val isDefinedAt: NameType      = "isDefinedAt"
     val isEmpty: NameType          = "isEmpty"
@@ -281,6 +283,7 @@ trait StdNames extends /*reflect.generic.StdNames with*/ NameManglers { self: Sy
     val _doWhile = newTermName("__doWhile")
     val _equal = newTermName("__equal")
     val _ifThenElse = newTermName("__ifThenElse")
+    val _new = newTermName("__new")
     val _newVar = newTermName("__newVar")
     val _assign = newTermName("__assign")
     val _return = newTermName("__return")

@@ -3,4 +3,10 @@ virtnew_repping.scala:4: error: type mismatch;
  required: Test.Rep[Int]
     val a = 1 // a should be forced to have type Rep[Int]
             ^
-one error found
+virtnew_repping.scala:3: error: since java.lang.Object with Test.Row[Test.Rep]{val a: Int} <:< Test.Row[Test.Rep], reification was attempted,
+but the result, `__new(scala.this.Tuple2.apply("a", ((self: Test.Rep[java.lang.Object with Test.Row[Test.Rep]{val a: Int}]) => 1)))`, did not type check.
+Probable cause: there is no suitable `__new` method in scope.
+See the definition of `trait Row` in EmbeddedControls for details.
+  val foo = new Row[Rep] {
+            ^
+two errors found

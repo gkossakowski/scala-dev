@@ -1,2 +1,2 @@
-Self() DOT l_shipdate = Const(yesterday)
-Self() DOT l_shipdate = Const(the other day)
+Self() DOT customerName = Const(me)
+Self() DOT customerName = Const(that other guy)

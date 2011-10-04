@@ -1,44 +1,50 @@
+/** Test virtualization of `new Row[Rep] { val x_i = v_i }` and subsequent selects on new's result.
+ *
+ * The test case is a dummy implementation of an query language DSL.
+ * A full-blown implementation would make use of our LMS framework to reify the DSL program more precisely, 
+ * to analyse it and generate queries.
+ */
 object Test extends EmbeddedControls with App {
-  type Date = String
+  // staging: a Rep[T] is a representation of something that yields a T
+  // a typical example of such a representation is an expression tree that computes something of type T
   trait Rep[x] {
+    // defined as a member of Rep for convenience, can also be pimped on when Rep is an abstract type
     def selectDynamic[T](n: String): Rep[T] = error("")
   }
-  
-  case class Const[T](x: T) extends Rep[T]
-  implicit def liftConst[T](x: T) = Const(x)
 
-  implicit def dateOps(x: Rep[Date]) = new {
-    def <=(x: Rep[Date]): Rep[Boolean] = Const(false)
+  // representation of a statically-known constant
+  case class Const[T](x: T) extends Rep[T]
+
+  // automatically lift strings into their representations
+  implicit def liftString(x: String): Rep[String] = Const(x) 
+
+  implicit def strRepOps(x: Rep[String]) = new {
+    // the query below uses this operation
+    def <>(y: Rep[String]): Rep[Boolean] = Const(false)
   }
 
+  // to represent the self/this reference in a reified object creation
   case class Self[T] extends Rep[T]
-  case class Null[T] extends Rep[T]
 
-  class Obj[T](val self: Rep[T], val fields: Map[String, Rep[t] forSome {type t}]) extends Rep[T] {
+  // this method is called by the virtualizing compiler
+  def __new[T](args: (String, Rep[T] => Rep[_])*): Rep[T] = {
+    val me = new Self[T]
+    new Obj(me, args map {case (n, rhs) => (n, rhs(me))} toMap)
+  }
+
+  class Obj[T](self: Rep[T], fields: Map[String, Rep[_]]) extends Rep[T] {
     override def selectDynamic[T](n: String): Rep[T] = {
-      val res = fields.get(n) getOrElse Null[T]
+      val res = fields(n)
       println(self +" DOT "+ n + " = "+ res)
       res.asInstanceOf[Rep[T]]
     }
   }
 
   class Result extends Row[Rep]
-
-  class ApplyDynamicOps {
-    def applyDynamic[T](n: String)(as: AnyRef*): Rep[T] = error(n + as.mkString("(", ",", ")"))
-  }
-  implicit def applyDynamicOps[T <: Result](qual: Rep[T]): ApplyDynamicOps = new ApplyDynamicOps 
-
-  // we can't statically guarantee that R == Rep, since Rep is not globally defined (as is, e.g., Row)
-  // I'm trying to get a lifting of =:= to type constructors to work, so we could write R[x] : Eq[Rep], but I haven't gotten that to work yet
-  override def __new[T, R[x]](args: (String, R[T] => (R[t] forSome {type t}))*): R[T] = {
-    val me = new Self[T]
-    new Obj[T](me, args map {case (n, rhs) => (n, rhs(me.asInstanceOf[R[T]]).asInstanceOf[Rep[_]])} toMap).asInstanceOf[R[T]]
-  }
   
-  case class LineItem(l_shipdate: Date)
+  case class LineItem(customerName: String)
 
-  val lineItems = List(LineItem("yesterday"), LineItem("the other day"))
+  val lineItems = List(LineItem("me"), LineItem("that other guy"))
 
   trait FilterOps[T] {
     def Where(f: Rep[T] => Rep[Boolean]): List[Rep[T]]
@@ -47,5 +53,8 @@ object Test extends EmbeddedControls with App {
     def Where(f: Rep[T] => Rep[Boolean]): List[Rep[T]] = {x map f; x} // just run the function so we get some output
   }
   
-  lineItems map (e => new Result { val l_shipdate = e.l_shipdate }) Where (_.l_shipdate <= "today")
+  lineItems map (e => new Result { val customerName = e.customerName }) Where (_.customerName <> "me")
+/* this becomes:
+ filterOps(lineItems.map{(e: Test.LineItem) => __new[Result{val customerName: String}](("customerName", self => liftString(e.customerName)))}).Where{
+  ((x$1: Rep[Result{val customerName: String}]) => strRepOps(x$1.selectDynamic[String]("customerName")).<>(liftString("me")))} */
 }

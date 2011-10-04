@@ -1347,7 +1347,7 @@ trait Typers extends Modes with Adaptations {
       val impl1 =
         // could looking at clazz.typeOfThis before typing the template cause spurious illegal cycle errors? 
         // OTOH, always typing silently and rethrowing if we're not going to reify causes other problems
-        if (clazz.isAnonymousClass && shouldReifyNew(clazz.typeOfThis))
+        if (clazz.isAnonymousClass && willReifyNew(clazz.typeOfThis))
           implTyper.silent(_.typedTemplate(cdef.impl, parentTypes(cdef.impl)), false) match {
             case t: Template   => t
             case ex: TypeError => null // TODO: ensure clazz isn't used anywhere but in typedReifiedNew
@@ -3299,7 +3299,7 @@ trait Typers extends Modes with Adaptations {
       def typedNew(tpt: Tree): Tree = {
         val (allowAbstract, tpt1) = {
           val tpt0 = typedTypeConstructor(tpt)
-          if(shouldReifyNew(tpt0.tpe)) (true, tpt0)
+          if(willReifyNew(tpt0.tpe)) (true, tpt0)
           else (false, {
             checkClassType(tpt0, false, true)
             if (tpt0.hasSymbol && !tpt0.symbol.typeParams.isEmpty) {
@@ -3490,14 +3490,22 @@ trait Typers extends Modes with Adaptations {
           val typedDef = statTyper.typed(substedDef, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef]
           debuglog("[TRN] typedDef: "+ typedDef)
 
+          // TODO: eta-expand rhs of method definition
           mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), typedDef.rhs))
         }
 
         debuglog("[TRN] (struct, rep, args)= "+ (structTp, repTycon, args mkString("(", ", ", ")")))
-        typed1(Apply(TypeApply(Ident(nme._new) setPos tpt.pos,
-                               List(TypeTree(structTp), TypeTree(repTycon))) setPos tree.pos,
-                     args.toList) setPos tree.pos,
-               mode, WildcardType) setType repStructTp
+        val newCall = Apply(Ident(nme._new) setPos tpt.pos, args.toList) setPos tree.pos
+        silent(_.typed1(newCall, mode, repStructTp), false) match {
+          case res: Tree => res
+          case ex =>
+            debuglog("[TRN] typedReifiedNew failed: "+ ex)
+            errorTree(tpt,
+              """|since %s <:< %s, reification was attempted,
+                 |but the result, `%s`, did not type check.
+                 |Probable cause: there is no suitable `__new` method in scope.
+                 |See the definition of `trait Row` in EmbeddedControls for details.""".stripMargin.format(tpt.tpe, rowBaseTp, newCall))
+        }
       }
 
       def typedEta(expr1: Tree): Tree = expr1.tpe match {
@@ -4082,7 +4090,7 @@ trait Typers extends Modes with Adaptations {
               qualRowTp <- qual.tpe.baseType(repSym).typeArgs.headOption; // this specifies `decls`
               member <- symOpt(qualRowTp.member(name))
             ) yield {
-              val memberTp = qualRowTp.memberType(member).resultType // this is `T` from the comment above
+              val memberTp = qualRowTp.memberType(member).finalResultType // this is `T` from the comment above
               debuglog("[DNR] (repTp, qualRowTp, member, memberTp)= "+ (repTp, qualRowTp, member, memberTp))
               invocation(memberTp)
             }
@@ -4692,7 +4700,7 @@ trait Typers extends Modes with Adaptations {
                 new ApplyToImplicitArgs(Select(manif, if (level == 1) "newArray" else "newArray"+level), args)
               }
               typed(newArrayApp, mode, pt)
-            case tree1@Apply(Select(New(tpt), name), args) if tpt.tpe != null && shouldReifyNew(tpt.tpe) =>
+            case tree1@Apply(Select(New(tpt), _), Nil) if tpt.tpe != null && willReifyNew(tpt.tpe) =>
               // TODO: why is the refinement dropped from tpt.tpe when pt != WildcardType !??
               typedReifiedNew(tpt)
             case tree1 =>
@@ -4951,7 +4959,7 @@ trait Typers extends Modes with Adaptations {
              
     def typedHigherKindedType(tree: Tree): Tree = typedHigherKindedType(tree, NOmode)
 
-    private def shouldReifyNew(tp: Type): Boolean = (phase.id <= currentRun.typerPhase.id) && {
+    private def willReifyNew(tp: Type): Boolean = (phase.id <= currentRun.typerPhase.id) && {
       // don't run after typers
       //  (see pos/t0586 for a scenario that makes us run during cleanup, where Row is no longer in EmbeddedControls)
       //  also, haven't figured out yet how to deal with varargs after erasure
@@ -4965,7 +4973,7 @@ trait Typers extends Modes with Adaptations {
     def typedTypeConstructor(tree: Tree, mode: Int): Tree = {
       val result = typed(tree, forTypeMode(mode) | FUNmode, WildcardType)
 
-      if(shouldReifyNew(result.tpe)) return result
+      if(willReifyNew(result.tpe)) return result
 
       val restpe = result.tpe.normalize // normalize to get rid of type aliases for the following check (#1241)
       if (!phase.erasedTypes && restpe.isInstanceOf[TypeRef] && !restpe.prefix.isStable && !context.unit.isJava) {

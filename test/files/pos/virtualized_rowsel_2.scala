@@ -1,5 +1,7 @@
 object Test extends App {
   trait Rep[T]
+  def __new[T](args: (String, Rep[T] => Rep[_])*): Rep[T] = error("")
+
   class MyRow extends Row[Rep] // Predef.Row
   class ApplyDynamicOps {
     def selectDynamic[T](n: String): Rep[T] = error(n)

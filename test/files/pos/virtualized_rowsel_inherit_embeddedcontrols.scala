@@ -1,5 +1,7 @@
 object Test extends App with EmbeddedControls { // test whether it works when we inherit from EmbeddedControls -- the reference to Row changes
   trait Rep[T]
+  def __new[T](args: (String, Rep[T] => Rep[_])*): Rep[T] = error("")
+
   class MyRow extends Row[Rep]
   class ApplyDynamicOps {
     def selectDynamic[T](n: String): Rep[T] = error(n)

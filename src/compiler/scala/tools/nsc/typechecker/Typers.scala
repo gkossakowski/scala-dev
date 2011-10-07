@@ -3469,8 +3469,9 @@ trait Typers extends Modes with Adaptations {
 
           // splice in the Rep[_]'ed expected type
 
-          // if tpt was specified by the user, it needs to be typed (if it was inferred, the .tpe has been set already)
-          if(origDef.tpt.tpe == null) origDef.tpt setType statTyper.typedType(origDef.tpt).tpe
+          // does tpt need to be typed? (if it was inferred, the .tpe has been set already, but if it was specified by the user, it may not have been typed yet)
+          if(origDef.tpt.tpe == null) // origDef.tpt setType statTyper.typedType(origDef.tpt).tpe
+            origDef.tpt setType statTyper.typed(origDef.duplicate, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef].tpt.tpe
 
           val tptTpeMaybeRep = elimAnonymousClass(origDef.tpt.tpe)
           val tptTpe = // done: baseType works when repSym.isAbstractType

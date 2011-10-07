@@ -3432,7 +3432,8 @@ trait Typers extends Modes with Adaptations {
         val selfName = "self".toTermName
 
         val args = statsUntyped map { origDef: ValOrDefDef =>
-          val selfSym = origClass.owner.newValueParameter(origDef.pos, selfName) setInfo repStructTp
+          val funSym = origClass.owner.newValue(tree.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
+          val selfSym = funSym.newValueParameter(origDef.pos, selfName) setInfo repStructTp
           // println("selfSym "+ selfSym)
           val selfRef = Ident(selfName) setSymbol selfSym setType repStructTp
           def selOnSelf(d: Symbol) = Select(selfRef, nme.getterName(d.name))
@@ -3490,8 +3491,10 @@ trait Typers extends Modes with Adaptations {
           val typedDef = statTyper.typed(substedDef, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef]
           debuglog("[TRN] typedDef: "+ typedDef)
 
+          new ChangeOwnerTraverser(typedDef.symbol, funSym).traverse(typedDef.rhs)
+
           // TODO: eta-expand rhs of method definition
-          mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), typedDef.rhs))
+          mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), typedDef.rhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
         }
 
         debuglog("[TRN] (struct, rep, args)= "+ (structTp, repTycon, args mkString("(", ", ", ")")))

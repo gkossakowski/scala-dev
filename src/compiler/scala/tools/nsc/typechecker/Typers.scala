@@ -3486,12 +3486,38 @@ trait Typers extends Modes with Adaptations {
 
           // treeBrowser browse substedDef
           val typedDef = statTyper.typed(substedDef, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef]
-          debuglog("[TRN] typedDef: "+ typedDef)
+          val dupedRhs = typedDef.rhs.duplicate // DUPLICATE -- don't update old RHS
+          debuglog("[TRN] dupedRhs: "+ dupedRhs)
 
-          new ChangeOwnerTraverser(typedDef.symbol, funSym).traverse(typedDef.rhs)
+          // the RHS is now owned by the symbol of the function we're wrapping around it in the arg
+          // update the owners of nested symbols
+          // if you mess up the owner structure, explicitouter blows up
+          new ChangeOwnerTraverser(typedDef.symbol, funSym).traverse(dupedRhs)
+
+          // create new symbols for the duplicated tree, tree.duplicate does not do this
+          // (without new symbols, you get weird errors in lambdaLift, because markFree unwittingly updates all trees that share a symbol)
+          // TODO: generalize to all DefTrees that introduce new symbols (nested objects will still not work in a Row...)
+          object newSyms extends Transformer {
+            override def transform(t: Tree): Tree = {
+              t match {
+                case f@Function(args, body) =>
+                  val newFunSym = t.symbol.cloneSymbol
+                  val argSyms = args map (_.symbol)
+                  val newArgSyms = args map {a => a.symbol = a.symbol.cloneSymbol(newFunSym); a.symbol}
+                  treeCopy.Function(f, args, (new TreeSymSubstituter(argSyms, newArgSyms))(body)) setSymbol newFunSym
+                case _ =>
+                  super.transform(t)
+              }
+            }
+          }
+          // println("before newSyms:")
+          // currentRun.trackerFactory.snapshot()
+          val rerootedRhs = newSyms.transform(dupedRhs)
+          // println("after newSyms:")
+          // currentRun.trackerFactory.snapshot()
 
           // TODO: eta-expand rhs of method definition
-          mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), typedDef.rhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
+          mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), rerootedRhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
         }
 
         debuglog("[TRN] (struct, rep, args)= "+ (structTp, repTycon, args mkString("(", ", ", ")")))

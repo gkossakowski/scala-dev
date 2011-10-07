@@ -3341,7 +3341,6 @@ trait Typers extends Modes with Adaptations {
 
       def typedReifiedNew(tpt: Tree): Tree = {
         val tp = tpt.tpe
-        val sym = tp.typeSymbol
         val rowBaseTp = tp.baseType(EmbeddedControls_Row)
         val repTycon = if(phase.erasedTypes) AnyClass.tpe else rowBaseTp.typeArgs(0) // TODO
         val repSym = repTycon.typeSymbolDirect
@@ -3361,34 +3360,32 @@ trait Typers extends Modes with Adaptations {
           }
         }
 
+        val sym = tp.typeSymbol
         val ClassInfoType(parents, defSyms, origClass) = sym.info
+
+        // if we filter out the getters, and leave in the backing fields, member lookup breaks (e.g. when doing a selectDynamic)
+        // and we get strange type errors... 
+        // found   : java.lang.Object with Row[Test.Rep]{val x: Int; val y: java.lang.String}
+        // required: Row[Test.Rep]{val x: Int; val y: String}
+        // to avoid duplicates, only retain methods
+        // the fields will only be used indirectly, since the corresponding ValDef holds the RHS with the information we're after
         val structTp = {
-          def commonOwner(t: Type): Symbol = { // TODO: make public in Types?
-            commonOwnerMap.init
-            commonOwnerMap.apply(t)
-            commonOwnerMap.result
+          val tp = refinedType(parents, origClass.owner)
+          val thistp = tp.typeSymbol.thisType
+          val oldsymbuf = new ListBuffer[Symbol]
+          val newsymbuf = new ListBuffer[Symbol]
+          for (sym <- defSyms) {
+            if (sym.isPublic && !sym.isConstructor) {
+              oldsymbuf += sym
+              newsymbuf += sym.cloneSymbol(tp.typeSymbol)
+            }
           }
-          val cowner = commonOwner(tp)
-          val res = refinedType(parents, cowner, new Scope, cowner.pos)
-          val owner = res.typeSymbol
-
-          def cloneAndUnRep(sym: Symbol) = {
-            val sym1 = sym.cloneSymbol(owner)
-            sym1.resetFlag(PRIVATE | PROTECTED)
-            sym1.privateWithin = NoSymbol
-            sym1.info = unrep(sym1.info)
-            sym1
+          val oldsyms = oldsymbuf.toList
+          val newsyms = newsymbuf.toList
+          for (sym <- newsyms) {
+            addMember(thistp, tp, sym.setInfo(unrep(sym.info.substThis(origClass, thistp).substSym(oldsyms, newsyms))))
           }
-          // TODO: subst old symbols to new
-          // if we filter out the getters, and leave in the backing fields, member lookup breaks (e.g. when doing a selectDynamic)
-          // and we get strange type errors... 
-          // found   : java.lang.Object with Row[Test.Rep]{val x: Int; val y: java.lang.String}
-          // required: Row[Test.Rep]{val x: Int; val y: String}
-          // to avoid duplicates, only retain methods
-          // the fields will only be used indirectly, since the corresponding ValDef holds the RHS with the information we're after
-          defSyms filter (x => !x.isConstructor && x.isMethod) foreach (sym => res.decls.enter(cloneAndUnRep(sym)))
-
-          res
+          tp
         }
 
         val repStructTp = appliedType(repTycon, List(structTp))

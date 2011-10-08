@@ -6,13 +6,14 @@
 **                          |/                                          **
 \*                                                                      */
 
-package scala.reflect
 
-import annotation.target._
+package scala.beans
 
-/** This annotation has the same functionality as
- *  `scala.reflect.BeanProperty`, but the generated Bean getter will be
- *  named `isFieldName` instead of `getFieldName`.
+/** Provides a short description that will be included when generating
+ *  bean information. This annotation can be attached to the bean itself,
+ *  or to any member. 
+ *
+ *  @author Ross Judson (rjudson@managedobjects.com)
  */
-@field
-class BooleanBeanProperty extends annotation.StaticAnnotation
+class BeanDescription(val description: String) extends annotation.Annotation
+

@@ -5,9 +5,14 @@
 ** /____/\___/_/ |_/____/_/ | |                                         **
 **                          |/                                          **
 \*                                                                      */
-package scala.annotation.target
 
-/**
- * Consult the documentation in package [[scala.annotation.target]].
+
+package scala.beans
+
+/** Provides a display name when generating bean information. This
+ *  annotation can be attached to the bean itself, or to any member.  
+ *
+ *  @author Ross Judson (rjudson@managedobjects.com)
  */
-final class field extends annotation.StaticAnnotation
+class BeanDisplayName(val name: String) extends annotation.Annotation
+

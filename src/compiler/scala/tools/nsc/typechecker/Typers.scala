@@ -3375,7 +3375,7 @@ trait Typers extends Modes with Adaptations {
           val oldsymbuf = new ListBuffer[Symbol]
           val newsymbuf = new ListBuffer[Symbol]
           for (sym <- defSyms) {
-            if (sym.isPublic && !sym.isConstructor) {
+            if (sym.isMethod && !sym.isConstructor) {
               oldsymbuf += sym
               newsymbuf += sym.cloneSymbol(tp.typeSymbol)
             }

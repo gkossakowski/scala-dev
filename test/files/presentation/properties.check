@@ -61,8 +61,13 @@ retrieved 49 members
 `method ->[B](y: B)(properties.Property[String], B)`
 `method ==(x$1: Any)Boolean`
 `method ==(x$1: AnyRef)Boolean`
+<<<<<<< HEAD
+`method _1=> java.lang.String`
+`method apply()java.lang.String`
+=======
 `method _1=> String`
 `method apply()String`
+>>>>>>> fe3aa3b666d41b19cb2801e67c61308f7793c8d7
 `method asInstanceOf[T0]=> T0`
 `method canEqual(that: Any)Boolean`
 `method clone()Object`
@@ -152,3 +157,5 @@ def get(newGetter: T => T): properties.Property[T] = {
   this
 }
 ================================================================================
+[properties.scala]: exception during background compile: scala.tools.nsc.interactive.ShutdownReq$
+[properties.scala] marking unit as crashed (crashedFiles: Set(/Users/adriaan/git/scala-dev/test/files/presentation/properties/src/properties.scala))

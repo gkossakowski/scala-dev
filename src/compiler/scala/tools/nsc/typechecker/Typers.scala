@@ -3862,10 +3862,7 @@ trait Typers extends Modes with Adaptations {
                 case _ => false
               }
               def removeFunUndets() =
-                context.undetparams = context.undetparams filter { 
-                  case tv: TypeVar => tv.origin.typeSymbol.owner != fun1.symbol
-                  case _ => false
-                }
+                context.undetparams = context.undetparams filterNot (_.owner eq fun1.symbol)
               // if we resolve to the methods in EmbeddedControls, undo rewrite
               val res = 
                 if (fun1.symbol == EmbeddedControls_ifThenElse) {

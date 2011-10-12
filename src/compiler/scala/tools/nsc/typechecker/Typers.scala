@@ -3239,6 +3239,10 @@ trait Typers extends Modes with Adaptations {
           val rhs1 = typed(rhs, EXPRmode | BYVALmode, lhs1.tpe)
           treeCopy.Assign(tree, lhs1, checkDead(rhs1)) setType UnitClass.tpe
         }
+        else if(dyna.isApplyDynamic(lhs1)) {
+          val rhs1 = typed(rhs, EXPRmode | BYVALmode, WildcardType)
+          typed1(Apply(Select(lhs1, nme.update), List(rhs1)), mode, pt)
+        }
         else fail
       }
 
@@ -4072,16 +4076,41 @@ trait Typers extends Modes with Adaptations {
         @inline private def listOpt[T](xs: List[T]) = xs match { case x :: Nil => Some(x) case _ => None }
         @inline private def symOpt[T](sym: Symbol) = if(sym == NoSymbol) None else Some(sym) // TODO: handle overloading?
 
-        def mkInvoke(qual: Tree, name: Name, selectOnly: Boolean): Option[Tree] = {
+        def acceptsApplyDynamic(tp: Type) = settings.Xexperimental.value && (tp.typeSymbol isNonBottomSubClass DynamicClass)
+        def isApplyDynamic(tree: Tree) = treeInfo.methPart(tree) match {
+          case Select(qual, nme.applyDynamic) if acceptsApplyDynamic(qual.tpe.widen) => true
+          case _ => false
+        }
+
+        /** Translate selection that does not typecheck according to the normal rules into a selectDynamic/applyDynamic.
+         *
+         * foo.field           ~~> foo.selectDynamic("field")                  -- BYVALmode
+         * foo.method("blah")  ~~> foo.applyDynamic("method")("blah")          -- FUNmode
+         * foo.varia = 10      ~~> foo.applyDynamic("varia").update(10)        -- LHSmode
+         * foo.arr(10) = 13    ~~> foo.applyDynamic("method").update(10, 13)   -- QUALmode
+         *
+         * what if we want foo.field == foo.selectDynamic("field") == 1, but `foo.field = 10` == `foo.selectDynamic("field").update(10)` == ()
+         * what would the signature for selectDynamic be? (hint: it needs to depend on whether an update call is coming or not)
+         *
+         * need to distinguish selectDynamic and applyDynamic somehow: the former must return the selected value, the latter must accept an apply or an update
+         *  - could have only selectDynamic and pass it a boolean whether more is to come, 
+         *    so that it can either return the bare value or something that can handle the apply/update
+         *      HOWEVER that makes it hard to return unrelated values for the two cases
+         *      --> selectDynamic's return type is now dependent on the boolean flag whether more is to come
+         *  - simplest solution: have two method calls
+         *
+         */
+        def mkInvoke(qual: Tree, name: Name, onlySelect: Boolean): Option[Tree] = {
           def invocation(tp: Type = null): Tree = {
-            val adSelect  = if (selectOnly) Select(qual, nme.selectDynamic) else Select(qual, nme.applyDynamic)
-            val adTypeApp = if (tp == null) adSelect else TypeApply(adSelect, List(TypeTree(tp))) // tp != null ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
-            atPos(qual.pos)(Apply(adTypeApp, List(Literal(Constant(name.decode)))))
+            val select  = if(onlySelect) Select(qual, nme.selectDynamic) else Select(qual, nme.applyDynamic)
+            val typeApp = if (tp == null) select else TypeApply(select, List(TypeTree(tp))) // tp != null ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
+            val appliedSelect = Apply(typeApp, List(Literal(Constant(name.decode))))
+
+            atPos(qual.pos)(appliedSelect)
           }
 
-          if (name == nme.applyDynamic || name == nme.selectDynamic) None // don't applyDynamic applyDynamic
-          else if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass))
-            Some(invocation())
+          if ((name == nme.selectDynamic) || (name == nme.applyDynamic)) None // don't selectDynamic selectDynamic
+          else if (acceptsApplyDynamic(qual.tpe.widen)) Some(invocation())
           else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
             debuglog("[DNR] dynatype on row for "+ qual +" : "+ qual.tpe +" <DOT> "+ name)
             val rowPrefix = context.owner.ownerChain find (o => o.isClass && ThisType(o).baseClasses.contains(EmbeddedControlsClass)) map (ThisType(_)) getOrElse PredefModule.tpe
@@ -4155,11 +4184,19 @@ trait Typers extends Modes with Adaptations {
           }
 
           // try to expand according to Dynamic rules.
-          // `qual`.applyDynamic(`name`)(`args`)  (where args are supplied by the enclosing tree, context.tree -- the empty list if there is no such tree)
-          def wrappedInApply = context.tree match { case Apply(tree1, args) if tree1 eq tree => true   case _ => false }
-          dyna.mkInvoke(qual, name, !wrappedInApply) match {
+          // should we only emit selectDynamic?
+          val onlySelect = ((mode & LHSmode) == 0) && (
+            context.tree find {
+              case Select(`tree`, _) | Apply(`tree`, _) => true // TODO: PATMAT BUG?? tacking on the alternative | `tree` does not work, but the next case does...
+              case x => x == tree
+            } match {
+              case Some(Select(`tree`, name)) => (name ne nme.apply) && (name ne nme.update)
+              case Some(x) => x == tree
+              case _ => false
+            })
+          // println("dyna: "+ (qual, name, modeString(mode), onlySelect, context.tree))
+          dyna.mkInvoke(qual, name, onlySelect) match {
             case Some(invocation) => 
-              // typed1(util.trace("dynatype: ")(invocation), mode, pt)
               return typed1(invocation, mode, pt)
             case _ =>
           }

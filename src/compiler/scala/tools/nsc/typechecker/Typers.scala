@@ -3362,7 +3362,10 @@ trait Typers extends Modes with Adaptations {
           for (sym <- defSyms) {
             if (sym.isMethod && !sym.isConstructor) {
               oldsymbuf += sym
-              newsymbuf += sym.cloneSymbol(tp.typeSymbol)
+              val sym1 = sym.cloneSymbol(tp.typeSymbol)
+              sym1.resetFlag(PRIVATE | PROTECTED) // TODO: why is this necessary? this is the getter, which is supposed to be public unless specified otherwise by the user, right?
+              sym1.privateWithin = NoSymbol
+              newsymbuf += sym1
             }
           }
           val oldsyms = oldsymbuf.toList

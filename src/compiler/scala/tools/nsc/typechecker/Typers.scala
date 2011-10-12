@@ -4100,9 +4100,8 @@ trait Typers extends Modes with Adaptations {
          *  - simplest solution: have two method calls
          *
          */
-        def mkInvoke(qual: Tree, name: Name, mode: Int): Option[Tree] = {
+        def mkInvoke(qual: Tree, name: Name, onlySelect: Boolean): Option[Tree] = {
           def invocation(tp: Type = null): Tree = {
-            val onlySelect = (mode & (BYVALmode | FUNmode)) == BYVALmode
             val select  = if(onlySelect) Select(qual, nme.selectDynamic) else Select(qual, nme.applyDynamic)
             val typeApp = if (tp == null) select else TypeApply(select, List(TypeTree(tp))) // tp != null ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
             val appliedSelect = Apply(typeApp, List(Literal(Constant(name.decode))))
@@ -4185,7 +4184,18 @@ trait Typers extends Modes with Adaptations {
           }
 
           // try to expand according to Dynamic rules.
-          dyna.mkInvoke(qual, name, mode) match {
+          // should we only emit selectDynamic?
+          val onlySelect = ((mode & LHSmode) == 0) && (
+            context.tree find {
+              case Select(`tree`, _) | Apply(`tree`, _) => true // TODO: PATMAT BUG?? tacking on the alternative | `tree` does not work, but the next case does...
+              case x => x == tree
+            } match {
+              case Some(Select(`tree`, name)) => (name ne nme.apply) && (name ne nme.update)
+              case Some(x) => x == tree
+              case _ => false
+            })
+          // println("dyna: "+ (qual, name, modeString(mode), onlySelect, context.tree))
+          dyna.mkInvoke(qual, name, onlySelect) match {
             case Some(invocation) => 
               return typed1(invocation, mode, pt)
             case _ =>

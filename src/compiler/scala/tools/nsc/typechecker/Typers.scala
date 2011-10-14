@@ -3421,7 +3421,7 @@ trait Typers extends Modes with Adaptations {
         val selfName = "self".toTermName
 
         val args = statsUntyped map { origDef: ValOrDefDef =>
-          println("mutable? "+ (origDef, origDef.symbol, origDef.symbol.isVariable))
+          // println("mutable? "+ (origDef, origDef.symbol, origDef.symbol.isVariable))
 
           val funSym = origClass.owner.newValue(tree.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
           val selfSym = funSym.newValueParameter(origDef.pos, selfName) setInfo repStructTp
@@ -3430,7 +3430,7 @@ trait Typers extends Modes with Adaptations {
           def selNameOnSelf(n: Name): Tree = Select(selfRef, n)
           def selOnSelf(d: Symbol): Tree = selNameOnSelf(nme.getterName(d.name))
 
-          println("def: "+ origDef)
+          // println("def: "+ origDef)
 
           // partially type origDef, only setting symbols 
           origDef foreach { 
@@ -3459,7 +3459,7 @@ trait Typers extends Modes with Adaptations {
           object wrapInNewVar extends Transformer {
             override def transform(t: Tree): Tree = {
               t match {
-                case Apply(Ident(nme._newVar), List(rhs)) => println("baaah")
+                case Apply(Ident(nme._newVar), List(rhs)) =>
                   Apply(selNameOnSelf("__newVar".toTermName), List(rhs))
                 case _ =>
                   super.transform(t)
@@ -3468,7 +3468,7 @@ trait Typers extends Modes with Adaptations {
           }
 
           val substedDefSelf = wrapInNewVar.transform(substSelf(origDef))
-          println("substed "+ substedDefSelf)
+          // println("substed "+ substedDefSelf)
 
           
           // debuglog("[TRN] substedDefSelf "+ substedDefSelf)

@@ -30,6 +30,6 @@ object Test extends App {
       res.asInstanceOf[Rep[T]]
     }
   }
-  val foo: Rep[Row[Rep] { var x: Int; val y: String }] = new Row[Rep] { var x = 23; val y = "y" }
-  println(foo.x)
+  val foo: Rep[Row[Rep] { var xx: Int; val y: String }] = new Row[Rep] { var xx = 23; val y = "y" }
+  println(foo.xx)
 }

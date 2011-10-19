@@ -9,17 +9,19 @@ object Test extends App {
   //def __newVar[T](init: Var[T])(implicit o: Overloaded2, mT: Manifest[T]) = var_new(init)
 
   // as in virtualization-lms-core, this is not a rep
-  case class Variable[T](e: Rep[Variable[T]])
+  case class Variable[T](e: Rep[T])
   def var_new[T:Manifest](init: Rep[T]) = Variable(init)
 
   // representation of a statically-known constant
   case class Const[T](x: T) extends Rep[T]
-
+  implicit def liftInt(x: Int): Rep[Int] = Const(x) 
+  
   case class Var[T, U](self: Rep[T], x: U) extends Rep[U]
   // to represent the self/this reference in a reified object creation
   case class Self[T]() extends Rep[T] {
     override def __newVar[T](x: T): Rep[T] = Var(this, x)
   }
+
 
   // this method is called by the virtualizing compiler
   def __new[T](args: (String, Rep[T] => Rep[_])*): Rep[T] = {

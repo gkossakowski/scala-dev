@@ -609,7 +609,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
       if (tree.tpe.isInstanceOf[MethodType] && pre.isStable && sym.tpe.params.isEmpty &&
           (isStableContext(tree, mode, pt) || sym.isModule))
-        tree.setType(MethodType(List(), singleType(pre, sym)))
+        tree.setType(MethodType(List(), singleType(pre, sym))) // TODO: should this be a NullaryMethodType?
       else tree
     }
 
@@ -3927,20 +3927,22 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val appStart = startTimer(failedApplyNanos)
           val opeqStart = startTimer(failedOpEqNanos)
           silent(_.typed(fun, forFunMode(mode), funpt),  
-                 if ((mode & EXPRmode) != 0) false else context.reportAmbiguousErrors,  
+                 if ((mode & EXPRmode) != 0) false else context.reportAmbiguousErrors,
                  if ((mode & EXPRmode) != 0) tree else context.tree) match {
             case fun1: Tree =>
-              val fun2 = if (stableApplication) stabilizeFun(fun1, mode, pt) else fun1
-              incCounter(typedApplyCount)
+              def removeFunUndets() =
+                context.undetparams = context.undetparams filterNot (_.owner eq fun1.symbol)
+
               def isImplicitMethod(tpe: Type) = tpe match {
                 case mt: MethodType => mt.isImplicit
                 case _ => false
               }
-              def removeFunUndets() =
-                context.undetparams = context.undetparams filterNot (_.owner eq fun1.symbol)
-              // if we resolve to the methods in EmbeddedControls, undo rewrite
-              val res = 
-                if (fun1.symbol == EmbeddedControls_ifThenElse) {
+
+              incCounter(typedApplyCount)
+
+              // if we resolve to the methods in EmbeddedControls, undo rewrite (if we're not past typer yet)
+              val funUnVirt = if(phase.id > currentRun.typerPhase.id) fun1 else fun1.symbol match {
+                case EmbeddedControls_ifThenElse =>
                   removeFunUndets()
                   val List(cond, t, e) = args
                   //TR FIXME
@@ -3948,19 +3950,19 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   //println("-- calling typedIf with:")
                   //println(cond.tpe + "//" + cond.getClass.getName + "//" + cond)
                   typedIf(cond, t, e)
-                } else if (fun1.symbol == EmbeddedControls_newVar) {
+                case EmbeddedControls_newVar =>
                   removeFunUndets()
                   val List(init) = args
                   typed1(init, mode, pt)
-                } else if (fun1.symbol == EmbeddedControls_return) {
+                case EmbeddedControls_return =>
                   // TODO: methods called __return but not identical to the one in EmbeddedControls
                   // also need to check conformance to enclosing method's result type.
                   val List(expr) = args
                   typedReturn(expr)
-                } else if (fun1.symbol == EmbeddedControls_assign) {
+                case EmbeddedControls_assign =>
                   val List(lhs, rhs) = args
                   typedAssign(lhs, rhs)
-                } else if (fun1.symbol == EmbeddedControls_equal) {
+                case EmbeddedControls_equal =>
                   val lhs = args.head
                   // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
                   // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
@@ -3969,32 +3971,40 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
                   // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
                   atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
-                } else if (phase.id <= currentRun.typerPhase.id &&
-                    fun2.isInstanceOf[Select] &&
-                    !isImplicitMethod(fun2.tpe) &&
-                    ((fun2.symbol eq null) || !fun2.symbol.isConstructor) &&
-                    (mode & (EXPRmode | SNDTRYmode)) == EXPRmode)
-                {
-                  tryTypedApply(fun2, args)
-                } else {
-                  doTypedApply(tree, fun2, args, mode, pt)
-                }
-            /*
-              if (fun2.hasSymbol && fun2.symbol.isConstructor && (mode & EXPRmode) != 0) {
-                res.tpe = res.tpe.notNull
+                case _ => fun1
               }
-              */
-              // TODO: In theory we should be able to call:
-              //if (fun2.hasSymbol && fun2.symbol.name == nme.apply && fun2.symbol.owner == ArrayClass) {
-              // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
-              // by calling ArrayClass.info here (or some other place before specialize).
-              if (fun2.symbol == Array_apply) { 
-                val checked = gen.mkCheckInit(res)
-                // this check is needed to avoid infinite recursion in Duplicators
-                // (calling typed1 more than once for the same tree)
-                if (checked ne res) typed { atPos(tree.pos)(checked) }
-                else res
-              } else res
+
+              if (funUnVirt ne fun1) funUnVirt
+              else {
+                val stabilized = if (stableApplication) stabilizeFun(fun1, mode, pt) else fun1
+                val res = 
+                  if (phase.id <= currentRun.typerPhase.id &&
+                    stabilized.isInstanceOf[Select] &&
+                    !isImplicitMethod(stabilized.tpe) &&
+                    ((stabilized.symbol eq null) || !stabilized.symbol.isConstructor) &&
+                    (mode & (EXPRmode | SNDTRYmode)) == EXPRmode)
+                  {
+                    tryTypedApply(stabilized, args)
+                  } else {
+                    doTypedApply(tree, stabilized, args, mode, pt)
+                  }
+
+                // if (stabilized.hasSymbol && stabilized.symbol.isConstructor && (mode & EXPRmode) != 0) {
+                //   res.tpe = res.tpe.notNull
+                // }
+
+                // TODO: In theory we should be able to call:
+                //if (stabilized.hasSymbol && stabilized.symbol.name == nme.apply && stabilized.symbol.owner == ArrayClass) {
+                // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
+                // by calling ArrayClass.info here (or some other place before specialize).
+                if (stabilized.symbol == Array_apply) { 
+                  val checked = gen.mkCheckInit(res)
+                  // this check is needed to avoid infinite recursion in Duplicators
+                  // (calling typed1 more than once for the same tree)
+                  if (checked ne res) typed { atPos(tree.pos)(checked) }
+                  else res
+                } else res
+              }
             case ex: TypeError =>
               fun match {
                 case Select(qual, name) 

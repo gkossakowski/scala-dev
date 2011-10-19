@@ -1,6 +1,5 @@
 object Test extends App {
   trait Rep[x] {
-    def __newVar[T](x: T): Rep[T] = error("")
     def selectDynamic[T](n: String): Rep[T] = error("")
     def applyDynamic[T](n: String) = new Selector(n)
     class Selector(n: String) {
@@ -17,9 +16,7 @@ object Test extends App {
   case class Var[T, U](self: Rep[T], x: U) extends Rep[U]
 
   // to represent the self/this reference in a reified object creation
-  case class Self[T]() extends Rep[T] {
-    override def __newVar[T](x: T): Rep[T] = Var(this, x)
-  }
+  case class Self[T]() extends Rep[T] 
 
   // this method is called by the virtualizing compiler
   def __new[T](args: (String, Rep[T] => Rep[_])*): Rep[T] = {
@@ -34,6 +31,9 @@ object Test extends App {
       res.asInstanceOf[Rep[T]]
     }
   }
+
+  def __newVar[T](x: T): Rep[T] = Var(null, x)
+
   val foo: Rep[Row[Rep] { var xx: Int; val y: String }] = new Row[Rep] { var xx = 23; val y = "y" }
   foo.xx = 3
   println(foo.xx)

@@ -47,7 +47,7 @@ object Test extends App {
     }
   }
 
-  implicit def varToRep[T](init: Variable[T]): Rep[Variable[T]] = Var(null, init)
+  implicit def varToRep[T](init: Variable[T]): Rep[T] = null
 
   val foo = new Row[Rep] { var xx = 23; var yy = xx }
   // desugars to:

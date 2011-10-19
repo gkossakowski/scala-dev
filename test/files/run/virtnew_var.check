@@ -1,2 +1,2 @@
-Self() DOT xx = Var(Self(),23)
-Var(Self(),23)
+Self() DOT xx = Var(null,23)
+Var(null,23)

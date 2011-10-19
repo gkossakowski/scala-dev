@@ -4221,17 +4221,23 @@ trait Typers extends Modes with Adaptations {
 
           // try to expand according to Dynamic rules.
           // should we only emit selectDynamic?
-          val onlySelect = ((mode & LHSmode) == 0) && (
+          // TODO: PATMATBUG case Select(`tree`, _)  => true does not work
+          // this should be equivalent to the match in the find, right?
+            // case Select(`tree`, _) | Apply(`tree`, _) => true
+            // case _ => false
+
+          val applyOrUpdateFollows = ((mode & LHSmode) == LHSmode) || (
             context.tree find {
-              case Select(`tree`, _) | Apply(`tree`, _) => true // TODO: PATMAT BUG?? tacking on the alternative | `tree` does not work, but the next case does...
-              case x => x == tree
+              case Select(x, _) if x == tree => true
+              case Apply(x, _) if x == tree => true
+              case _ => false
             } match {
-              case Some(Select(`tree`, name)) => (name ne nme.apply) && (name ne nme.update)
-              case Some(x) => x == tree
+              case Some(Select(x, name)) => (name eq nme.apply) || (name eq nme.update)
+              case Some(Apply(_, _)) => true
               case _ => false
             })
-          // println("dyna: "+ (qual, name, modeString(mode), onlySelect, context.tree))
-          dyna.mkInvoke(qual, name, onlySelect) match {
+          // println("dyna: "+ (qual, name, modeString(mode), applyOrUpdateFollows, tree, context.tree))
+          dyna.mkInvoke(qual, name, !applyOrUpdateFollows) match {
             case Some(invocation) => 
               return typed1(invocation, mode, pt)
             case _ =>

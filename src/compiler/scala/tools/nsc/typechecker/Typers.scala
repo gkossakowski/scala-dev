@@ -3536,7 +3536,7 @@ trait Typers extends Modes with Adaptations {
               """|since %s <:< %s, reification was attempted,
                  |but the result, `%s`, did not type check.
                  |Probable cause: there is no suitable `__new` method in scope.
-                 |See the definition of `trait Row` in EmbeddedControls for details.""".stripMargin.format(tpt.tpe, rowBaseTp, newCall))
+                 |See the definition of `trait Row` in EmbeddedControls for details.""".stripMargin.format(tp, rowBaseTp, newCall))
         }
       }
 

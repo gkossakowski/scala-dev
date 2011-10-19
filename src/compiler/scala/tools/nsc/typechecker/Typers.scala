@@ -3486,22 +3486,28 @@ trait Typers extends Modes with Adaptations {
             else tptTpeMaybeRep // was already in a Rep
 
 
-          val substedDef = substedDefSelf match {
+          val substedDef = (substedDefSelf match {
             case ValDef(mods, name, tp, rhs) => 
               treeCopy.ValDef(origDef, mods, name, TypeTree(tptTpe), rhs)
             case DefDef(mods, name, tparams, vparamss, tpt, rhs) => 
               treeCopy.DefDef(origDef, mods, name, tparams, vparamss, TypeTree(tptTpe), rhs)
-          }
+          }).asInstanceOf[ValOrDefDef]
+
+          val rhsTyper = newTyper(statTyper.context.make(origDef, origDef.symbol))
+          rhsTyper.context.scope enter selfSym
 
           // treeBrowser browse substedDef
-          val typedDef = statTyper.typed(substedDef, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef]
-          val dupedRhs = typedDef.rhs.duplicate // DUPLICATE -- don't update old RHS
+          val dupedRhs = 
+            rhsTyper.typed(
+                substedDef.rhs,
+                EXPRmode | BYVALmode,
+                substedDef.tpt.tpe).duplicate // DUPLICATE -- don't update old RHS
           debuglog("[TRN] dupedRhs: "+ dupedRhs)
 
           // the RHS is now owned by the symbol of the function we're wrapping around it in the arg
           // update the owners of nested symbols
           // if you mess up the owner structure, explicitouter blows up
-          new ChangeOwnerTraverser(typedDef.symbol, funSym).traverse(dupedRhs)
+          new ChangeOwnerTraverser(substedDef.symbol, funSym).traverse(dupedRhs)
 
           // create new symbols for the duplicated tree, tree.duplicate does not do this
           // (without new symbols, you get weird errors in lambdaLift, because markFree unwittingly updates all trees that share a symbol)

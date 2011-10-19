@@ -4091,9 +4091,48 @@ trait Typers extends Modes with Adaptations {
         @inline private def listOpt[T](xs: List[T]) = xs match { case x :: Nil => Some(x) case _ => None }
         @inline private def symOpt[T](sym: Symbol) = if(sym == NoSymbol) None else Some(sym) // TODO: handle overloading?
 
-        def acceptsApplyDynamic(tp: Type) = settings.Xexperimental.value && (tp.typeSymbol isNonBottomSubClass DynamicClass)
+        def acceptsApplyDynamic(tp: Type) =
+          settings.Xexperimental.value && (tp.typeSymbol isNonBottomSubClass DynamicClass)
+
+        /** Is `qual` a staged row? (i.e., of type Rep[Row[Rep]{decls}])?
+         * Then what's the type of `name`?
+         */
+        def rowSelectType(qual: Tree, name: Name): Option[Type] = {
+          debuglog("[DNR] dynatype on row for "+ qual +" : "+ qual.tpe +" <DOT> "+ name)
+          val rowPrefix = context.owner.ownerChain find (o => o.isClass && ThisType(o).baseClasses.contains(EmbeddedControlsClass)) map (ThisType(_)) getOrElse PredefModule.tpe
+          val rowTp = rowPrefix.memberType(EmbeddedControls_Row)
+          debuglog("[DNR] context, row prefix, tp "+ (context.owner.ownerChain, rowPrefix, rowTp))
+
+          val rep = NoSymbol.newTypeParameter(NoPosition, "Rep".toTypeName)
+          val repTpar = rep.newTypeParameter(NoPosition, "T".toTypeName).setFlag(COVARIANT).setInfo(TypeBounds.empty)
+          rep.setInfo(polyType(List(repTpar), TypeBounds.empty))
+          val repVar = TypeVar(rep)
+
+          for(
+            _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!?
+            repTp <- listOpt(solvedTypes(List(repVar), List(rep), List(COVARIANT), false, -3)); // search for minimal solution
+            // _ <- Some(println("mkInvoke repTp="+ repTp));
+            // if so, generate an invocation and give it type `Rep[T]`, where T is the type given to member `name` in `decls`
+            repSym = repTp.typeSymbolDirect;
+            qualRowTp <- qual.tpe.baseType(repSym).typeArgs.headOption; // this specifies `decls`
+            member <- symOpt(qualRowTp.member(name))
+          ) yield {
+            val memberTp = qualRowTp.memberType(member).finalResultType // this is `T` from the comment above
+            debuglog("[DNR] (repTp, qualRowTp, member, memberTp)= "+ (repTp, qualRowTp, member, memberTp))
+            memberTp
+          }
+        }
+
+        /** Returns `Some(t)` if `name` can be selected dynamically on `qual`, `None` if not.
+         * `t` specifies the type to be passed to the applyDynamic/selectDynamic call (unless it is NoType)
+         */
+        def acceptsApplyDynamicWithType(qual: Tree, name: Name): Option[Type] =
+          if ((name == nme.selectDynamic) || (name == nme.applyDynamic)) None // don't selectDynamic selectDynamic
+          else if (acceptsApplyDynamic(qual.tpe.widen)) Some(NoType) // do select dynamic at unknown type
+          else rowSelectType(qual, name) // == Some(tp) ==> do select dynamic and pass it `tp`, the type specified for `name` by the row `qual`
+
         def isApplyDynamic(tree: Tree) = treeInfo.methPart(tree) match {
-          case Select(qual, nme.applyDynamic) if acceptsApplyDynamic(qual.tpe.widen) => true
+          case Select(qual, nme.applyDynamic) => true // TODO derive `name` from `tree` so we can be more precise: if acceptsApplyDynamicWithType(qual, name).nonEmpty
           case _ => false
         }
 
@@ -4116,41 +4155,15 @@ trait Typers extends Modes with Adaptations {
          *
          */
         def mkInvoke(qual: Tree, name: Name, onlySelect: Boolean): Option[Tree] = {
-          def invocation(tp: Type = null): Tree = {
+          def invocation(tp: Type): Tree = {
             val select  = if(onlySelect) Select(qual, nme.selectDynamic) else Select(qual, nme.applyDynamic)
-            val typeApp = if (tp == null) select else TypeApply(select, List(TypeTree(tp))) // tp != null ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
+            val typeApp = if (tp == NoType) select else TypeApply(select, List(TypeTree(tp))) // tp != NoType ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
             val appliedSelect = Apply(typeApp, List(Literal(Constant(name.decode))))
 
             atPos(qual.pos)(appliedSelect)
           }
 
-          if ((name == nme.selectDynamic) || (name == nme.applyDynamic)) None // don't selectDynamic selectDynamic
-          else if (acceptsApplyDynamic(qual.tpe.widen)) Some(invocation())
-          else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
-            debuglog("[DNR] dynatype on row for "+ qual +" : "+ qual.tpe +" <DOT> "+ name)
-            val rowPrefix = context.owner.ownerChain find (o => o.isClass && ThisType(o).baseClasses.contains(EmbeddedControlsClass)) map (ThisType(_)) getOrElse PredefModule.tpe
-            val rowTp = rowPrefix.memberType(EmbeddedControls_Row)
-            debuglog("[DNR] context, row prefix, tp "+ (context.owner.ownerChain, rowPrefix, rowTp))
-
-            val rep = NoSymbol.newTypeParameter(NoPosition, "Rep".toTypeName)
-            val repTpar = rep.newTypeParameter(NoPosition, "T".toTypeName).setFlag(COVARIANT).setInfo(TypeBounds.empty)
-            rep.setInfo(polyType(List(repTpar), TypeBounds.empty))
-            val repVar = TypeVar(rep)
-
-            for( 
-              _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!? 
-              repTp <- listOpt(solvedTypes(List(repVar), List(rep), List(COVARIANT), false, -3)); // search for minimal solution
-              // _ <- Some(println("mkInvoke repTp="+ repTp));
-              // if so, generate an invocation and give it type `Rep[T]`, where T is the type given to member `name` in `decls`
-              repSym = repTp.typeSymbolDirect;
-              qualRowTp <- qual.tpe.baseType(repSym).typeArgs.headOption; // this specifies `decls`
-              member <- symOpt(qualRowTp.member(name))
-            ) yield {
-              val memberTp = qualRowTp.memberType(member).finalResultType // this is `T` from the comment above
-              debuglog("[DNR] (repTp, qualRowTp, member, memberTp)= "+ (repTp, qualRowTp, member, memberTp))
-              invocation(memberTp)
-            }
-          }
+          acceptsApplyDynamicWithType(qual, name) map invocation
         }
       }
 

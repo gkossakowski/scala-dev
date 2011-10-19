@@ -3456,18 +3456,8 @@ trait Typers extends Modes with Adaptations {
                 super.transform(tree)
             }
           }
-          object wrapInNewVar extends Transformer {
-            override def transform(t: Tree): Tree = {
-              t match {
-                case Apply(Ident(nme._newVar), List(rhs)) =>
-                  Apply(selNameOnSelf("__newVar".toTermName), List(rhs))
-                case _ =>
-                  super.transform(t)
-              }
-            }
-          }
 
-          val substedDefSelf = wrapInNewVar.transform(substSelf(origDef))
+          val substedDefSelf = substSelf(origDef)
           // println("substed "+ substedDefSelf)
 
           
@@ -3482,7 +3472,9 @@ trait Typers extends Modes with Adaptations {
 
           val tptTpeMaybeRep = elimAnonymousClass(origDef.tpt.tpe)
           val tptTpe = // done: baseType works when repSym.isAbstractType
-            if(tptTpeMaybeRep.baseType(repSym) == NoType) appliedType(repTycon, List(tptTpeMaybeRep)) // nope: no Rep wrapper yet, so add it
+            if (!origDef.symbol.isMutable &&               // leave mutable members untouched -- complicated enough as it is
+                tptTpeMaybeRep.baseType(repSym) == NoType) // no Rep wrapper yet, so add it
+                  appliedType(repTycon, List(tptTpeMaybeRep))
             else tptTpeMaybeRep // was already in a Rep
 
 
@@ -3501,7 +3493,7 @@ trait Typers extends Modes with Adaptations {
             rhsTyper.typed(
                 substedDef.rhs,
                 EXPRmode | BYVALmode,
-                substedDef.tpt.tpe).duplicate // DUPLICATE -- don't update old RHS
+                if(origDef.symbol.isMutable) WildcardType else substedDef.tpt.tpe).duplicate // DUPLICATE -- don't update old RHS
           debuglog("[TRN] dupedRhs: "+ dupedRhs)
 
           // the RHS is now owned by the symbol of the function we're wrapping around it in the arg

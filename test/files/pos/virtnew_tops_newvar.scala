@@ -1,7 +1,17 @@
 object Test extends App {
+  // use the CanBuildFrom type-level computation pattern to specify `applyDynamic[Variable[T]](n): T`
+  trait ADbase {
+    implicit def ad[X] = new AD[X]{ type T = X }
+  }
+  object AD extends ADbase {
+    implicit def adVar[T] = new AD[Variable[T]]{ type U = T}
+  }
+  trait AD[T] { type U }
+
   trait Rep[x] {
     def __newVar[T](x: T): Rep[T] = error("")
     def selectDynamic[T](n: String): Rep[T] = error("")
+    def applyDynamic[T](n: String)(implicit w: AD[T]): Rep[w.U] = error("")
   }
 
   def __newVar[T:Manifest](init: T) = var_new(Const(init))
@@ -37,8 +47,15 @@ object Test extends App {
     }
   }
 
-  // the var xx should not be reified by the top-level __newVar call (which generates a Variable, not a Rep)
-  // but its value should simply be wrapped in the __newVar call of Self (which generates a Var which is a Rep)
-  val foo: Rep[Row[Rep] { var xx: Int }] = new Row[Rep] { var xx = 23 }
+  implicit def varToRep[T](init: Variable[T]): Rep[Variable[T]] = Var(null, init)
+
+  val foo = new Row[Rep] { var xx = 23; var yy = xx }
+  // desugars to:
+  // type R = Object with Row[Rep]{def xx: Variable[Int]; def xx_=(x$1: Variable[Int]): Unit; def yy: Variable[Variable[Int]]; def yy_=(x$1: Variable[Variable[Int]]): Unit}
+  // __new[R](
+  //   Tuple2[String, Rep[R] => Rep[Variable[Int]]]("xx", ((self: Rep[R]) => varToRep[Int](__newVar[Int](23)(Manifest.Int)))), 
+  //   Tuple2[String, Rep[R] => Rep[Variable[Rep[Int]]]]("yy", ((self: Rep[R]) => varToRep[Rep[Int]](__newVar[Rep[Int]](self.applyDynamic[Variable[Int]]("xx")(AD.adVar[Int]))(Manifest.classType[Rep[Int]](classOf[Test$$Rep], Manifest.Int))))))
+
   println(foo.xx)
 }
+

@@ -481,6 +481,24 @@ abstract class ExplicitOuter extends InfoTransform
           if (sym == currentClass || sym.hasModuleFlag && sym.isStatic) tree
           else atPos(tree.pos)(outerPath(outerValue, currentClass.outerClass, sym)) // (5)
 
+        // for patmatvirtualiser
+        // base.<outer>.eq(o) --> base.$outer().eq(o) if there's an accessor, else the whole tree becomes TRUE
+        // TODO remove the synthetic `<outer>` method from outerFor??
+        case Apply(eqsel@Select(eqapp@Apply(sel@Select(base, outerAcc), Nil), eq), args)  if outerAcc == nme.OUTER_SYNTH =>
+          val outerFor = sel.symbol.owner.toInterface // TODO: toInterface necessary?
+          val acc = outerAccessor(outerFor)
+          if(acc == NoSymbol) {
+            // println("WARNING: no outer for "+ outerFor)
+            transform(TRUE) // urgh... drop condition if there's no accessor
+          } else {
+            // println("(base, acc)= "+(base, acc))
+            val outerSelect = localTyper typed Apply(Select(base, acc), Nil)
+            // achieves the same as: localTyper typed atPos(tree.pos)(outerPath(base, base.tpe.typeSymbol, outerFor.outerClass))
+            // println("(b, tpsym, outerForI, outerFor, outerClass)= "+ (base, base.tpe.typeSymbol, outerFor, sel.symbol.owner, outerFor.outerClass))
+            // println("outerSelect = "+ outerSelect)
+            transform(treeCopy.Apply(tree, treeCopy.Select(eqsel, outerSelect, eq), args))
+          }
+
         case Select(qual, name) =>
           if (currentClass != sym.owner) // (3)
             sym.makeNotPrivate(sym.owner)

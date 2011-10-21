@@ -1792,12 +1792,6 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           error(vparam1.pos, "*-parameter must come last")
 
       var tpt1 = checkNoEscaping.privates(meth, typedType(ddef.tpt))
-      // if (!settings.YdepMethTpes.value) {
-      //   for (vparams <- vparamss1; vparam <- vparams) {
-      //     checkNoEscaping.locals(context.scope, WildcardType, vparam.tpt); ()
-      //   }
-      //   checkNoEscaping.locals(context.scope, WildcardType, tpt1)
-      // }
       checkNonCyclic(ddef, tpt1)
       ddef.tpt.setType(tpt1.tpe)
       val typedMods = removeAnnotations(ddef.mods)
@@ -3001,6 +2995,29 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       val normalizedTpe = normalizeLocals(tree.tpe)
       addLocals(normalizedTpe)
       packSymbols(localSyms.toList, normalizedTpe)
+    }
+    
+    /** Replace type parameters with their TypeSkolems, which can later
+     *  be deskolemized to the original type param. (A skolem is a
+     *  representation of a bound variable when viewed inside its scope)
+     *  !!!Adriaan: this does not work for hk types.
+     */
+    def skolemizeTypeParams(tparams: List[TypeDef]): List[TypeDef] = {
+      class Deskolemizer extends LazyType {
+        override val typeParams = tparams map (_.symbol)
+        val typeSkolems  = typeParams map (_.newTypeSkolem) map (_ setInfo this)
+        def substitute() = {
+          // Replace the symbols
+          (tparams, typeSkolems).zipped foreach (_.symbol = _)
+          tparams
+        }
+        override def complete(sym: Symbol) {
+          // The info of a skolem is the skolemized info of the
+          // actual type parameter of the skolem
+          sym setInfo sym.deSkolemize.info.substSym(typeParams, typeSkolems)
+        }
+      }
+      (new Deskolemizer).substitute()
     }
 
     protected def typedExistentialTypeTree(tree: ExistentialTypeTree, mode: Int): Tree = {

@@ -649,7 +649,7 @@ trait Infer {
           targ.baseType(SeqClass)
         else if (targ.typeSymbol == JavaRepeatedParamClass)
           targ.baseType(ArrayClass)
-        else if (targ.typeSymbol.isModuleClass || tvar.constr.avoidWiden)
+        else if (targ.typeSymbol.isModuleClass || (opt.experimental && tvar.constr.avoidWiden))
           targ  // this infers Foo.type instead of "object Foo" (see also widenIfNecessary)
         else
           targ.widen
@@ -1177,11 +1177,10 @@ trait Infer {
           "lenientPt"   -> lenientPt
         )
       )
-
       var targs = exprTypeArgs(undetparams, tree.tpe, strictPt)._1
-      if ((targs eq null) || !(tree.tpe.subst(undetparams, targs) <:< strictPt)) {
+      if ((targs eq null) || !(tree.tpe.subst(undetparams, targs) <:< strictPt))
         targs = exprTypeArgs(undetparams, tree.tpe, lenientPt)._1
-      }
+
       substExpr(tree, undetparams, targs, lenientPt)
       printInference("[inferArgumentInstance] finished, targs = " + targs)
     }

@@ -140,7 +140,7 @@ abstract class Power(
   private def initImports = List(
     "scala.tools.nsc._",
     "scala.collection.JavaConverters._",
-    "intp.global.{ error => _, _ }",
+    "intp.global.{ error => _, _ }", // import intp.global, as that's the instance of global used by e.g., intp(symNam) (otherwise types don't align)
     "definitions.{ getClass => _, _ }",
     "power.Implicits._",
     "power.rutil._"

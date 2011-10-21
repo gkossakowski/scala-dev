@@ -3886,7 +3886,7 @@ trait Typers extends Modes with Adaptations {
               incCounter(typedApplyCount)
 
               // if we resolve to the methods in EmbeddedControls, undo rewrite (if we're not past typer yet)
-              val funUnVirt = if(phase.id > currentRun.typerPhase.id) fun1 else fun1.symbol match {
+              val funUnVirt = if(phase.erasedTypes) fun1 else fun1.symbol match {
                 case EmbeddedControls_ifThenElse =>
                   removeFunUndets()
                   val List(cond, t, e) = args

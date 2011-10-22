@@ -1,1 +1,3 @@
 reload: EventHandler.scala, JavaEventHandler.java
+[EventHandler.scala]: exception during background compile: scala.tools.nsc.interactive.ShutdownReq$
+[EventHandler.scala] marking unit as crashed (crashedFiles: Set(/Users/adriaan/git/scala-dev/test/files/presentation/ide-bug-1000469/src/scala/EventHandler.scala))

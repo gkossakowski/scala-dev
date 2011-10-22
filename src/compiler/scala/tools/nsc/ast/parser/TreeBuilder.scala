@@ -176,7 +176,7 @@ abstract class TreeBuilder {
   def makeBinop(isExpr: Boolean, left: Tree, op: TermName, right: Tree, opPos: Position): Tree = {
     def mkNamed(args: List[Tree]) =
       if (isExpr) args map {
-        case a @ Assign(id @ Ident(name), rhs) =>
+        case a @ LiftedAssign(id @ Ident(name), rhs) =>
           atPos(a.pos) { AssignOrNamedArg(id, rhs) }
         case e => e
       } else args
@@ -186,7 +186,7 @@ abstract class TreeBuilder {
     }
     if (isExpr) {
       if (treeInfo.isLeftAssoc(op)) {
-        Apply(atPos(opPos union left.pos) { Select(stripParens(left), op.encode) }, arguments)
+        makeApply(atPos(opPos union left.pos) { Select(stripParens(left), op.encode) }, arguments)
       } else {
         val x = freshTermName()
         Block(
@@ -232,7 +232,7 @@ abstract class TreeBuilder {
     case Apply(fn, args) => 
       Apply(atPos(fn.pos) { Select(fn, nme.update) }, args ::: List(rhs)) 
     case _ => 
-      Assign(lhs, rhs)
+      Apply(Ident(nme._assign), List(lhs, rhs)) //Assign(lhs, rhs)
   }
 
   /** A type tree corresponding to (possibly unary) intersection type */
@@ -241,17 +241,34 @@ abstract class TreeBuilder {
     else CompoundTypeTree(Template(tps, emptyValDef, Nil))
 
   /** Create tree representing a while loop */
-  def makeWhile(lname: TermName, cond: Tree, body: Tree): Tree = {
-    val continu = atPos(o2p(body.pos.endOrPoint)) { Apply(Ident(lname), Nil) }
-    val rhs = If(cond, Block(List(body), continu), Literal(Constant()))
-    LabelDef(lname, Nil, rhs)
-  }
+  def makeWhileDo(cond: Tree, body: Tree): Tree =
+    Apply(Ident(nme._whileDo), List(cond, body))
 
   /** Create tree representing a do-while loop */
-  def makeDoWhile(lname: TermName, body: Tree, cond: Tree): Tree = {
-    val continu = Apply(Ident(lname), Nil)
-    val rhs = Block(List(body), If(cond, continu, Literal(Constant())))
-    LabelDef(lname, Nil, rhs)
+  def makeDoWhile(body: Tree, cond: Tree): Tree =
+    Apply(Ident(nme._doWhile), List(body, cond))
+
+  /** Create tree representing a do-while loop */
+  def makeIfThenElse(cond: Tree, thenp: Tree, elsep: Tree): Tree =
+    Apply(Ident(nme._ifThenElse), List(cond, thenp, elsep))
+
+  /** Create tree representing a variable initializer */
+  def makeNewVar(expr: Tree): Tree =
+    Apply(Ident(nme._newVar), List(expr))
+
+  /** Create tree representing a return statement */
+  def makeReturn(expr: Tree): Tree = 
+    Apply(Ident(nme._return), List(expr))
+  
+  /** Create a tree making an application node; treating == specially
+   */
+  def makeApply(sel: Tree, exprs: List[Tree]) = sel match {
+    case Select(qual, nme.EQ) => // reroute == to __equal
+      // don't tuple exprs, as we can't (easily) undo it when it turns out 
+      // there was a regular == method that takes this number of args (see t3736 in pos/ and neg/)
+      Apply(Ident(nme._equal) setPos sel.pos, qual :: exprs)
+    case _ =>
+      Apply(sel, exprs)
   }
 
   /** Create block of statements `stats`  */

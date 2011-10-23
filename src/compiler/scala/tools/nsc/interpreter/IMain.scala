@@ -487,6 +487,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       case Some(Nil)    => return Left(IR.Error) // parse error or empty input
       case Some(trees)  => trees
     }
+
     repltrace(
       trees map (t =>
         t map (t0 =>
@@ -498,7 +499,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     // AST node position and snap the line off there.  Rewrite the code embodied
     // by the last tree as a ValDef instead, so we can access the value.
     trees.last match {
-      case _:Assign                        => // we don't want to include assignments
+      // disabled exclusion of LiftedAssign because run/repl-bare-expr fails (suppresses output of an assign that has been rewritten to an update)
+      // .... and I can't figure out what changed due to virtualisation
+      case LiftedAssign(_, _)                        => // we don't want to include assignments
       case _:TermTree | _:Ident | _:Select => // ... but do want other unnamed terms.
         val varName  = if (synthetic) freshInternalVarName() else freshUserVarName()
         val rewrittenLine = (
@@ -998,7 +1001,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     if (mostRecentlyHandledTree.isEmpty) ""
     else "" + (mostRecentlyHandledTree.get match {
       case x: ValOrDefDef           => x.name
-      case Assign(Ident(name), _)   => name
+      case LiftedAssign(Ident(name), _)   => name
       case ModuleDef(_, name, _)    => name
       case _                        => naming.mostRecentVar
     })

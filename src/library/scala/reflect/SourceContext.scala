@@ -28,6 +28,8 @@ trait SourceContext extends SourceLocation {
 
   def methodName: String
 
+  def receiver: Option[String]
+
   def allContexts: List[List[(String, Int)]]
 
   override def toString = if (SourceContext.debug) {
@@ -51,10 +53,18 @@ object SourceContext {
   def apply(fileName: String, name: String, sourceInfo: List[(String, Int)]): SourceContext =
     new ConcreteSourceContext(fileName, name, sourceInfo)
 
+  def apply(fileName: String, name: String, receiver: String, sourceInfo: List[(String, Int)]): SourceContext =
+    new ConcreteSourceContext(fileName, name, Some(receiver), sourceInfo)
+
   private class ConcreteSourceContext(override val fileName: String,
-                                      override val methodName: String,
-                                      override val bindings: List[(String, Int)])
+                                      val methodName: String,
+                                      val receiver: Option[String],
+                                      val bindings: List[(String, Int)])
   extends SourceContext {
+
+    def this(file: String, method: String, bs: List[(String, Int)]) =
+      this(file, method, None, bs)
+
     def line = bindings(0)._2
 
     def update(context: SourceContext): SourceContext = {

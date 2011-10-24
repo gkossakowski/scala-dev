@@ -91,8 +91,16 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       new MethodSymbol(this, pos, name).setFlag(METHOD)
     final def newLabel(pos: Position, name: TermName) =
       newMethod(pos, name).setFlag(LABEL)
+
+    /** Propagates ConstrFlags (JAVA, specifically) from owner to constructor. */
     final def newConstructor(pos: Position) =
-      newMethod(pos, nme.CONSTRUCTOR)
+      newMethod(pos, nme.CONSTRUCTOR) setFlag getFlag(ConstrFlags)
+    /** Static constructor with info set. */
+    def newStaticConstructor(pos: Position) =
+      newConstructor(pos) setFlag STATIC setInfo UnitClass.tpe
+    /** Instance constructor with info set. */
+    def newClassConstructor(pos: Position) =
+      newConstructor(pos) setInfo MethodType(Nil, this.tpe)
 
     private def finishModule(m: ModuleSymbol, clazz: ClassSymbol): ModuleSymbol = {
       // Top-level objects can be automatically marked final, but others
@@ -1924,6 +1932,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       else if (owner.isRefinementClass) ExplicitFlags & ~OVERRIDE
       else ExplicitFlags
     
+    def accessString = hasFlagsToString(PRIVATE | PROTECTED | LOCAL)
     def defaultFlagString = hasFlagsToString(defaultFlagMask)
     private def defStringCompose(infoString: String) = compose(
       defaultFlagString,

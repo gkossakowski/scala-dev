@@ -1113,7 +1113,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
     private def typePrimaryConstrBody(clazz : Symbol, cbody: Tree, tparams: List[Symbol], enclTparams: List[Symbol], vparamss: List[List[ValDef]]): Tree = {
       // XXX: see about using the class's symbol....
       enclTparams foreach (sym => context.scope.enter(sym))
-      namer.enterValueParams(context.owner, vparamss)
+      namer.enterValueParams(vparamss)
       typed(cbody)
     }
 
@@ -1276,7 +1276,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             if (context.unit.source.file == psym.sourceFile || isValueClass(context.owner))
               psym addChild context.owner
             else
-              error(parent.pos, "illegal inheritance from sealed "+psym)
+              error(parent.pos, "illegal inheritance from sealed "+psym+": " + context.unit.source.file + " != " + psym.sourceFile)
           }
           if (!(selfType <:< parent.tpe.typeOfThis) && 
               !phase.erasedTypes &&     
@@ -1467,8 +1467,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             val setter = getter.setter(value.owner)
             gs.append(setterDef(setter))
           }
-          if (!forMSIL && (value.hasAnnotation(BeanPropertyAttr) ||
-              value.hasAnnotation(BooleanBeanPropertyAttr))) {
+          if (!forMSIL && hasBeanAnnotation(value)) {
             val nameSuffix = name.toString.capitalize
             val beanGetterName =
               (if (value.hasAnnotation(BooleanBeanPropertyAttr)) "is" else "get") +
@@ -3030,6 +3029,20 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         }
       }
       (new Deskolemizer).substitute()
+    }
+    /** Convert to corresponding type parameters all skolems of method
+     *  parameters which appear in `tparams`.
+     */
+    def deskolemizeTypeParams(tparams: List[Symbol])(tp: Type): Type = {
+      class DeSkolemizeMap extends TypeMap {
+        def apply(tp: Type): Type = tp match {
+          case TypeRef(pre, sym, args) if sym.isTypeSkolem && (tparams contains sym.deSkolemize) =>
+            mapOver(typeRef(NoPrefix, sym.deSkolemize, args))
+          case _ =>
+            mapOver(tp)
+        }
+      }
+      new DeSkolemizeMap mapOver tp
     }
 
     protected def typedExistentialTypeTree(tree: ExistentialTypeTree, mode: Int): Tree = {

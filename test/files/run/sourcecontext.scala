@@ -1,6 +1,15 @@
 
 import reflect.SourceContext
 
+class Matrix {
+  def numCols(implicit sc: SourceContext): Int = {
+    println("enter numCols")
+    println("method: "+sc.methodName)
+    println("receiver: "+sc.receiver)
+    0
+  }
+}
+
 object Test {
 
   def relative(name: String) = {
@@ -47,6 +56,11 @@ object Test {
     testUpdate2()
   }
 
+  def sum(start: Int, end: Int)(block: Int => Int)(implicit sc: SourceContext) {
+    println("enter sum")
+    println("method: "+sc.methodName)
+  }
+
   def main(args: Array[String]) {
     val l = List(1, 2, 3)
     val x = inspect(l)
@@ -57,6 +71,12 @@ object Test {
 
     // test SourceContext.update
     testUpdate()
+
+    // test method without parameter list
+    val m = new Matrix
+    val n = m.numCols
+
+    val sigma = sum(0, n) { (i: Int) => i }
   }
 
 }

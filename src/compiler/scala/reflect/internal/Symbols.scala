@@ -91,8 +91,16 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       new MethodSymbol(this, pos, name).setFlag(METHOD)
     final def newLabel(pos: Position, name: TermName) =
       newMethod(pos, name).setFlag(LABEL)
+
+    /** Propagates ConstrFlags (JAVA, specifically) from owner to constructor. */
     final def newConstructor(pos: Position) =
-      newMethod(pos, nme.CONSTRUCTOR)
+      newMethod(pos, nme.CONSTRUCTOR) setFlag getFlag(ConstrFlags)
+    /** Static constructor with info set. */
+    def newStaticConstructor(pos: Position) =
+      newConstructor(pos) setFlag STATIC setInfo UnitClass.tpe
+    /** Instance constructor with info set. */
+    def newClassConstructor(pos: Position) =
+      newConstructor(pos) setInfo MethodType(Nil, this.tpe)
 
     private def finishModule(m: ModuleSymbol, clazz: ClassSymbol): ModuleSymbol = {
       // Top-level objects can be automatically marked final, but others
@@ -1289,8 +1297,26 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       c
     }
 
-    /** The self symbol of a class with explicit self type, or else the
-     *  symbol itself.
+    /** The self symbol (a TermSymbol) of a class with explicit self type, or else the
+     *  symbol itself (a TypeSymbol). 
+     * 
+     *  WARNING: you're probably better off using typeOfThis, as it's more uniform across classes with and without self variables.
+     * 
+     *  Example by Paul:
+     *   scala> trait Foo1 { }
+     *   scala> trait Foo2 { self => }
+     *   scala> intp("Foo1").thisSym
+     *   res0: $r.intp.global.Symbol = trait Foo1
+     *   
+     *   scala> intp("Foo2").thisSym
+     *   res1: $r.intp.global.Symbol = value self
+     *  
+     *  Martin says: The reason `thisSym' is `this' is so that thisType can be this.thisSym.tpe.
+     *  It's a trick to shave some cycles off.
+     *
+     *  Morale: DO:    if (clazz.typeOfThis.typeConstructor ne clazz.typeConstructor) ...
+     *          DON'T: if (clazz.thisSym ne clazz) ...
+     *
      */
     def thisSym: Symbol = this
 
@@ -1318,8 +1344,8 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     
     /** The symbol accessed by this accessor function, but with given owner type. */
     final def accessed(ownerTp: Type): Symbol = {
-      assert(hasAccessorFlag)
-      ownerTp.decl(nme.getterToLocal(if (isSetter) nme.setterToGetter(name) else name))
+      assert(hasAccessorFlag, this)
+      ownerTp decl nme.getterToLocal(getterName)
     }
 
     /** The module corresponding to this module class (note that this
@@ -1349,6 +1375,9 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     
     /** If this is a lazy value, the lazy accessor; otherwise this symbol. */
     def lazyAccessorOrSelf: Symbol = if (isLazy) lazyAccessor else this
+
+    /** If this is an accessor, the accessed symbol.  Otherwise, this symbol. */
+    def accessedOrSelf: Symbol = if (hasAccessorFlag) accessed else this
 
     /** For an outer accessor: The class from which the outer originates.
      *  For all other symbols: NoSymbol
@@ -1647,10 +1676,9 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     /** The getter of this value or setter definition in class `base`, or NoSymbol if
      *  none exists.
      */
-    final def getter(base: Symbol): Symbol = {
-      val getterName = if (isSetter) nme.setterToGetter(name) else nme.getterName(name)
-      base.info.decl(getterName) filter (_.hasAccessorFlag)
-    }
+    final def getter(base: Symbol): Symbol = base.info.decl(getterName) filter (_.hasAccessorFlag)
+
+    def getterName = if (isSetter) nme.setterToGetter(name) else nme.getterName(name)
 
     /** The setter of this value or getter definition, or NoSymbol if none exists */
     final def setter(base: Symbol): Symbol = setter(base, false)
@@ -1904,6 +1932,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       else if (owner.isRefinementClass) ExplicitFlags & ~OVERRIDE
       else ExplicitFlags
     
+    def accessString = hasFlagsToString(PRIVATE | PROTECTED | LOCAL)
     def defaultFlagString = hasFlagsToString(defaultFlagMask)
     private def defStringCompose(infoString: String) = compose(
       defaultFlagString,

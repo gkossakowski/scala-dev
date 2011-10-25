@@ -193,6 +193,19 @@ trait Definitions extends reflect.api.StandardDefinitions {
     lazy val ClassClass                 = getClass(sn.Class)
       def Class_getMethod               = getMember(ClassClass, nme.getMethod_)
     lazy val DynamicClass               = getClass("scala.Dynamic")
+    
+    // embeddings
+    lazy val EmbeddedControlsClass  = getClass("scala.EmbeddedControls")
+      lazy val EmbeddedControls_ifThenElse = getMember(EmbeddedControlsClass, nme._ifThenElse)
+      lazy val EmbeddedControls_whileDo = getMember(EmbeddedControlsClass, nme._whileDo)
+      lazy val EmbeddedControls_doWhile = getMember(EmbeddedControlsClass, nme._doWhile)
+      lazy val EmbeddedControls_Row = getMember(EmbeddedControlsClass, tpnme.Row)
+      lazy val EmbeddedControls_new = getMember(EmbeddedControlsClass, nme._new)
+      lazy val EmbeddedControls_newVar = getMember(EmbeddedControlsClass, nme._newVar)
+      lazy val EmbeddedControls_assign = getMember(EmbeddedControlsClass, nme._assign)
+      lazy val EmbeddedControls_return = getMember(EmbeddedControlsClass, nme._return)
+      lazy val EmbeddedControls_equal = getMember(EmbeddedControlsClass, nme._equal)
+    lazy val ProxyControlsClass  = getClass("scala.ProxyControls")
 
     // fundamental modules
     lazy val SysPackage = getPackageObject("scala.sys")
@@ -338,6 +351,10 @@ trait Definitions extends reflect.api.StandardDefinitions {
     lazy val PartialManifestModule = getModule("scala.reflect.ClassManifest")
     lazy val FullManifestClass     = getClass("scala.reflect.Manifest")
     lazy val FullManifestModule    = getModule("scala.reflect.Manifest")
+    lazy val SourceLocationClass   = getClass("scala.reflect.SourceLocation")
+    lazy val SourceLocationModule  = getModule("scala.reflect.SourceLocation")
+    lazy val SourceContextClass    = getClass("scala.reflect.SourceContext")
+    lazy val SourceContextModule   = getModule("scala.reflect.SourceContext")
     lazy val OptManifestClass      = getClass("scala.reflect.OptManifest")
     lazy val NoManifest            = getModule("scala.reflect.NoManifest")
     lazy val CodeClass             = getClass(sn.Code)

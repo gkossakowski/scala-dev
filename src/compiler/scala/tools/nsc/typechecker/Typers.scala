@@ -3948,8 +3948,11 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
 
               incCounter(typedApplyCount)
               // if we resolve to the methods in EmbeddedControls, undo rewrite
-              val funUnVirt = if (!phase.erasedTypes) {
-                if (fun1.symbol == EmbeddedControls_ifThenElse) {
+              val funUnVirt = if (phase.id <= currentRun.erasurePhase.id) fun1.symbol match { // definitely need to run past erasure, but how far?
+                // 1) compile virtualization-lms-core --> EqualExpBridgeOpt should not contain a reference to EmbeddedControls.__equal
+                // 2) vscx -cp /Users/adriaan/Downloads/lms-sandbox/lib-scalac/scalatest_2.10.0-virtualized-SNAPSHOT-1.6.1-SNAPSHOT.jar:/Users/adriaan/Downloads/lms-sandbox/lib-scalac/virtualization-lms-core_2.10.0-virtualized-SNAPSHOT.jar:/tmp /Users/adriaan/Downloads/lms-sandbox/src/test/scala/scala/js/TestDynamic.scala -Xprint:all
+                //   --> must not crash in icode due to store to var whose lhs has type MethodType(..)
+                case EmbeddedControls_ifThenElse) =>
                   removeFunUndets()
                   val List(cond, t, e) = args
                   //TR FIXME
@@ -3978,7 +3981,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
                   // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
                   atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
-                } else fun1
+                case _ => fun1
               } else fun1
 
               def isImplicitMethod(tpe: Type) = tpe match {

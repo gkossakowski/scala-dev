@@ -609,7 +609,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
       if (tree.tpe.isInstanceOf[MethodType] && pre.isStable && sym.tpe.params.isEmpty &&
           (isStableContext(tree, mode, pt) || sym.isModule))
-        tree.setType(MethodType(List(), singleType(pre, sym))) // TODO: should this be a NullaryMethodType?
+        tree.setType(MethodType(List(), singleType(pre, sym)))
       else tree
     }
 
@@ -3938,21 +3938,20 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val appStart = startTimer(failedApplyNanos)
           val opeqStart = startTimer(failedOpEqNanos)
           silent(_.typed(fun, forFunMode(mode), funpt),  
-                 if ((mode & EXPRmode) != 0) false else context.reportAmbiguousErrors,
+                 if ((mode & EXPRmode) != 0) false else context.reportAmbiguousErrors,  
                  if ((mode & EXPRmode) != 0) tree else context.tree) match {
             case fun1: Tree =>
               val fun2 = if (stableApplication) stabilizeFun(fun1, mode, pt) else fun1
-
+              incCounter(typedApplyCount)
+              def isImplicitMethod(tpe: Type) = tpe match {
+                case mt: MethodType => mt.isImplicit
+                case _ => false
+              }
               def removeFunUndets() =
                 context.undetparams = context.undetparams filterNot (_.owner eq fun1.symbol)
-
-              incCounter(typedApplyCount)
               // if we resolve to the methods in EmbeddedControls, undo rewrite
-              val funUnVirt = if (phase.id <= currentRun.erasurePhase.id) fun1.symbol match { // definitely need to run past erasure, but how far?
-                // 1) compile virtualization-lms-core --> EqualExpBridgeOpt should not contain a reference to EmbeddedControls.__equal
-                // 2) vscx -cp /Users/adriaan/Downloads/lms-sandbox/lib-scalac/scalatest_2.10.0-virtualized-SNAPSHOT-1.6.1-SNAPSHOT.jar:/Users/adriaan/Downloads/lms-sandbox/lib-scalac/virtualization-lms-core_2.10.0-virtualized-SNAPSHOT.jar:/tmp /Users/adriaan/Downloads/lms-sandbox/src/test/scala/scala/js/TestDynamic.scala -Xprint:all
-                //   --> must not crash in icode due to store to var whose lhs has type MethodType(..)
-                case EmbeddedControls_ifThenElse) =>
+              val res = 
+                if (fun1.symbol == EmbeddedControls_ifThenElse) {
                   removeFunUndets()
                   val List(cond, t, e) = args
                   //TR FIXME
@@ -3960,19 +3959,19 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   //println("-- calling typedIf with:")
                   //println(cond.tpe + "//" + cond.getClass.getName + "//" + cond)
                   typedIf(cond, t, e)
-                case EmbeddedControls_newVar =>
+                } else if (fun1.symbol == EmbeddedControls_newVar) {
                   removeFunUndets()
                   val List(init) = args
                   typed1(init, mode, pt)
-                case EmbeddedControls_return =>
+                } else if (fun1.symbol == EmbeddedControls_return) {
                   // TODO: methods called __return but not identical to the one in EmbeddedControls
                   // also need to check conformance to enclosing method's result type.
                   val List(expr) = args
                   typedReturn(expr)
-                case EmbeddedControls_assign =>
+                } else if (fun1.symbol == EmbeddedControls_assign) {
                   val List(lhs, rhs) = args
                   typedAssign(lhs, rhs)
-                case EmbeddedControls_equal =>
+                } else if (fun1.symbol == EmbeddedControls_equal) {
                   val lhs = args.head
                   // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
                   // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
@@ -3981,17 +3980,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
                   // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
                   atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
-                case _ => fun1
-              } else fun1
-
-              def isImplicitMethod(tpe: Type) = tpe match {
-                case mt: MethodType => mt.isImplicit
-                case _ => false
-              }
-
-              val res =
-                if (funUnVirt ne fun1) funUnVirt
-                else if (phase.id <= currentRun.typerPhase.id &&
+                } else if (phase.id <= currentRun.typerPhase.id &&
                     fun2.isInstanceOf[Select] &&
                     !isImplicitMethod(fun2.tpe) &&
                     ((fun2.symbol eq null) || !fun2.symbol.isConstructor) &&
@@ -4001,11 +3990,11 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 } else {
                   doTypedApply(tree, fun2, args, mode, pt)
                 }
-
-              // if (fun2.hasSymbol && fun2.symbol.isConstructor && (mode & EXPRmode) != 0) {
-              //   res.tpe = res.tpe.notNull
-              // }
-
+            /*
+              if (fun2.hasSymbol && fun2.symbol.isConstructor && (mode & EXPRmode) != 0) {
+                res.tpe = res.tpe.notNull
+              }
+              */
               // TODO: In theory we should be able to call:
               //if (fun2.hasSymbol && fun2.symbol.name == nme.apply && fun2.symbol.owner == ArrayClass) {
               // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
@@ -4017,7 +4006,6 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 if (checked ne res) typed { atPos(tree.pos)(checked) }
                 else res
               } else res
-
             case ex: TypeError =>
               fun match {
                 case Select(qual, name) 

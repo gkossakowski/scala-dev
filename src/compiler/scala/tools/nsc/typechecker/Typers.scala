@@ -3270,7 +3270,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val rhs1 = typed(rhs, EXPRmode | BYVALmode, lhs1.tpe)
           treeCopy.Assign(tree, lhs1, checkDead(rhs1)) setType UnitClass.tpe
         }
-        else if(dyna.isApplyDynamic(lhs1)) {
+        else if(dyna.isDynamicallyUpdatable(lhs1)) {
           val rhs1 = typed(rhs, EXPRmode | BYVALmode, WildcardType)
           typed1(Apply(Select(lhs1, nme.update), List(rhs1)), mode, pt)
         }
@@ -4170,7 +4170,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         /** Is `qual` a staged row? (i.e., of type Rep[Row[Rep]{decls}])?
          * Then what's the type of `name`?
          */
-        def rowSelectType(qual: Tree, name: Name): Option[Type] = {
+        def rowSelectedMember(qual: Tree, name: Name): Option[(Type, Symbol)] = {
           debuglog("[DNR] dynatype on row for "+ qual +" : "+ qual.tpe +" <DOT> "+ name)
           val rowPrefix = context.owner.ownerChain find (o => o.isClass && ThisType(o).baseClasses.contains(EmbeddedControlsClass)) map (ThisType(_)) getOrElse PredefModule.tpe
           val rowTp = rowPrefix.memberType(EmbeddedControls_Row)
@@ -4190,9 +4190,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             qualRowTp <- qual.tpe.baseType(repSym).typeArgs.headOption; // this specifies `decls`
             member <- symOpt(qualRowTp.member(name))
           ) yield {
-            val memberTp = qualRowTp.memberType(member).finalResultType // this is `T` from the comment above
-            debuglog("[DNR] (repTp, qualRowTp, member, memberTp)= "+ (repTp, qualRowTp, member, memberTp))
-            memberTp
+            (qualRowTp, member)
           }
         }
 
@@ -4202,10 +4200,18 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         def acceptsApplyDynamicWithType(qual: Tree, name: Name): Option[Type] =
           if ((name == nme.selectDynamic) || (name == nme.applyDynamic)) None // don't selectDynamic selectDynamic
           else if (acceptsApplyDynamic(qual.tpe.widen)) Some(NoType) // do select dynamic at unknown type
-          else rowSelectType(qual, name) // == Some(tp) ==> do select dynamic and pass it `tp`, the type specified for `name` by the row `qual`
+          else
+            rowSelectedMember(qual, name) map { case (pre, sym) => // == Some(tp) ==> do select dynamic and pass it `tp`, the type specified for `name` by the row `qual`
+              pre.memberType(sym).finalResultType
+            }
 
-        def isApplyDynamic(tree: Tree) = treeInfo.methPart(tree) match {
-          case Select(qual, nme.applyDynamic) => true // TODO derive `name` from `tree` so we can be more precise: if acceptsApplyDynamicWithType(qual, name).nonEmpty
+        def isDynamicallyUpdatable(tree: Tree) = tree match {
+          case Apply(TypeApply(Select(qual, nme.applyDynamic), _), List(Literal(Constant(name)))) =>
+            rowSelectedMember(qual, name.toString.toTermName) match {
+              case Some((pre, sym)) =>
+                pre.member(nme.getterToSetter(sym.name)) != NoSymbol // but does it have a setter? can't use sym.accessed.isMutable since sym.accessed does not exist
+              case _ => false
+            }
           case _ => false
         }
 

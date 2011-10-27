@@ -11,7 +11,8 @@ object Test extends App {
   case class Const[T](x: T) extends Rep[T]
 
   // automatically lift strings into their representations
-  implicit def liftString(x: String): Rep[String] = Const(x) 
+  implicit def liftString(x: String): Rep[String] = Const(x)
+  implicit def liftInt(x: Int): Rep[Int] = Const(x)
 
   case class Var[T, U](self: Rep[T], x: U) extends Rep[U]
 
@@ -19,9 +20,9 @@ object Test extends App {
   case class Self[T]() extends Rep[T] 
 
   // this method is called by the virtualizing compiler
-  def __new[T](args: (String, Rep[T] => Rep[_])*): Rep[T] = {
+  def __new[T](args: (String, Boolean, Rep[T] => Rep[_])*): Rep[T] = {
     val me = new Self[T]()
-    new Obj(me, args map {case (n, rhs) => (n, rhs(me))} toMap)
+    new Obj(me, args map {case (n, b, rhs) => (n, rhs(me))} toMap)
   }
 
   class Obj[T](self: Rep[T], fields: Map[String, Rep[_]]) extends Rep[T] {
@@ -32,7 +33,7 @@ object Test extends App {
     }
   }
 
-  def __newVar[T](x: T): Rep[T] = Var(null, x)
+  // def __newVar[T](x: T): Rep[T] = Var(null, x)
 
   val foo: Rep[Row[Rep] { var xx: Int; val y: String }] = new Row[Rep] { var xx = 23; val y = "y" }
   foo.xx = 3

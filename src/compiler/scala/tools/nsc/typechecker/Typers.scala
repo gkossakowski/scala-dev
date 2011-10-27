@@ -3408,48 +3408,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             t
         }
 
-        object unrep extends TypeMap {
-          def apply(tp: Type) = mapOver(tp) match {
-            case TypeRef(pre, sym, List(tp)) if sym == repSym => tp
-            case tp => tp
-          }
-        }
-
         val sym = tp.typeSymbol
         val ClassInfoType(parents, defSyms, origClass) = sym.info
-
-        // if we filter out the getters, and leave in the backing fields, member lookup breaks (e.g. when doing a selectDynamic)
-        // and we get strange type errors... 
-        // found   : java.lang.Object with Row[Test.Rep]{val x: Int; val y: java.lang.String}
-        // required: Row[Test.Rep]{val x: Int; val y: String}
-        // to avoid duplicates, only retain methods
-        // the fields will only be used indirectly, since the corresponding ValDef holds the RHS with the information we're after
-        val structTp = {
-          val tp = refinedType(parents, origClass.owner)
-          val thistp = tp.typeSymbol.thisType
-          val oldsymbuf = new ListBuffer[Symbol]
-          val newsymbuf = new ListBuffer[Symbol]
-          for (sym <- defSyms) {
-            if (sym.isMethod && !sym.isConstructor) {
-              oldsymbuf += sym
-              val sym1 = sym.cloneSymbol(tp.typeSymbol)
-              sym1.resetFlag(PRIVATE | PROTECTED) // TODO: why is this necessary? this is the getter, which is supposed to be public unless specified otherwise by the user, right?
-              sym1.privateWithin = NoSymbol
-              newsymbuf += sym1
-            }
-          }
-          val oldsyms = oldsymbuf.toList
-          val newsyms = newsymbuf.toList
-          for (sym <- newsyms) {
-            addMember(thistp, tp, sym.setInfo(unrep(sym.info.substThis(origClass, thistp).substSym(oldsyms, newsyms))))
-          }
-          tp
-        }
-
-        val repStructTp = appliedType(repTycon, List(structTp))
-
-        // make tree for `(label, rhs)`
-        def mkArg(label: String, rhs: Tree) = gen.mkTuple(List(Literal(Constant(label)), rhs))
 
         // make args -- have to locate the original classdef tree and its template for that, this is reallllly ugly....
         val classDefTree = context.outer.tree
@@ -3467,7 +3427,63 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         debuglog("[TRN] origClass: " + (origClass.info.decls, origClass.ownerChain))
         debuglog("[TRN] statsUntyped: "+ statsUntyped.map (d => d.symbol))
 
-        // type the stats so that selections on the self-variable can be rewritten next
+
+        def toAccessed(sym: Symbol) = if(sym.isGetter || sym.isSetter) sym.accessed else sym
+
+        val statSyms = statsUntyped map (_.symbol) toSet
+        val selfName = "self".toTermName
+
+        // if we filter out the getters, and leave in the backing fields, member lookup breaks (e.g. when doing a selectDynamic)
+        // and we get strange type errors...
+        // found   : java.lang.Object with Row[Test.Rep]{val x: Int; val y: java.lang.String}
+        // required: Row[Test.Rep]{val x: Int; val y: String}
+        // to avoid duplicates, only retain methods
+        // the fields will only be used indirectly, since the corresponding ValDef holds the RHS with the information we're after
+        val repStructTp = {
+          def unrepAndUnVar(varSym: Symbol) = new TypeMap {
+            def apply(tp: Type) = mapOver(tp) match {
+              case TypeRef(pre, sym, List(tp)) if (sym == repSym) || (sym == varSym) => tp
+              case tp => tp
+            }
+          }
+          val unrep = unrepAndUnVar(repSym)
+
+          val structTp = {
+            val tp = refinedType(parents, origClass.owner)
+            val thistp = tp.typeSymbol.thisType
+            val oldsymbuf = new ListBuffer[Symbol]
+            val newsymbuf = new ListBuffer[Symbol]
+            for (sym <- defSyms) {
+              if (sym.isMethod && !sym.isConstructor) { // must keep only methods
+                oldsymbuf += sym
+                val sym1 = sym.cloneSymbol(tp.typeSymbol)
+                sym1.resetFlag(PRIVATE | PROTECTED) // TODO: why is this necessary? this is the getter, which is supposed to be public unless specified otherwise by the user, right?
+                sym1.privateWithin = NoSymbol
+
+                // GROSS HACK: derive the Variable type symbol from the symbol accessed by a getter/setter (or from the var's symbol itself)
+                // it's info will always be of the shape Variable[T]
+                val accSym = toAccessed(sym) // toAccessed(sym1) doesn't work since we only retain methods
+                // if(accSym.isMutable) println("var: "+(sym1, sym1.info, accSym.info.typeSymbol))
+                val unwrap = if(accSym.isMutable) unrepAndUnVar(accSym.info.typeSymbol) else unrep
+                sym1.setInfo(unwrap(sym1.info).substThis(origClass, thistp))
+                // println("sym1.info"+ sym1.info)
+
+                newsymbuf += sym1
+              }
+            }
+            val oldsyms = oldsymbuf.toList
+            val newsyms = newsymbuf.toList
+            for (sym <- newsyms) {
+              addMember(thistp, tp, sym.setInfo(sym.info.substSym(oldsyms, newsyms)))
+            }
+            tp
+          }
+          appliedType(repTycon, List(structTp))
+        }
+
+
+        // setup the typer for the stats
+        // the stats must be typed to detect the self reference, so that selections on the self-variable can be rewritten
         val statTyper = newTyper(context.make(templ, origClass, new Scope)) //.typedStats(statsUntyped.toList, templ.symbol)
         if (templ.symbol == NoSymbol) templ setSymbol origClass.newLocalDummy(templ.pos)
         val self1 = templ.self match {
@@ -3481,13 +3497,11 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         if (self1.name != nme.WILDCARD) statTyper.context.scope enter self1.symbol
         enterSyms(context.make(templ, origClass, origClass.info.decls), templ.body) // statTyper.context.outer eq context
 
-        def toAccessed(sym: Symbol) = if(sym.isGetter) sym.accessed else sym
-
-        val statSyms = statsUntyped map (_.symbol) toSet
-        val selfName = "self".toTermName
+        // make tree for `(label, rhs)`
+        def mkArg(label: String, mutable: Boolean, rhs: Tree) = gen.mkTuple(List(Literal(Constant(label)), Literal(Constant(mutable)), rhs))
 
         val args = statsUntyped map { origDef: ValOrDefDef =>
-          // println("mutable? "+ (origDef, origDef.symbol, origDef.symbol.isVariable))
+          // println("mutable? "+ (origDef, origDef.symbol, origDef.symbol.isMutable))
 
           val funSym = origClass.owner.newValue(tree.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
           val selfSym = funSym.newValueParameter(origDef.pos, selfName) setInfo repStructTp
@@ -3498,6 +3512,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
 
           // println("def: "+ origDef)
 
+          //// replace self
           // partially type origDef, only setting symbols 
           origDef foreach { 
             case tree@(This(_) | Ident(_) | Select(_, _)) =>
@@ -3523,49 +3538,43 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             }
           }
 
-          val substedDefSelf = substSelf(origDef)
-          // println("substed "+ substedDefSelf)
+          val origRhs =
+            if(origDef.symbol.isMutable) origDef.rhs match { case Apply(_, List(a)) => a } // unwrap the __newvar call
+            else origDef.rhs
+          val substedRhs = substSelf(origRhs)
+          // println("substed "+ substedRhs)
 
-          
-          // debuglog("[TRN] substedDefSelf "+ substedDefSelf)
-          // treeBrowser browse substedDefSelf
-
-          // splice in the Rep[_]'ed expected type
-
+          //// splice in the Rep[_]'ed expected type
           // does tpt need to be typed? (if it was inferred, the .tpe has been set already, but if it was specified by the user, it may not have been typed yet)
-          if(origDef.tpt.tpe == null) // origDef.tpt setType statTyper.typedType(origDef.tpt).tpe
-            origDef.tpt setType statTyper.typed(origDef.duplicate, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef].tpt.tpe
+          // note that we change the rhs for mutable variables, so always need to retype
 
-          val tptTpeMaybeRep = elimAnonymousClass(origDef.tpt.tpe)
+          val tptTpeMaybeRep = elimAnonymousClass(
+            if(origDef.tpt.tpe == null || origDef.symbol.isMutable)
+              statTyper.typed(origRhs.duplicate, EXPRmode | BYVALmode, WildcardType).tpe.widen
+            else
+              origDef.tpt.tpe) // TODO: subst self the resulting type
+
           val tptTpe = // done: baseType works when repSym.isAbstractType
-            if (!origDef.symbol.isMutable &&               // leave mutable members untouched -- complicated enough as it is
-                tptTpeMaybeRep.baseType(repSym) == NoType) // no Rep wrapper yet, so add it
-                  appliedType(repTycon, List(tptTpeMaybeRep))
-            else tptTpeMaybeRep // was already in a Rep
+            if (tptTpeMaybeRep.baseType(repSym) == NoType) // no Rep wrapper yet, so add it
+              appliedType(repTycon, List(tptTpeMaybeRep))
+            else
+              tptTpeMaybeRep // was already in a Rep
 
-
-          val substedDef = (substedDefSelf match {
-            case ValDef(mods, name, tp, rhs) => 
-              treeCopy.ValDef(origDef, mods, name, TypeTree(tptTpe), rhs)
-            case DefDef(mods, name, tparams, vparamss, tpt, rhs) => 
-              treeCopy.DefDef(origDef, mods, name, tparams, vparamss, TypeTree(tptTpe), rhs)
-          }).asInstanceOf[ValOrDefDef]
 
           val rhsTyper = newTyper(statTyper.context.make(origDef, origDef.symbol))
           rhsTyper.context.scope enter selfSym
 
-          // treeBrowser browse substedDef
-          val dupedRhs = 
+          val dupedRhs =
             rhsTyper.typed(
-                substedDef.rhs,
+                substedRhs,
                 EXPRmode | BYVALmode,
-                if(origDef.symbol.isMutable) WildcardType else substedDef.tpt.tpe).duplicate // DUPLICATE -- don't update old RHS
+                tptTpe).duplicate // DUPLICATE -- don't update old RHS
           debuglog("[TRN] dupedRhs: "+ dupedRhs)
 
           // the RHS is now owned by the symbol of the function we're wrapping around it in the arg
           // update the owners of nested symbols
           // if you mess up the owner structure, explicitouter blows up
-          new ChangeOwnerTraverser(substedDef.symbol, funSym).traverse(dupedRhs)
+          new ChangeOwnerTraverser(origDef.symbol, funSym).traverse(dupedRhs)
 
           // create new symbols for the duplicated tree, tree.duplicate does not do this
           // (without new symbols, you get weird errors in lambdaLift, because markFree unwittingly updates all trees that share a symbol)
@@ -3589,10 +3598,10 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           // println("after newSyms:")
           // currentRun.trackerFactory.snapshot()
           // TODO: eta-expand rhs of method definition
-          mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), rerootedRhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
+          mkArg(origDef.name.toString, origDef.symbol.isMutable, Function(List(ValDef(selfSym)), rerootedRhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
         }
 
-        debuglog("[TRN] (struct, rep, args)= "+ (structTp, repTycon, args mkString("(", ", ", ")")))
+        debuglog("[TRN] (repStructTp, rep, args)= "+ (repStructTp, repTycon, args mkString("(", ", ", ")")))
         val newCall = Apply(Ident(nme._new) setPos tpt.pos, args.toList) setPos tree.pos
         silent(_.typed1(newCall, mode, repStructTp), false) match {
           case res: Tree => res

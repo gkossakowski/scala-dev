@@ -39,5 +39,10 @@ object Test extends App {
   foo.xx = 3 // this works because the row has a mutable member xx of the right type -- otherwise it'll fail to typecheck (see the neg/ case)
   println(foo.xx)
 
-  (new Rep[Int] with Dynamic {}).notInARow = 123 // make sure the regular applyDynamic (on targets of type Dynamic works too)
+  (new Dynamic {
+    def applyDynamic(n: String) = new Selector(n)
+    class Selector(n: String) {
+      def update(args: Any*) = error("")
+    }
+  }).notInARow = 123 // make sure the regular applyDynamic (on targets of type Dynamic works too)
 }

@@ -4210,7 +4210,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             rowSelectedMember(qual, name.toString.toTermName) match {
               case Some((pre, sym)) =>
                 pre.member(nme.getterToSetter(sym.name)) != NoSymbol // but does it have a setter? can't use sym.accessed.isMutable since sym.accessed does not exist
-              case _ => false
+              case _ =>
+                acceptsApplyDynamic(qual.tpe) // if the qualifier is a Dynamic, that's all we need to know
             }
           case _ => false
         }

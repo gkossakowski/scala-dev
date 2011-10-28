@@ -36,6 +36,8 @@ object Test extends App {
   // def __newVar[T](x: T): Rep[T] = Var(null, x)
 
   val foo: Rep[Row[Rep] { var xx: Int; val y: String }] = new Row[Rep] { var xx = 23; val y = "y" }
-  foo.xx = 3
+  foo.xx = 3 // this works because the row has a mutable member xx of the right type -- otherwise it'll fail to typecheck (see the neg/ case)
   println(foo.xx)
+
+  (new Rep[Int] with Dynamic {}).notInARow = 123 // make sure the regular applyDynamic (on targets of type Dynamic works too)
 }

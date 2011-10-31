@@ -4090,7 +4090,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val repVar = TypeVar(rep)
 
           for(
-            _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!?
+            _ <- boolOpt((qual.tpe ne null) && qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!?
             repTp <- listOpt(solvedTypes(List(repVar), List(rep), List(COVARIANT), false, -3)); // search for minimal solution
             // _ <- Some(println("mkInvoke repTp="+ repTp));
             // if so, generate an invocation and give it type `Rep[T]`, where T is the type given to member `name` in `decls`
@@ -4113,8 +4113,16 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               pre.memberType(sym).finalResultType
             }
 
+        object ApplyApplyDynamic {
+          def unapply(tree: Tree) = tree match {
+            case Apply(TypeApply(Select(qual, nme.applyDynamic), _), List(Literal(Constant(name)))) => Some((qual, name))
+            case Apply(Select(qual, nme.applyDynamic), List(Literal(Constant(name)))) => Some((qual, name))
+            case Apply(Ident(nme.applyDynamic), List(Literal(Constant(name)))) => Some((EmptyTree, name))
+            case _ => None
+          }
+        }
         def isDynamicallyUpdatable(tree: Tree) = tree match {
-          case Apply(TypeApply(Select(qual, nme.applyDynamic), _), List(Literal(Constant(name)))) =>
+          case ApplyApplyDynamic(qual, name) =>
             rowSelectedMember(qual, name.toString.toTermName) match {
               case Some((pre, sym)) =>
                 pre.member(nme.getterToSetter(sym.name)) != NoSymbol // but does it have a setter? can't use sym.accessed.isMutable since sym.accessed does not exist

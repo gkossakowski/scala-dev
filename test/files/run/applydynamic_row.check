@@ -1,0 +1,5 @@
+select field
+1
+select fun
+2
+update varia to 10 : Int

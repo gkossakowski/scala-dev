@@ -3864,64 +3864,83 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 case mt: MethodType => mt.isImplicit
                 case _ => false
               }
-              def removeFunUndets() =
-                context.undetparams = context.undetparams filterNot (_.owner eq fun1.symbol)
-              // if we resolve to the methods in EmbeddedControls, undo rewrite
-              val res = 
-                if (fun1.symbol == EmbeddedControls_ifThenElse) {
-                  removeFunUndets()
-                  val List(cond, t, e) = args
-                  //TR FIXME
-                  // fail ---> new EmbeddedControls { def __ifThenElse[T](cond: Option[Boolean], thenp: Option[T], elsep: Option[T]): Option[T] = thenp; if (7 < 8) println("yo") }
-                  //println("-- calling typedIf with:")
-                  //println(cond.tpe + "//" + cond.getClass.getName + "//" + cond)
-                  typedIf(cond, t, e)
-                } else if (fun1.symbol == EmbeddedControls_newVar) {
-                  removeFunUndets()
-                  val List(init) = args
-                  typed1(init, mode, pt)
-                } else if (fun1.symbol == EmbeddedControls_return) {
-                  // TODO: methods called __return but not identical to the one in EmbeddedControls
-                  // also need to check conformance to enclosing method's result type.
-                  val List(expr) = args
-                  typedReturn(expr)
-                } else if (fun1.symbol == EmbeddedControls_assign) {
-                  val List(lhs, rhs) = args
-                  typedAssign(lhs, rhs)
-                } else if (fun1.symbol == EmbeddedControls_equal) {
-                  val lhs = args.head
-                  // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
-                  // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
-                  val rhs = args.tail
-                  // I once thought that without resetAllAttrs for lhs and rhs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
-                  // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
-                  // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
-                  atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
-                } else if (phase.id <= currentRun.typerPhase.id &&
-                    fun2.isInstanceOf[Select] &&
-                    !isImplicitMethod(fun2.tpe) &&
-                    ((fun2.symbol eq null) || !fun2.symbol.isConstructor) &&
-                    (mode & (EXPRmode | SNDTRYmode)) == EXPRmode)
-                {
-                  tryTypedApply(fun2, args)
-                } else {
-                  doTypedApply(tree, fun2, args, mode, pt)
-                }
-            /*
-              if (fun2.hasSymbol && fun2.symbol.isConstructor && (mode & EXPRmode) != 0) {
-              }
-              */
+
+              incCounter(typedApplyCount)
+
+              // we need to keep the un-typed args around to un-virtualize (see funUnVirt)
+              // we can't decide whether to un-virtualize before typing the application, since we don't know which overload will be picked until then
+              // re-using the typed args in a different position is a no-go, and resetting the attributes isn't trivial either (implicit args etc)
+              val origArgs: List[Tree] = args map (_.duplicate)
+              // but let's try to avoid paying that price if we can help it (if none of the alternatives is in EmbeddedControls, we should be safe)
+              // val syms = if(fun1.symbol.info.isInstanceOf[OverloadedType]) fun1.symbol.alternatives else List(fun1.symbol)
+              // val origArgs: List[Tree] = if (syms exists (sym => (sym ne NoSymbol) && sym.owner == EmbeddedControlsClass)) args map (_.duplicate)
+              //   else null
+
+              val stabilized = if (stableApplication) stabilizeFun(fun1, mode, pt) else fun1
+              val useTry = (
+                   !isPastTyper
+                && stabilized.isInstanceOf[Select]
+                && !isImplicitMethod(stabilized.tpe)
+                && ((stabilized.symbol eq null) || !stabilized.symbol.isConstructor)
+                && (mode & (EXPRmode | SNDTRYmode)) == EXPRmode
+              )
+              val res =
+                if (useTry) tryTypedApply(stabilized, args)
+                else doTypedApply(tree, stabilized, args, mode, pt)
+
+              // if (stabilized.hasSymbol && stabilized.symbol.isConstructor && (mode & EXPRmode) != 0) {
+              //   res.tpe = res.tpe.notNull
+              // }
+
               // TODO: In theory we should be able to call:
-              //if (fun2.hasSymbol && fun2.symbol.name == nme.apply && fun2.symbol.owner == ArrayClass) {
+              //if (stabilized.hasSymbol && stabilized.symbol.name == nme.apply && stabilized.symbol.owner == ArrayClass) 
               // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
               // by calling ArrayClass.info here (or some other place before specialize).
-              if (fun2.symbol == Array_apply) { 
+              val resCheckInit = if (stabilized.symbol == Array_apply) { 
                 val checked = gen.mkCheckInit(res)
                 // this check is needed to avoid infinite recursion in Duplicators
                 // (calling typed1 more than once for the same tree)
                 if (checked ne res) typed { atPos(tree.pos)(checked) }
                 else res
               } else res
+
+              // println("unvirt funsym: "+(fun1.symbol.ownerChain, resCheckInit.symbol.ownerChain))
+              // if we resolve to the methods in EmbeddedControls, undo rewrite (if we're not past typer yet)
+              // we do this after type checking the whole application to make sure the symbol we get is consistent with overload resolution etc.
+              // the symbol in fun1.symbol might be overloaded, in which case it is useless until after overload resolution (by xxxTypedApply)
+              def removeFunUndets() = context.undetparams = context.undetparams filterNot (_.owner eq fun1.symbol)
+              resCheckInit.symbol match {
+                case EmbeddedControls_ifThenElse =>
+                  removeFunUndets()
+                  val List(cond, t, e) = origArgs
+                  //TR FIXME
+                  // fail ---> new EmbeddedControls { def __ifThenElse[T](cond: Option[Boolean], thenp: Option[T], elsep: Option[T]): Option[T] = thenp; if (7 < 8) println("yo") }
+                  //println("-- calling typedIf with:")
+                  //println(cond.tpe + "//" + cond.getClass.getName + "//" + cond)
+                  typedIf(cond, t, e)
+                case EmbeddedControls_newVar =>
+                  removeFunUndets()
+                  val List(init) = origArgs
+                  typed1(init, mode, pt)
+                case EmbeddedControls_return =>
+                  // TODO: methods called __return but not identical to the one in EmbeddedControls
+                  // also need to check conformance to enclosing method's result type.
+                  val List(expr) = origArgs
+                  typedReturn(expr)
+                case EmbeddedControls_assign =>
+                  val List(lhs, rhs) = origArgs
+                  typedAssign(lhs, rhs)
+                case EmbeddedControls_equal =>
+                  val lhs = origArgs.head
+                  // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
+                  // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
+                  val rhs = origArgs.tail
+                  // I once thought that without resetAllAttrs for lhs and rhs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
+                  // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
+                  // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
+                  atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
+                case _ => resCheckInit
+              }
             case ex: TypeError =>
               fun match {
                 case Select(qual, name) 

@@ -1,6 +1,10 @@
 object Test extends App {
   trait Rep[x] {
     def selectDynamic[T](n: String): Rep[T] = error("")
+    def applyDynamic[T](n: String) = new Selector(n)
+    class Selector(n: String) {
+      def update(args: Any*) = error("")
+    }
   }
 
   // representation of a statically-known constant
@@ -10,15 +14,15 @@ object Test extends App {
   implicit def liftString(x: String): Rep[String] = Const(x)
   implicit def liftInt(x: Int): Rep[Int] = Const(x)
 
-  case class Variable[T]
+  case class Var[T, U](self: Rep[T], x: U) extends Rep[U]
 
   // to represent the self/this reference in a reified object creation
-  case class Self[T] extends Rep[T] 
+  case class Self[T]() extends Rep[T] 
 
   // this method is called by the virtualizing compiler
   def __new[T](args: (String, Boolean, Rep[T] => Rep[_])*): Rep[T] = {
-    val me = new Self[T]
-    new Obj(me, args map {case (n, m, rhs) => (n, rhs(me))} toMap)
+    val me = new Self[T]()
+    new Obj(me, args map {case (n, b, rhs) => (n, rhs(me))} toMap)
   }
 
   class Obj[T](self: Rep[T], fields: Map[String, Rep[_]]) extends Rep[T] {
@@ -29,8 +33,16 @@ object Test extends App {
     }
   }
 
-  def __newVar[T](x: T): Variable[T] = error("meh")
+  // def __newVar[T](x: T): Rep[T] = Var(null, x)
 
   val foo: Rep[Row[Rep] { var xx: Int; val y: String }] = new Row[Rep] { var xx = 23; val y = "y" }
+  foo.xx = 3 // this works because the row has a mutable member xx of the right type -- otherwise it'll fail to typecheck (see the neg/ case)
   println(foo.xx)
+
+  (new Dynamic {
+    def applyDynamic(n: String) = new Selector(n)
+    class Selector(n: String) {
+      def update(args: Any*) = error("")
+    }
+  }).notInARow = 123 // make sure the regular applyDynamic (on targets of type Dynamic works too)
 }

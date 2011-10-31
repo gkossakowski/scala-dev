@@ -1,2 +1,2 @@
-Self() DOT xx = Var(Self(),23)
-Var(Self(),23)
+Self() DOT xx = Const(23)
+Const(23)

@@ -27,9 +27,9 @@ object Test extends EmbeddedControls with App {
   case class Self[T] extends Rep[T]
 
   // this method is called by the virtualizing compiler
-  def __new[T](args: (String, Rep[T] => Rep[_])*): Rep[T] = {
+  def __new[T](args: (String, Boolean, Rep[T] => Rep[_])*): Rep[T] = {
     val me = new Self[T]
-    new Obj(me, args map {case (n, rhs) => (n, rhs(me))} toMap)
+    new Obj(me, args map {case (n, b, rhs) => (n, rhs(me))} toMap)
   }
 
   class Obj[T](self: Rep[T], fields: Map[String, Rep[_]]) extends Rep[T] {

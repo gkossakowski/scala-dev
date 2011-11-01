@@ -3884,7 +3884,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 && ((stabilized.symbol eq null) || !stabilized.symbol.isConstructor)
                 && (mode & (EXPRmode | SNDTRYmode)) == EXPRmode
               )
-              val res =
+              val res0 =
                 if (useTry) tryTypedApply(stabilized, args)
                 else doTypedApply(tree, stabilized, args, mode, pt)
               val res = res0 match {

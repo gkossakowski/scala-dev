@@ -3180,7 +3180,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         }
         else if(dyna.isDynamicallyUpdatable(lhs1)) {
           val rhs1 = typed(rhs, EXPRmode | BYVALmode, WildcardType)
-          typed1(Apply(Select(lhs1, nme.update), List(rhs1)), mode, pt)
+          typed1(Apply(lhs1, List(rhs1)), mode, pt)
         }
         else fail
       }
@@ -3887,6 +3887,14 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               val res =
                 if (useTry) tryTypedApply(stabilized, args)
                 else doTypedApply(tree, stabilized, args, mode, pt)
+              val res = res0 match {
+                case dyna.DynamicApplication(_, _) if isImplicitMethod(res0.tpe) =>
+                  // adapt in EXPRmode so that implicits will be resolved now,
+                  // before any chained apply/update's are called (to support def selectDynamic[T: Manifest])
+                  // see test/files/run/applydynamic_row.scala
+                  adapt(res0, EXPRmode, pt)
+                case _ => res0
+              }
 
               // if (stabilized.hasSymbol && stabilized.symbol.isConstructor && (mode & EXPRmode) != 0) {
               //   res.tpe = res.tpe.notNull
@@ -4120,27 +4128,32 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           }
         }
 
+        def isApplyDynamicName(name: Name) = (name == nme.updateDynamic) || (name == nme.selectDynamic) || (name == nme.applyDynamic)
+
         /** Returns `Some(t)` if `name` can be selected dynamically on `qual`, `None` if not.
          * `t` specifies the type to be passed to the applyDynamic/selectDynamic call (unless it is NoType)
          */
         def acceptsApplyDynamicWithType(qual: Tree, name: Name): Option[Type] =
-          if ((name == nme.selectDynamic) || (name == nme.applyDynamic)) None // don't selectDynamic selectDynamic
+          if (isApplyDynamicName(name)) None // don't selectDynamic selectDynamic
           else if (acceptsApplyDynamic(qual.tpe.widen)) Some(NoType) // do select dynamic at unknown type
           else
             rowSelectedMember(qual, name) map { case (pre, sym) => // == Some(tp) ==> do select dynamic and pass it `tp`, the type specified for `name` by the row `qual`
               pre.memberType(sym).finalResultType
             }
 
-        object ApplyApplyDynamic {
+        class DynamicApplicationExtractor(nameTest: Name => Boolean) {
           def unapply(tree: Tree) = tree match {
-            case Apply(TypeApply(Select(qual, nme.applyDynamic), _), List(Literal(Constant(name)))) => Some((qual, name))
-            case Apply(Select(qual, nme.applyDynamic), List(Literal(Constant(name)))) => Some((qual, name))
-            case Apply(Ident(nme.applyDynamic), List(Literal(Constant(name)))) => Some((EmptyTree, name))
+            case Apply(TypeApply(Select(qual, oper), _), List(Literal(Constant(name)))) if nameTest(oper) => Some((qual, name))
+            case Apply(Select(qual, oper), List(Literal(Constant(name)))) if nameTest(oper) => Some((qual, name))
+            case Apply(Ident(oper), List(Literal(Constant(name)))) if nameTest(oper) => Some((EmptyTree, name))
             case _ => None
           }
         }
+        object DynamicUpdate extends DynamicApplicationExtractor(_ == nme.updateDynamic)
+        object DynamicApplication extends DynamicApplicationExtractor(isApplyDynamicName)
+
         def isDynamicallyUpdatable(tree: Tree) = tree match {
-          case ApplyApplyDynamic(qual, name) =>
+          case DynamicUpdate(qual, name) =>
             rowSelectedMember(qual, name.toString.toTermName) match {
               case Some((pre, sym)) =>
                 pre.member(nme.getterToSetter(sym.name)) != NoSymbol // but does it have a setter? can't use sym.accessed.isMutable since sym.accessed does not exist
@@ -4154,8 +4167,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
          *
          * foo.field           ~~> foo.selectDynamic("field")                  -- BYVALmode
          * foo.method("blah")  ~~> foo.applyDynamic("method")("blah")          -- FUNmode
-         * foo.varia = 10      ~~> foo.applyDynamic("varia").update(10)        -- LHSmode
          * foo.arr(10) = 13    ~~> foo.applyDynamic("method").update(10, 13)   -- QUALmode
+         * foo.varia = 10      ~~> foo.updateDynamic("varia")(10)              -- LHSmode
          *
          * what if we want foo.field == foo.selectDynamic("field") == 1, but `foo.field = 10` == `foo.selectDynamic("field").update(10)` == ()
          * what would the signature for selectDynamic be? (hint: it needs to depend on whether an update call is coming or not)
@@ -4168,10 +4181,10 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
          *  - simplest solution: have two method calls
          *
          */
-        def mkInvoke(qual: Tree, name: Name, onlySelect: Boolean): Option[Tree] = {
+        def mkInvoke(qual: Tree, name: Name, applyOrUpdateFollows: Boolean, lhsOfStraightAssign: Boolean): Option[Tree] = {
           def invocation(tp: Type): Tree = {
-            val select  = if(onlySelect) Select(qual, nme.selectDynamic) else Select(qual, nme.applyDynamic)
-            val typeApp = if (tp == NoType) select else TypeApply(select, List(TypeTree(tp))) // tp != NoType ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
+            val oper  = if(lhsOfStraightAssign) nme.updateDynamic else if(applyOrUpdateFollows) nme.applyDynamic else nme.selectDynamic
+            val typeApp = if (tp == NoType) Select(qual, oper) else TypeApply(Select(qual, oper), List(TypeTree(tp))) // tp != NoType ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
             val appliedSelect = Apply(typeApp, List(Literal(Constant(name.decode))))
 
             atPos(qual.pos)(appliedSelect)
@@ -4243,8 +4256,11 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               case _ => false
             })
           // println("dyna: "+ (qual, name, modeString(mode), applyOrUpdateFollows, tree, context.tree))
-          dyna.mkInvoke(qual, name, !applyOrUpdateFollows) match {
-            case Some(invocation) => 
+          dyna.mkInvoke(qual,
+                        name,
+                        applyOrUpdateFollows,
+                        lhsOfStraightAssign = ((mode & (LHSmode | QUALmode)) == LHSmode)) match {
+            case Some(invocation) =>
               return typed1(invocation, mode, pt)
             case _ =>
           }

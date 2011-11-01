@@ -2,3 +2,4 @@ select field
 apply method(blah)
 apply.update arr(10,13)
 update varia to 10
+apply method(blah,blah) : java.lang.String

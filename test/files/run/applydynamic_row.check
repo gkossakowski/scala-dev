@@ -1,5 +1,5 @@
-select field
+select field : Int
 1
-select fun
+select fun : scala.Function1[Int, Int]
 2
 update varia to 10 : Int

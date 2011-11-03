@@ -1,10 +1,8 @@
 object Test extends App {
   trait Rep[x] {
     def selectDynamic[T](n: String): Rep[T] = error("")
-    def applyDynamic[T](n: String) = new Selector(n)
-    class Selector(n: String) {
-      def update(args: Any*) = error("")
-    }
+    def applyDynamic[T](n: String) = selectDynamic(n)
+    def updateDynamic[T](n: String)(rhs: T) = error("")
   }
 
   // representation of a statically-known constant
@@ -40,9 +38,6 @@ object Test extends App {
   println(foo.xx)
 
   (new Dynamic {
-    def applyDynamic(n: String) = new Selector(n)
-    class Selector(n: String) {
-      def update(args: Any*) = error("")
-    }
+    def updateDynamic(n: String)(rhs: Any) = error("")
   }).notInARow = 123 // make sure the regular applyDynamic (on targets of type Dynamic works too)
 }

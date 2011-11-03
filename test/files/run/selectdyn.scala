@@ -9,6 +9,7 @@ class Foo extends Dynamic {
   def selectDynamic(name: String) = println(Foo.this  + "." + name)
   // called if there's more to come after foo.applyDynamic("bar") -- apply or update
   def applyDynamic(name: String) = new Selector(name)
+  def updateDynamic(name: String)(rhs: Any) = println(Foo.this + "." +  name  +" = "+ rhs)
 
   class Selector(name: String) {
     def apply(args: Any*) = println(Foo.this  + "." + name + args.mkString("(", ", ", ")"))
@@ -32,7 +33,7 @@ object Test extends App {
   foo.field                 // foo.selectDynamic("field")
 
 // else if LHSmode
-  foo.varia = 10            // foo.applyDynamic("varia").update(10)
+  foo.varia = 10            // foo.updateDynamic("varia")(10)
 
 // else if QUALmode
   foo.arr(10) = 13          // foo.applyDynamic("method").update(10, 13)

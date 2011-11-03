@@ -1277,7 +1277,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             if (context.unit.source.file == psym.sourceFile || isValueClass(context.owner))
               psym addChild context.owner
             else
-              error(parent.pos, "illegal inheritance from sealed "+psym+": " + context.unit.source.file + " != " + psym.sourceFile)
+              error(parent.pos, "illegal inheritance from sealed "+psym+": " + context.unit.source.file.canonicalPath + " != " + psym.sourceFile.canonicalPath)
           }
           if (!(selfType <:< parent.tpe.typeOfThis) && 
               !phase.erasedTypes &&     
@@ -2005,7 +2005,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
 //        }
         var body = typed(fun.body, respt)
         val formals = vparamSyms map (_.tpe)
-        val restpe = packedType(body, fun.symbol).deconst
+        val restpe = packedType(body, fun.symbol).deconst.resultType
         val funtpe = typeRef(clazz.tpe.prefix, clazz, formals :+ restpe)
 //        body = checkNoEscaping.locals(context.scope, restpe, body)
         val fun1 = treeCopy.Function(fun, vparams, body).setType(funtpe)
@@ -2885,7 +2885,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       def isLocal(sym: Symbol): Boolean =
         if (sym == NoSymbol || sym.isRefinementClass || sym.isLocalDummy) false
         else if (owner == NoSymbol) tree exists (defines(_, sym))
-        else containsDef(owner, sym) || isRawParameter(sym)
+        else containsDef(owner, sym) || isRawParameter(sym) || ((sym hasFlag EXISTENTIAL) && (sym hasFlag CAPTURED)) // todo refine this
       def containsLocal(tp: Type): Boolean = 
         tp exists (t => isLocal(t.typeSymbol) || isLocal(t.termSymbol))
       val normalizeLocals = new TypeMap {
@@ -3319,10 +3319,10 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           }}
 
         val tp = tpt1.tpe
-        val sym = tp.typeSymbol
+        val sym = tp.typeSymbol.initialize
         if (!allowAbstract && (sym.isAbstractType || sym.hasAbstractFlag))
           error(tree.pos, sym + " is abstract; cannot be instantiated")
-        else if (!(  tp == sym.initialize.thisSym.tpe // when there's no explicit self type -- with (#3612) or without self variable
+        else if (!(  tp == sym.thisSym.tpe // when there's no explicit self type -- with (#3612) or without self variable
                      // sym.thisSym.tpe == tp.typeOfThis (except for objects)
                   || narrowRhs(tp) <:< tp.typeOfThis
                   || phase.erasedTypes

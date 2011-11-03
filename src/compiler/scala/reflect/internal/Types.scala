@@ -559,12 +559,20 @@ trait Types extends api.Types { self: SymbolTable =>
      */
     def asSeenFrom(pre: Type, clazz: Symbol): Type =
       if (isTrivial || phase.erasedTypes && pre.typeSymbol != ArrayClass) this
-      else {
+      else {       
+//        scala.tools.nsc.util.trace.when(pre.isInstanceOf[ExistentialType])("X "+this+".asSeenfrom("+pre+","+clazz+" = ") {
         incCounter(asSeenFromCount)
         val start = startTimer(asSeenFromNanos)
         val m = new AsSeenFromMap(pre.normalize, clazz)
         val tp = m apply this
-        val result = existentialAbstraction(m.capturedParams, tp)
+        val tp1 = existentialAbstraction(m.capturedParams, tp)
+        val result: Type = 
+          if (m.capturedSkolems.isEmpty) tp1 
+          else {
+            val captured = cloneSymbols(m.capturedSkolems)
+            captured foreach (_ setFlag CAPTURED)
+            tp1.substSym(m.capturedSkolems, captured)
+          }
         stopTimer(asSeenFromNanos, start)
         result
       }
@@ -3342,12 +3350,16 @@ A type's typeSymbol should never be inspected directly.
       case TypeRef(pre, sym, args) =>
         val pre1 = this(pre)
         //val args1 = args mapConserve this(_)
-        val args1 = if (args.isEmpty) args
-                    else {
-                      val tparams = sym.typeParams
-                      if (tparams.isEmpty) args
-                      else mapOverArgs(args, tparams)
-                    }
+        val args1 = 
+          if (args.isEmpty) 
+            args
+          else if (variance == 0) // fast & safe path: don't need to look at typeparams
+            args mapConserve this
+          else {
+            val tparams = sym.typeParams
+            if (tparams.isEmpty) args
+            else mapOverArgs(args, tparams)
+          }
         if ((pre1 eq pre) && (args1 eq args)) tp
         else copyTypeRef(tp, pre1, coevolveSym(pre, pre1, sym), args1) 
       case ThisType(_) => tp
@@ -3394,7 +3406,7 @@ A type's typeSymbol should never be inspected directly.
         if (bounds1 eq bounds) tp
         else BoundedWildcardType(bounds1.asInstanceOf[TypeBounds])
       case rtp @ RefinedType(parents, decls) =>
-        val parents1 = parents mapConserve (this)
+        val parents1 = parents mapConserve this
         val decls1 = mapOver(decls)
         //if ((parents1 eq parents) && (decls1 eq decls)) tp
         //else refinementOfClass(tp.typeSymbol, parents1, decls1)
@@ -3441,7 +3453,7 @@ A type's typeSymbol should never be inspected directly.
         // throw new Error("mapOver inapplicable for " + tp);
     }
 
-    def mapOverArgs(args: List[Type], tparams: List[Symbol]): List[Type] = 
+    protected final def mapOverArgs(args: List[Type], tparams: List[Symbol]): List[Type] = 
       map2Conserve(args, tparams) { (arg, tparam) =>
         val v = variance
         if (tparam.isContravariant) variance = -variance
@@ -3528,7 +3540,7 @@ A type's typeSymbol should never be inspected directly.
       }
     }
   }
-
+  
   abstract class TypeTraverser extends TypeMap {
     def traverse(tp: Type): Unit
     def apply(tp: Type): Type = { traverse(tp); tp }
@@ -3602,7 +3614,8 @@ A type's typeSymbol should never be inspected directly.
 
   /** A map to compute the asSeenFrom method  */
   class AsSeenFromMap(pre: Type, clazz: Symbol) extends TypeMap with KeepOnlyTypeConstraints {
-    var capturedParams: List[Symbol] = List() 
+    var capturedSkolems: List[Symbol] = List() 
+    var capturedParams: List[Symbol] = List()
 
     override def mapOver(tree: Tree, giveup: ()=>Nothing): Tree = {
       object annotationArgRewriter extends TypeMapTransformer {
@@ -3675,7 +3688,7 @@ A type's typeSymbol should never be inspected directly.
                 pre1
               }
             } else {
-              toPrefix(base(pre, clazz).prefix, clazz.owner);
+              toPrefix(base(pre, clazz).prefix, clazz.owner)
             }
           toPrefix(pre, clazz)
         case SingleType(pre, sym) =>
@@ -3748,7 +3761,7 @@ A type's typeSymbol should never be inspected directly.
                         " gets applied to arguments "+baseargs.mkString("[",",","]")+", phase = "+phase)
                     }
                   case ExistentialType(tparams, qtpe) =>
-                    capturedParams = capturedParams union tparams
+                    capturedSkolems = capturedSkolems union tparams
                     toInstance(qtpe, clazz)
                   case t =>
                     throwError

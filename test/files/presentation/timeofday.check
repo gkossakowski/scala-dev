@@ -96,5 +96,3 @@ askHyperlinkPos for `hours` at (33,11) timeofday.scala
 ================================================================================
 [response] found askHyperlinkPos for `hours` at (10,9) timeofday.scala
 ================================================================================
-[timeofday.scala]: exception during background compile: scala.tools.nsc.interactive.ShutdownReq$
-[timeofday.scala] marking unit as crashed (crashedFiles: Set(/Users/adriaan/git/scala-dev/test/files/presentation/timeofday/src/timeofday.scala))

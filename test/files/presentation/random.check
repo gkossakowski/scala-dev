@@ -25,4 +25,3 @@ askType at Random.scala(26,12)
 [response] askTypeAt at (26,12)
 _
 ================================================================================
-[Random.scala]: exception during background compile: scala.tools.nsc.interactive.ShutdownReq$

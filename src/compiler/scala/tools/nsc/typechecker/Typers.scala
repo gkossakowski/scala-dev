@@ -2230,67 +2230,99 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
     }
 
+    // @requires fun.hasSymbol && fun.symbol.isOverloaded
+    @inline
+    private def filterInapplicableOverloads(fun: Tree, args: List[Tree], pt: Type): Symbol = {
+      // remove alternatives with wrong number of parameters without looking at types.
+      // less expensive than including them in inferMethodAlternatvie (see below).
+      def shapeType(arg: Tree): Type = arg match {
+        case Function(vparams, body) =>
+          functionType(vparams map (vparam => AnyClass.tpe), shapeType(body))
+        case AssignOrNamedArg(Ident(name), rhs) =>
+          NamedType(name, shapeType(rhs))
+        case _ =>
+          NothingClass.tpe
+      }
+      val argtypes = args map shapeType
+      val pre = fun.symbol.tpe.prefix
+
+      var sym = fun.symbol filter { alt =>
+        // must use pt as expected type, not WildcardType (a tempting quick fix to #2665)
+        // now fixed by using isWeaklyCompatible in exprTypeArgs
+        // TODO: understand why exactly -- some types were not inferred anymore (`ant clean quick.bin` failed)
+        // (I had expected inferMethodAlternative to pick up the slack introduced by using WildcardType here)
+        isApplicableSafe(context.undetparams, followApply(pre.memberType(alt)), argtypes, pt)
+      }
+      if (sym.isOverloaded) {
+        val sym1 = sym filter (alt => {
+          // eliminate functions that would result from tupling transforms
+          // keeps alternatives with repeated params
+          hasExactlyNumParams(followApply(alt.tpe), argtypes.length) ||
+          // also keep alts which define at least one default
+          alt.tpe.paramss.exists(_.exists(_.hasDefault))
+        })
+        if (sym1 != NoSymbol) sym = sym1
+      }
+
+      sym
+    }
+
+    @inline
+    private def overloadedArgs(fun: Tree, args: List[Tree], mode: Int) = {
+      val undetparams = context.extractUndetparams()
+
+      val argtpes = new ListBuffer[Type]
+      val amode = forArgMode(fun, mode)
+      val args1 = args map {
+        case arg @ AssignOrNamedArg(Ident(name), rhs) =>
+          // named args: only type the righthand sides ("unknown identifier" errors otherwise)
+          val rhs1 = typedArg(rhs, amode, BYVALmode, WildcardType)
+          argtpes += NamedType(name, rhs1.tpe.deconst)
+          // the assign is untyped; that's ok because we call doTypedApply
+          atPos(arg.pos) { new AssignOrNamedArg(arg.lhs , rhs1) }
+        case arg =>
+          val arg1 = typedArg(arg, amode, BYVALmode, WildcardType)
+          argtpes += arg1.tpe.deconst
+          arg1
+      }
+
+      context.undetparams = undetparams
+      (args1, argtpes.toList)
+    }
+
+    // factored out so that un-virtualization can figure out which symbol will be picked by doTypedApply,
+    // without doing a full doTypedApply
+    private def applicableOverloads(fun: Tree, args: List[Tree], mode: Int, pt: Type): List[Symbol] =
+      if (fun.hasSymbol && fun.symbol.isOverloaded) {
+        val pre = fun.symbol.tpe.prefix
+        val sym = filterInapplicableOverloads(fun, args, pt)
+        val funTpe = pre.memberType(sym)
+        funTpe match {
+          case OverloadedType(pre, alts) =>
+            val (_, argtpes) = overloadedArgs(fun, args, mode)
+            collectMethodAlternatives(funTpe, sym, context.undetparams, argtpes, pt, varArgsOnly = treeInfo.isWildcardStarArgList(args))
+          case _ =>
+            List(sym)
+        }
+      } else List(fun.symbol)
+
     def doTypedApply(tree: Tree, fun0: Tree, args: List[Tree], mode: Int, pt: Type): Tree = {
       // TODO_NMT: check the assumption that args nonEmpty
       def errTree = setError(treeCopy.Apply(tree, fun0, args))
       def errorTree(msg: String) = { error(tree.pos, msg); errTree }
-      
+
       var fun = fun0
       if (fun.hasSymbol && fun.symbol.isOverloaded) {
-        // remove alternatives with wrong number of parameters without looking at types.
-        // less expensive than including them in inferMethodAlternatvie (see below).
-        def shapeType(arg: Tree): Type = arg match {
-          case Function(vparams, body) =>
-            functionType(vparams map (vparam => AnyClass.tpe), shapeType(body))
-          case AssignOrNamedArg(Ident(name), rhs) =>
-            NamedType(name, shapeType(rhs))
-          case _ =>
-            NothingClass.tpe
-        }
-        val argtypes = args map shapeType
         val pre = fun.symbol.tpe.prefix
-
-        var sym = fun.symbol filter { alt =>
-          // must use pt as expected type, not WildcardType (a tempting quick fix to #2665)
-          // now fixed by using isWeaklyCompatible in exprTypeArgs
-          // TODO: understand why exactly -- some types were not inferred anymore (`ant clean quick.bin` failed)
-          // (I had expected inferMethodAlternative to pick up the slack introduced by using WildcardType here)
-          isApplicableSafe(context.undetparams, followApply(pre.memberType(alt)), argtypes, pt)
-        }
-        if (sym.isOverloaded) {
-          val sym1 = sym filter (alt => {
-            // eliminate functions that would result from tupling transforms
-            // keeps alternatives with repeated params
-            hasExactlyNumParams(followApply(alt.tpe), argtypes.length) ||
-            // also keep alts which define at least one default
-            alt.tpe.paramss.exists(_.exists(_.hasDefault))
-          })
-          if (sym1 != NoSymbol) sym = sym1
-        }
+        val sym = filterInapplicableOverloads(fun, args, pt)
         if (sym != NoSymbol)
           fun = adapt(fun setSymbol sym setType pre.memberType(sym), forFunMode(mode), WildcardType)
       }
-      
+
       fun.tpe match {
         case OverloadedType(pre, alts) =>
-          val undetparams = context.extractUndetparams()
-
-          val argtpes = new ListBuffer[Type]
-          val amode = forArgMode(fun, mode)
-          val args1 = args map {
-            case arg @ AssignOrNamedArg(Ident(name), rhs) =>
-              // named args: only type the righthand sides ("unknown identifier" errors otherwise)
-              val rhs1 = typedArg(rhs, amode, BYVALmode, WildcardType)
-              argtpes += NamedType(name, rhs1.tpe.deconst)
-              // the assign is untyped; that's ok because we call doTypedApply
-              atPos(arg.pos) { new AssignOrNamedArg(arg.lhs , rhs1) }
-            case arg =>
-              val arg1 = typedArg(arg, amode, BYVALmode, WildcardType)
-              argtpes += arg1.tpe.deconst
-              arg1
-          }
-          context.undetparams = undetparams
-          inferMethodAlternative(fun, undetparams, argtpes.toList, pt, varArgsOnly = treeInfo.isWildcardStarArgList(args))
+          val (args1, argtpes) = overloadedArgs(fun, args, mode)
+          inferMethodAlternative(fun, context.undetparams, argtpes, pt, varArgsOnly = treeInfo.isWildcardStarArgList(args))
           doTypedApply(tree, adapt(fun, forFunMode(mode), WildcardType), args1, mode, pt)
 
         case mt @ MethodType(params, _) =>

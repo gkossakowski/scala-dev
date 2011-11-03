@@ -1800,6 +1800,43 @@ trait Infer {
       case _ =>
     }
 
+    def collectMethodAlternatives(funTpe: Type, funSym: Symbol, undetparams: List[Symbol], argtpes: List[Type], pt0: Type, varArgsOnly: Boolean = false): List[Symbol] =
+      funTpe match {
+        case OverloadedType(pre, alts) =>
+          val pt = if (pt0.typeSymbol == UnitClass) WildcardType else pt0
+          tryTwiceRes {
+            debuglog("find method alt "+ funSym +" with alternatives "+
+                  (alts map pre.memberType) +", argtpes = "+ argtpes +", pt = "+ pt)
+
+            val applicable = resolveOverloadedMethod(argtpes, {
+              alts filter { alt =>
+                // TODO: this will need to be re-written once we substitute throwing exceptions
+                // with generating error trees. We wrap this applicability in try/catch because of #4457.
+                wrapTypeError(isApplicable(undetparams, followApply(pre.memberType(alt)), argtpes, pt)) &&
+                (!varArgsOnly || isVarArgsList(alt.tpe.params))
+              }
+            })
+
+            def improves(sym1: Symbol, sym2: Symbol) = {
+              // util.trace("improve "+sym1+sym1.locationString+" on "+sym2+sym2.locationString)
+              sym2 == NoSymbol || sym2.isError || sym2.hasAnnotation(BridgeClass) ||
+              isStrictlyMoreSpecific(followApply(pre.memberType(sym1)),
+                                     followApply(pre.memberType(sym2)), sym1, sym2)
+            }
+
+            val best = ((NoSymbol: Symbol) /: applicable) {
+                (best, alt) => if (improves(alt, best)) alt else best
+            }
+            val competing = applicable.dropWhile(alt => best == alt || improves(best, alt))
+
+            if (best != NoSymbol) best :: competing
+            else if (pt != WildcardType) collectMethodAlternatives(funTpe, funSym, undetparams, argtpes, WildcardType)
+            else Nil
+          }
+        case _ =>
+          List(funSym)
+      }
+
     /** Try inference twice, once without views and once with views,
      *  unless views are already disabled.
      *
@@ -1817,6 +1854,24 @@ trait Infer {
             infer
         }
         context.reportGeneralErrors = reportGeneralErrors
+      }
+      else infer
+    }
+
+    def tryTwiceRes[T](infer: => T): T = {
+      if (context.implicitsEnabled) {
+        val reportGeneralErrors = context.reportGeneralErrors
+        context.reportGeneralErrors = false
+        val res =
+          try context.withImplicitsDisabled(infer)
+          catch {
+            case ex: CyclicReference  => throw ex
+            case ex: TypeError        =>
+              context.reportGeneralErrors = reportGeneralErrors
+              infer
+          }
+        context.reportGeneralErrors = reportGeneralErrors
+        res
       }
       else infer
     }

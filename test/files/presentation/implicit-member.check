@@ -39,4 +39,3 @@ retrieved 38 members
 `value selfAny`
 `value xImplicit.type`
 ================================================================================
-[ImplicitMember.scala]: exception during background compile: scala.tools.nsc.interactive.ShutdownReq$

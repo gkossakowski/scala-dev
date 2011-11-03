@@ -3898,17 +3898,35 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               }
 
               incCounter(typedApplyCount)
-
-              // we need to keep the un-typed args around to un-virtualize (see funUnVirt)
-              // we can't decide whether to un-virtualize before typing the application, since we don't know which overload will be picked until then
-              // re-using the typed args in a different position is a no-go, and resetting the attributes isn't trivial either (implicit args etc)
-              val origArgs: List[Tree] = args map (_.duplicate)
-              // but let's try to avoid paying that price if we can help it (if none of the alternatives is in EmbeddedControls, we should be safe)
-              // val syms = if(fun1.symbol.info.isInstanceOf[OverloadedType]) fun1.symbol.alternatives else List(fun1.symbol)
-              // val origArgs: List[Tree] = if (syms exists (sym => (sym ne NoSymbol) && sym.owner == EmbeddedControlsClass)) args map (_.duplicate)
-              //   else null
-
               val stabilized = if (stableApplication) stabilizeFun(fun1, mode, pt) else fun1
+
+              /**
+               - need to do overload resolution to be sure whether we resolve to EmbeddedControls_XXX or not
+               - overload resolution is done in full by doTypedApply, but it is enough we pick the same symbol here
+                 (since that determines whether we un-virtualize or not)
+               - not all virtualized control structs type check as their corresponding method calls (the lub action in if-then-else generates incompatible types, but typedIf just assumes that type as its result, it doesn't check against expected types, typing method applications is more strict)
+                 --> can't have doTypedApply resolve overloading for us, must find symbol here... (that's why applicableOverloads was factored out of doTypedApply)
+              */
+              // don't waste time resolving the overload if we'll never end up un-virtualizing anyway
+              val mayUnVirtualizeOverloaded =
+                stabilized.hasSymbol && stabilized.symbol.isOverloaded && stabilized.symbol.info.isInstanceOf[OverloadedType] &&
+                (stabilized.symbol.filter(_.owner eq EmbeddedControlsClass) ne NoSymbol)
+
+              val syms =
+                if (mayUnVirtualizeOverloaded)
+                  applicableOverloads(stabilized, args, mode, pt)
+                else
+                  List(stabilized.symbol)
+              // println("overload resolution: "+(stabilized.symbol.isOverloaded, mightUnVirtualize, syms map (_.fullLocationString)))
+
+              // if there's more than one symbol left after overload resolution, doTypedApply is going to fail
+              // thus, don't attempt un-virtualization
+              if (syms.nonEmpty && syms.tail.isEmpty) {
+                val unvirt = unvirtualize(tree.pos, fun.pos, syms.head, args)
+                if (unvirt ne EmptyTree)
+                  return unvirt
+              }
+
               val useTry = (
                    !isPastTyper
                 && stabilized.isInstanceOf[Select]
@@ -3916,16 +3934,21 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 && ((stabilized.symbol eq null) || !stabilized.symbol.isConstructor)
                 && (mode & (EXPRmode | SNDTRYmode)) == EXPRmode
               )
-              val res0 =
-                if (useTry) tryTypedApply(stabilized, args)
-                else doTypedApply(tree, stabilized, args, mode, pt)
-              val res = res0 match {
-                case dyna.DynamicApplication(_, _) if isImplicitMethod(res0.tpe) =>
-                  // adapt in EXPRmode so that implicits will be resolved now,
-                  // before any chained apply/update's are called (to support def selectDynamic[T: Manifest])
-                  // see test/files/run/applydynamic_row.scala
-                  adapt(res0, EXPRmode, pt)
-                case _ => res0
+
+              val res = {
+                val res0 =
+                  if (useTry) tryTypedApply(stabilized, args)
+                  else doTypedApply(tree, stabilized, args, mode, pt)
+                assert(!(mayUnVirtualizeOverloaded && syms.nonEmpty) || res0.symbol == syms.head, "overload resolution changed"+ (syms map(_.fullLocationString), res0.symbol.fullLocationString))
+
+                res0 match {
+                  case dyna.DynamicApplication(_, _) if isImplicitMethod(res0.tpe) =>
+                    // adapt in EXPRmode so that implicits will be resolved now,
+                    // before any chained apply/update's are called (to support def selectDynamic[T: Manifest])
+                    // see test/files/run/applydynamic_row.scala
+                    adapt(res0, EXPRmode, pt)
+                  case _ => res0
+                }
               }
 
               // if (stabilized.hasSymbol && stabilized.symbol.isConstructor && (mode & EXPRmode) != 0) {
@@ -3936,51 +3959,13 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               //if (stabilized.hasSymbol && stabilized.symbol.name == nme.apply && stabilized.symbol.owner == ArrayClass) 
               // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
               // by calling ArrayClass.info here (or some other place before specialize).
-              val resCheckInit = if (stabilized.symbol == Array_apply) { 
+              if (stabilized.symbol == Array_apply) { 
                 val checked = gen.mkCheckInit(res)
                 // this check is needed to avoid infinite recursion in Duplicators
                 // (calling typed1 more than once for the same tree)
                 if (checked ne res) typed { atPos(tree.pos)(checked) }
                 else res
               } else res
-
-              // println("unvirt funsym: "+(fun1.symbol.ownerChain, resCheckInit.symbol.ownerChain))
-              // if we resolve to the methods in EmbeddedControls, undo rewrite (if we're not past typer yet)
-              // we do this after type checking the whole application to make sure the symbol we get is consistent with overload resolution etc.
-              // the symbol in fun1.symbol might be overloaded, in which case it is useless until after overload resolution (by xxxTypedApply)
-              def removeFunUndets() = context.undetparams = context.undetparams filterNot (_.owner eq fun1.symbol)
-              resCheckInit.symbol match {
-                case EmbeddedControls_ifThenElse =>
-                  removeFunUndets()
-                  val List(cond, t, e) = origArgs
-                  //TR FIXME
-                  // fail ---> new EmbeddedControls { def __ifThenElse[T](cond: Option[Boolean], thenp: Option[T], elsep: Option[T]): Option[T] = thenp; if (7 < 8) println("yo") }
-                  //println("-- calling typedIf with:")
-                  //println(cond.tpe + "//" + cond.getClass.getName + "//" + cond)
-                  typedIf(cond, t, e)
-                case EmbeddedControls_newVar =>
-                  removeFunUndets()
-                  val List(init) = origArgs
-                  typed1(init, mode, pt)
-                case EmbeddedControls_return =>
-                  // TODO: methods called __return but not identical to the one in EmbeddedControls
-                  // also need to check conformance to enclosing method's result type.
-                  val List(expr) = origArgs
-                  typedReturn(expr)
-                case EmbeddedControls_assign =>
-                  val List(lhs, rhs) = origArgs
-                  typedAssign(lhs, rhs)
-                case EmbeddedControls_equal =>
-                  val lhs = origArgs.head
-                  // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
-                  // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
-                  val rhs = origArgs.tail
-                  // I once thought that without resetAllAttrs for lhs and rhs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
-                  // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
-                  // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
-                  atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
-                case _ => resCheckInit
-              }
             case ex: TypeError =>
               fun match {
                 case Select(qual, name) 
@@ -4005,7 +3990,49 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           }
         }
       }
-    
+
+      def unvirtualize(pos: Position, funpos: Position, funsym: Symbol, origArgs: List[Tree]): Tree = {
+        // println("unvirt funsym: "+(fun1.symbol.ownerChain, resCheckInit.symbol.ownerChain))
+        // if we resolve to the methods in EmbeddedControls, undo rewrite (if we're not past typer yet)
+        // we do this after type checking the whole application to make sure the symbol we get is consistent with overload resolution etc.
+        // the symbol in fun1.symbol might be overloaded, in which case it is useless until after overload resolution (by xxxTypedApply)
+        def removeFunUndets() = context.undetparams = context.undetparams filterNot (_.owner eq funsym)
+        funsym match {
+          case EmbeddedControls_ifThenElse =>
+            removeFunUndets()
+            val List(cond, t, e) = origArgs
+            // println("if -- orig= "+(pt, cond, cond.tpe, t, t.tpe, e, e.tpe))
+            //TR FIXME
+            // fail ---> new EmbeddedControls { def __ifThenElse[T](cond: Option[Boolean], thenp: Option[T], elsep: Option[T]): Option[T] = thenp; if (7 < 8) println("yo") }
+            //println("-- calling typedIf with:")
+            //println(cond.tpe + "//" + cond.getClass.getName + "//" + cond)
+            typedIf(cond, t, e)
+          case EmbeddedControls_newVar =>
+            removeFunUndets()
+            val List(init) = origArgs
+            typed1(init, mode, pt)
+          case EmbeddedControls_return =>
+            // TODO: methods called __return but not identical to the one in EmbeddedControls
+            // also need to check conformance to enclosing method's result type.
+            val List(expr) = origArgs
+            typedReturn(expr)
+          case EmbeddedControls_assign =>
+            val List(lhs, rhs) = origArgs
+            typedAssign(lhs, rhs)
+          case EmbeddedControls_equal =>
+            val lhs = origArgs.head
+            // a == (b, c) is legal too, ya know -- we don't tuple when building the tree,
+            // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
+            val rhs = origArgs.tail
+            // I once thought that without resetAllAttrs for lhs and rhs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
+            // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
+            // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
+            atPos(pos)(typed(Apply(Select(lhs, nme.EQ) setPos funpos, rhs)))
+          case _ =>
+            EmptyTree
+        }
+      }
+
       def convertToAssignment(fun: Tree, qual: Tree, name: Name, args: List[Tree], ex: TypeError): Tree = {
         val prefix = name.subName(0, name.length - nme.EQL.length)
         def mkAssign(vble: Tree): Tree = 

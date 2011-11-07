@@ -225,24 +225,16 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   }
   
   def quietRun[T](code: String) = beQuietDuring(interpret(code))
-  
-  private def logAndDiscard[T](label: String, alt: => T): PartialFunction[Throwable, T] = {
-    case t =>
-      repldbg(label + ": " + unwrap(t))
-      repltrace(util.stackTraceString(unwrap(t)))
-
-      alt
-  }
 
   /** whether to bind the lastException variable */
   private var bindExceptions = true
   /** takes AnyRef because it may be binding a Throwable or an Exceptional */
-  private def withLastExceptionLock[T](body: => T): T = {
+  private def withLastExceptionLock[T](body: => T, alt: => T): T = {
     assert(bindExceptions, "withLastExceptionLock called incorrectly.")
     bindExceptions = false
 
     try     beQuietDuring(body)
-    catch   logAndDiscard("bindLastException", null.asInstanceOf[T])
+    catch   logAndDiscard("withLastExceptionLock", alt)
     finally bindExceptions = true
   }
   
@@ -310,6 +302,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       else                            new URLClassLoader(compilerClasspath, parentClassLoader)
 
     new AbstractFileClassLoader(virtualDirectory, parent) {
+      private[IMain] var traceClassLoading = isReplTrace
+      override protected def trace = traceClassLoading
+      
       /** Overridden here to try translating a simple name to the generated
        *  class name if the original attempt fails.  This method is used by
        *  getResourceAsStream as well as findClass.
@@ -641,6 +636,14 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
         interpret(line)
     }
   }
+  def directBind(name: String, boundType: String, value: Any): IR.Result = {
+    val result = bind(name, boundType, value)
+    if (result == IR.Success)
+      directlyBoundNames += name
+    result
+  }
+  def directBind(p: NamedParam): IR.Result                       = directBind(p.name, p.tpe, p.value)
+  def directBind[T: Manifest](name: String, value: T): IR.Result = directBind((name, value))
 
   def rebind(p: NamedParam): IR.Result = {
     val name     = p.name
@@ -664,10 +667,13 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
   /** Reset this interpreter, forgetting all user-specified requests. */
   def reset() {
-    virtualDirectory.clear()
+    clearExecutionWrapper()
     resetClassLoader()
     resetAllCreators()
     prevRequests.clear()
+    referencedNameMap.clear()
+    definedNameMap.clear()
+    virtualDirectory.clear()
   }
 
   /** This instance is no longer needed, so release any resources
@@ -711,17 +717,17 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
         throw t
 
       val unwrapped = unwrap(t)
-      withLastExceptionLock {
+      withLastExceptionLock[String]({
         if (opt.richExes) {
           val ex = new LineExceptional(unwrapped)
-          bind[Exceptional]("lastException", ex)
+          directBind[Exceptional]("lastException", ex)
           ex.contextHead + "\n(access lastException for the full trace)"
         }
         else {
-          bind[Throwable]("lastException", unwrapped)
+          directBind[Throwable]("lastException", unwrapped)
           util.stackTraceString(unwrapped)
         }
-      }
+      }, util.stackTraceString(unwrapped))
     }
 
     // TODO: split it out into a package object and a regular
@@ -735,8 +741,14 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     def evalPath  = pathTo(evalName)
     def printPath = pathTo(printName)
 
-    def call(name: String, args: Any*): AnyRef = 
-      evalMethod(name).invoke(evalClass, args.map(_.asInstanceOf[AnyRef]): _*)
+    def call(name: String, args: Any*): AnyRef = {
+      val m = evalMethod(name)
+      repldbg("Invoking: " + m)
+      if (args.nonEmpty)
+        repldbg("  with args: " + args.mkString(", "))
+
+      m.invoke(evalClass, args.map(_.asInstanceOf[AnyRef]): _*)
+    }
 
     def callEither(name: String, args: Any*): Either[Throwable, AnyRef] =
       try Right(call(name, args: _*))
@@ -1096,6 +1108,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   def definedTypes   = onlyTypes(allDefinedNames)
   def definedSymbols = prevRequests.toSet flatMap ((x: Request) => x.definedSymbols.values)
 
+  // Terms with user-given names (i.e. not res0 and not synthetic)
+  def namedDefinedTerms = definedTerms filterNot (x => isUserVarName("" + x) || directlyBoundNames(x))
+
   private def findName(name: Name) = definedSymbols find (_.name == name)
   
   private def missingOpt(op: => Symbol): Option[Symbol] =
@@ -1130,14 +1145,15 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   }
 
   /** the previous requests this interpreter has processed */
-  private lazy val prevRequests      = mutable.ListBuffer[Request]()
-  private lazy val referencedNameMap = mutable.Map[Name, Request]()
-  private lazy val definedNameMap    = mutable.Map[Name, Request]()
-  protected def prevRequestList      = prevRequests.toList
-  private def allHandlers            = prevRequestList flatMap (_.handlers)
-  def allSeenTypes                   = prevRequestList flatMap (_.typeOf.values.toList) distinct
-  def allImplicits                   = allHandlers filter (_.definesImplicit) flatMap (_.definedNames)
-  def importHandlers                 = allHandlers collect { case x: ImportHandler => x }
+  private lazy val prevRequests       = mutable.ListBuffer[Request]()
+  private lazy val referencedNameMap  = mutable.Map[Name, Request]()
+  private lazy val definedNameMap     = mutable.Map[Name, Request]()
+  private lazy val directlyBoundNames = mutable.Set[Name]()
+  protected def prevRequestList       = prevRequests.toList
+  private def allHandlers             = prevRequestList flatMap (_.handlers)
+  def allSeenTypes                    = prevRequestList flatMap (_.typeOf.values.toList) distinct
+  def allImplicits                    = allHandlers filter (_.definesImplicit) flatMap (_.definedNames)
+  def importHandlers                  = allHandlers collect { case x: ImportHandler => x }
 
   def visibleTermNames: List[Name] = definedTerms ++ importedTerms distinct
 

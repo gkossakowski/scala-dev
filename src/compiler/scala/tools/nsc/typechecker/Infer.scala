@@ -446,6 +446,15 @@ trait Infer {
      *  to a final true or false.
      */
     private def isPlausiblySubType(tp1: Type, tp2: Type) = !isImpossibleSubType(tp1, tp2)
+    /*
+      @inline def isSubArg(t1: Type, t2: Type, variance: Int): Boolean =
+        (variance > 0 || isPlausiblySubType(t2, t1)) && (variance < 0 || isPlausiblySubType(t1, t2))
+      @inline def isPossibleSubArgs(tps1: List[Type], tps2: List[Type], tparams: List[Symbol]): Boolean = {
+        val res = corresponds3(tps1, tps2, tparams map (_.variance), isSubArg)
+        if(!res) println("impossibleSubArgs"+(tps1, tps2, tparams, res))
+        res
+      }
+    */
     private def isImpossibleSubType(tp1: Type, tp2: Type) = tp1.normalize.widen match {
       case tr1 @ TypeRef(_, sym1, _) =>
         // We can only rule out a subtype relationship if the left hand
@@ -1099,7 +1108,7 @@ trait Infer {
       //@M TODO: better place to check this? 
       //@M TODO: errors for getters & setters are reported separately
       val kindErrors = checkKindBounds(tparams, targs, pre, owner)
-           
+
       if (!kindErrors.isEmpty) {
         if (targs contains WildcardType) ()
         else error(pos,

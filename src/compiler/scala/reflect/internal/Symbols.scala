@@ -870,8 +870,8 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       var cnt = 0 
       while (validTo == NoPeriod) {
         //if (settings.debug.value) System.out.println("completing " + this);//DEBUG
-        assert(infos ne null, this.name)
-        assert(infos.prev eq null, this.name)
+        assert(infos ne null, this.name+".infos eq null")
+        assert(infos.prev eq null, this.name+"infos.prev ne null")
         val tp = infos.info
         //if (settings.debug.value) System.out.println("completing " + this.rawname + tp.getClass());//debug
 
@@ -1233,7 +1233,8 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       this == NothingClass ||
       this == NullClass &&
       (that == AnyClass ||
-       that != NothingClass && (that isSubClass ObjectClass))
+       that != NothingClass && ((that isSubClass AnyRefClass) || 
+                                (that isSubClass ObjectClass)))
     )
     final def isNumericSubClass(that: Symbol): Boolean =
       definitions.isNumericSubClass(this, that)

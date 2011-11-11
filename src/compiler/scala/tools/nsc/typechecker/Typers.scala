@@ -611,7 +611,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
       if (tree.tpe.isInstanceOf[MethodType] && pre.isStable && sym.tpe.params.isEmpty &&
           (isStableContext(tree, mode, pt) || sym.isModule))
-        tree.setType(MethodType(List(), singleType(pre, sym)))
+        tree.setType(MethodType(List(), singleType(pre, sym))) // TODO: should this be a NullaryMethodType?
       else tree
     }
 
@@ -1350,8 +1350,20 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       assert(clazz != NoSymbol)
       reenterTypeParams(cdef.tparams)
       val tparams1 = cdef.tparams mapConserve (typedTypeDef)
-      val impl1 = newTyper(context.make(cdef.impl, clazz, new Scope))
-        .typedTemplate(cdef.impl, parentTypes(cdef.impl))
+
+      val implTyper = newTyper(context.make(cdef.impl, clazz, new Scope))
+      val impl1 =
+        // could looking at clazz.typeOfThis before typing the template cause spurious illegal cycle errors?
+        // OTOH, always typing silently and rethrowing if we're not going to reify causes other problems
+        if (clazz.isAnonymousClass && willReifyNew(clazz.typeOfThis))
+          implTyper.silent(_.typedTemplate(cdef.impl, parentTypes(cdef.impl)), false) match {
+            case t: Template   => t
+            case ex: TypeError => null // TODO: ensure clazz isn't used anywhere but in typedReifiedNew
+          }
+        else
+          implTyper.typedTemplate(cdef.impl, parentTypes(cdef.impl))
+      if(impl1 == null) return EmptyTree
+
       val impl2 = finishMethodSynthesis(impl1, clazz, context)
       if ((clazz != ClassfileAnnotationClass) &&
           (clazz isNonBottomSubClass ClassfileAnnotationClass))
@@ -3184,24 +3196,23 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val rhs1 = typed(rhs, EXPRmode | BYVALmode, lhs1.tpe)
           treeCopy.Assign(tree, lhs1, checkDead(rhs1)) setType UnitClass.tpe
         }
+        else if(dyna.isApplyDynamic(lhs1)) {
+          val rhs1 = typed(rhs, EXPRmode | BYVALmode, WildcardType)
+          typed1(Apply(Select(lhs1, nme.update), List(rhs1)), mode, pt)
+        }
         else fail
       }
 
       def typedIf(cond: Tree, thenp: Tree, elsep: Tree) = {
         val cond1 = checkDead(typed(cond, EXPRmode | BYVALmode, BooleanClass.tpe))
-        if (elsep.isEmpty) { // in the future, should be unnecessary
-          val thenp1 = typed(thenp, UnitClass.tpe)
-          treeCopy.If(tree, cond1, thenp1, elsep) setType thenp1.tpe
-        } else { 
-          var thenp1 = typed(thenp, pt)
-          var elsep1 = typed(elsep, pt)
-          val (owntype, needAdapt) = ptOrLub(List(thenp1.tpe, elsep1.tpe))
-          if (needAdapt) { //isNumericValueType(owntype)) {
-            thenp1 = adapt(thenp1, mode, owntype)
-            elsep1 = adapt(elsep1, mode, owntype)
-          }
-          treeCopy.If(tree, cond1, thenp1, elsep1) setType owntype
+        var thenp1 = typed(thenp, pt)
+        var elsep1 = typed(elsep, pt)
+        val (owntype, needAdapt) = ptOrLub(List(thenp1.tpe, elsep1.tpe))
+        if (needAdapt) { //isNumericValueType(owntype)) {
+          thenp1 = adapt(thenp1, mode, owntype)
+          elsep1 = adapt(elsep1, mode, owntype)
         }
+        treeCopy.If(tree, cond1, thenp1, elsep1) setType owntype
       }
 
       def typedMatch(tree: Tree, selector: Tree, cases: List[CaseDef]): Tree = {
@@ -3266,15 +3277,18 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         }
       }
 
-      def typedNew(tpt: Tree) = {
-        val tpt1 = {
+      def typedNew(tpt: Tree): Tree = {
+        val (allowAbstract, tpt1) = {
           val tpt0 = typedTypeConstructor(tpt)
-          checkClassType(tpt0, false, true)
-          if (tpt0.hasSymbol && !tpt0.symbol.typeParams.isEmpty) {
-            context.undetparams = cloneSymbols(tpt0.symbol.typeParams)
-            TypeTree().setOriginal(tpt0)
-                      .setType(appliedType(tpt0.tpe, context.undetparams map (_.tpeHK))) // @PP: tpeHK! #3343, #4018, #4347.
-          } else tpt0
+          if(willReifyNew(tpt0.tpe)) (true, tpt0)
+          else (false, {
+            checkClassType(tpt0, false, true)
+            if (tpt0.hasSymbol && !tpt0.symbol.typeParams.isEmpty) {
+              context.undetparams = cloneSymbols(tpt0.symbol.typeParams)
+              TypeTree().setOriginal(tpt0)
+                        .setType(appliedType(tpt0.tpe, context.undetparams map (_.tpeHK))) // @PP: tpeHK! #3343, #4018, #4347.
+            } else tpt0
+          })
         }
 
         /** If current tree <tree> appears in <val x(: T)? = <tree>>
@@ -3292,7 +3306,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
 
         val tp = tpt1.tpe
         val sym = tp.typeSymbol.initialize
-        if (sym.isAbstractType || sym.hasAbstractFlag)
+        if (!allowAbstract && (sym.isAbstractType || sym.hasAbstractFlag))
           error(tree.pos, sym + " is abstract; cannot be instantiated")
         else if (!(  tp == sym.thisSym.tpe // when there's no explicit self type -- with (#3612) or without self variable
                      // sym.thisSym.tpe == tp.typeOfThis (except for objects)
@@ -3304,6 +3318,220 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 tp.typeOfThis)
         }
         treeCopy.New(tree, tpt1).setType(tp)
+      }
+
+      def typedReifiedNew(tpt: Tree): Tree = {
+        val tp = tpt.tpe
+        val rowBaseTp = tp.baseType(EmbeddedControls_Row)
+        val repTycon = if(phase.erasedTypes) AnyClass.tpe else rowBaseTp.typeArgs(0) // TODO
+        val repSym = repTycon.typeSymbolDirect
+
+        // TODO: remove once r25161 from main repo has been merged
+        def elimAnonymousClass(t: Type) = t match {
+          case TypeRef(pre, clazz, List()) if clazz.isAnonymousClass =>
+            clazz.classBound.asSeenFrom(pre, clazz.owner)
+          case _ =>
+            t
+        }
+
+        object unrep extends TypeMap {
+          def apply(tp: Type) = mapOver(tp) match {
+            case TypeRef(pre, sym, List(tp)) if sym == repSym => tp
+            case tp => tp
+          }
+        }
+
+        val sym = tp.typeSymbol
+        val ClassInfoType(parents, defSyms, origClass) = sym.info
+
+        // if we filter out the getters, and leave in the backing fields, member lookup breaks (e.g. when doing a selectDynamic)
+        // and we get strange type errors... 
+        // found   : java.lang.Object with Row[Test.Rep]{val x: Int; val y: java.lang.String}
+        // required: Row[Test.Rep]{val x: Int; val y: String}
+        // to avoid duplicates, only retain methods
+        // the fields will only be used indirectly, since the corresponding ValDef holds the RHS with the information we're after
+        val structTp = {
+          val tp = refinedType(parents, origClass.owner)
+          val thistp = tp.typeSymbol.thisType
+          val oldsymbuf = new ListBuffer[Symbol]
+          val newsymbuf = new ListBuffer[Symbol]
+          for (sym <- defSyms) {
+            if (sym.isMethod && !sym.isConstructor) {
+              oldsymbuf += sym
+              val sym1 = sym.cloneSymbol(tp.typeSymbol)
+              sym1.resetFlag(PRIVATE | PROTECTED) // TODO: why is this necessary? this is the getter, which is supposed to be public unless specified otherwise by the user, right?
+              sym1.privateWithin = NoSymbol
+              newsymbuf += sym1
+            }
+          }
+          val oldsyms = oldsymbuf.toList
+          val newsyms = newsymbuf.toList
+          for (sym <- newsyms) {
+            addMember(thistp, tp, sym.setInfo(unrep(sym.info.substThis(origClass, thistp).substSym(oldsyms, newsyms))))
+          }
+          tp
+        }
+
+        val repStructTp = appliedType(repTycon, List(structTp))
+
+        // make tree for `(label, rhs)`
+        def mkArg(label: String, rhs: Tree) = gen.mkTuple(List(Literal(Constant(label)), rhs))
+
+        // make args -- have to locate the original classdef tree and its template for that, this is reallllly ugly....
+        val classDefTree = context.outer.tree
+        val templ = (classDefTree find { case x: Template => x.body.nonEmpty && (x.body.head.symbol ne NoSymbol) && x.body.head.symbol.owner == origClass case _ => false }).get.asInstanceOf[Template]
+
+        // untyped, but expected type (tpt) has been determined already
+        // for each symbol in the anonymous type's decls, find the corresponding definition in the template
+        // we're looking for the user-specified rhs, so can't disregard ValDef's and just look at DefDef's, as the rhs of the getter DefDef for a value x is just this.`x `
+        val statsUntyped = defSyms filter (!_.isConstructor) flatMap { sym =>
+          templ filter(_.symbol == sym) collect {
+            case d: ValOrDefDef if !d.symbol.isGetter => d
+          }
+        }
+
+        debuglog("[TRN] origClass: " + (origClass.info.decls, origClass.ownerChain))
+        debuglog("[TRN] statsUntyped: "+ statsUntyped.map (d => d.symbol))
+
+        // type the stats so that selections on the self-variable can be rewritten next
+        val statTyper = newTyper(context.make(templ, origClass, new Scope)) //.typedStats(statsUntyped.toList, templ.symbol)
+        if (templ.symbol == NoSymbol) templ setSymbol origClass.newLocalDummy(templ.pos)
+        val self1 = templ.self match {
+          case vd @ ValDef(mods, name, tpt, EmptyTree) =>
+            val tpt1 = 
+              checkNoEscaping.privates(
+                origClass.thisSym, 
+                treeCopy.TypeTree(tpt).setOriginal(tpt) setType vd.symbol.tpe)
+            treeCopy.ValDef(vd, mods, name, tpt1, EmptyTree) setType NoType
+        }
+        if (self1.name != nme.WILDCARD) statTyper.context.scope enter self1.symbol
+        enterSyms(context.make(templ, origClass, origClass.info.decls), templ.body) // statTyper.context.outer eq context
+
+        def toAccessed(sym: Symbol) = if(sym.isGetter) sym.accessed else sym
+
+        val statSyms = statsUntyped map (_.symbol) toSet
+        val selfName = "self".toTermName
+
+        val args = statsUntyped map { origDef: ValOrDefDef =>
+          // println("mutable? "+ (origDef, origDef.symbol, origDef.symbol.isVariable))
+
+          val funSym = origClass.owner.newValue(tree.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
+          val selfSym = funSym.newValueParameter(origDef.pos, selfName) setInfo repStructTp
+          // println("selfSym "+ selfSym)
+          val selfRef = Ident(selfName) setSymbol selfSym setType repStructTp
+          def selNameOnSelf(n: Name): Tree = Select(selfRef, n)
+          def selOnSelf(d: Symbol): Tree = selNameOnSelf(nme.getterName(d.name))
+
+          // println("def: "+ origDef)
+
+          // partially type origDef, only setting symbols 
+          origDef foreach { 
+            case tree@(This(_) | Ident(_) | Select(_, _)) =>
+              statTyper.silent(_.typed(tree, EXPRmode | BYVALmode, WildcardType), false) match {
+                case typedTree: Tree if (typedTree.symbol == origClass)
+                                     || statSyms(toAccessed(typedTree.symbol)) =>
+                  tree setSymbol typedTree.symbol
+                case _ =>
+              }
+            case _ =>
+          }
+
+          // refer to selfSym.name instead of This(origClass).name
+          object substSelf extends Transformer {
+            def apply(tree: Tree): Tree = transform(tree)
+            override def transform(tree: Tree): Tree = tree match {
+              case This(_) if tree.symbol == origClass =>
+                selfRef
+              case t@(Ident(_) | Select(_, _)) if statSyms(toAccessed(tree.symbol)) =>
+                selOnSelf(toAccessed(tree.symbol))
+              case _ =>
+                super.transform(tree)
+            }
+          }
+          object wrapInNewVar extends Transformer {
+            override def transform(t: Tree): Tree = {
+              t match {
+                case Apply(Ident(nme._newVar), List(rhs)) =>
+                  Apply(selNameOnSelf("__newVar".toTermName), List(rhs))
+                case _ =>
+                  super.transform(t)
+              }
+            }
+          }
+
+          val substedDefSelf = wrapInNewVar.transform(substSelf(origDef))
+          // println("substed "+ substedDefSelf)
+
+          
+          // debuglog("[TRN] substedDefSelf "+ substedDefSelf)
+          // treeBrowser browse substedDefSelf
+
+          // splice in the Rep[_]'ed expected type
+
+          // does tpt need to be typed? (if it was inferred, the .tpe has been set already, but if it was specified by the user, it may not have been typed yet)
+          if(origDef.tpt.tpe == null) // origDef.tpt setType statTyper.typedType(origDef.tpt).tpe
+            origDef.tpt setType statTyper.typed(origDef.duplicate, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef].tpt.tpe
+
+          val tptTpeMaybeRep = elimAnonymousClass(origDef.tpt.tpe)
+          val tptTpe = // done: baseType works when repSym.isAbstractType
+            if(tptTpeMaybeRep.baseType(repSym) == NoType) appliedType(repTycon, List(tptTpeMaybeRep)) // nope: no Rep wrapper yet, so add it
+            else tptTpeMaybeRep // was already in a Rep
+
+
+          val substedDef = substedDefSelf match {
+            case ValDef(mods, name, tp, rhs) => 
+              treeCopy.ValDef(origDef, mods, name, TypeTree(tptTpe), rhs)
+            case DefDef(mods, name, tparams, vparamss, tpt, rhs) => 
+              treeCopy.DefDef(origDef, mods, name, tparams, vparamss, TypeTree(tptTpe), rhs)
+          }
+
+          // treeBrowser browse substedDef
+          val typedDef = statTyper.typed(substedDef, EXPRmode | BYVALmode, WildcardType).asInstanceOf[ValOrDefDef]
+          val dupedRhs = typedDef.rhs.duplicate // DUPLICATE -- don't update old RHS
+          debuglog("[TRN] dupedRhs: "+ dupedRhs)
+
+          // the RHS is now owned by the symbol of the function we're wrapping around it in the arg
+          // update the owners of nested symbols
+          // if you mess up the owner structure, explicitouter blows up
+          new ChangeOwnerTraverser(typedDef.symbol, funSym).traverse(dupedRhs)
+
+          // create new symbols for the duplicated tree, tree.duplicate does not do this
+          // (without new symbols, you get weird errors in lambdaLift, because markFree unwittingly updates all trees that share a symbol)
+          // TODO: generalize to all DefTrees that introduce new symbols (nested objects will still not work in a Row...)
+          object newSyms extends Transformer {
+            override def transform(t: Tree): Tree = {
+              t match {
+                case f@Function(args, body) =>
+                  val newFunSym = t.symbol.cloneSymbol
+                  val argSyms = args map (_.symbol)
+                  val newArgSyms = args map {a => a.symbol = a.symbol.cloneSymbol(newFunSym); a.symbol}
+                  treeCopy.Function(f, args, (new TreeSymSubstituter(argSyms, newArgSyms))(body)) setSymbol newFunSym
+                case _ =>
+                  super.transform(t)
+              }
+            }
+          }
+          // println("before newSyms:")
+          // currentRun.trackerFactory.snapshot()
+          val rerootedRhs = newSyms.transform(dupedRhs)
+          // println("after newSyms:")
+          // currentRun.trackerFactory.snapshot()
+          // TODO: eta-expand rhs of method definition
+          mkArg(origDef.name.toString, Function(List(ValDef(selfSym)), rerootedRhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
+        }
+
+        debuglog("[TRN] (struct, rep, args)= "+ (structTp, repTycon, args mkString("(", ", ", ")")))
+        val newCall = Apply(Ident(nme._new) setPos tpt.pos, args.toList) setPos tree.pos
+        silent(_.typed1(newCall, mode, repStructTp), false) match {
+          case res: Tree => res
+          case ex =>
+            debuglog("[TRN] typedReifiedNew failed: "+ ex)
+            errorTree(tpt,
+              """|since %s <:< %s, reification was attempted,
+                 |but the result, `%s`, did not type check.
+                 |Probable cause: there is no suitable `__new` method in scope.
+                 |See the definition of `trait Row` in EmbeddedControls for details.""".stripMargin.format(tpt.tpe, rowBaseTp, newCall))
+        }
       }
 
       def typedEta(expr1: Tree): Tree = expr1.tpe match {
@@ -3413,8 +3641,222 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             setError(treeCopy.Apply(tree, fun, args))
         }
       }
-    
-      def typedApply(fun: Tree, args: List[Tree]) = {
+      
+      def typedApplyExternal(fun: Select, args: List[Tree], isApply: Boolean): Tree = {
+        val infixDebug = false //System.getProperty("infixVerbose") == "true"
+        
+        val Select(qual, name) = fun
+        val extname = "infix_" + name
+        if (infixDebug) println("contemplating " + mode.toHexString + "/" + fun.symbol + ": " + Apply(fun, args) + " ---> " + Apply(Ident(extname), qual::args) + " at " + fun.pos)
+
+        //println("fun.tpe: "+fun.tpe)
+        //println("qual.tpe: "+qual.tpe)
+
+        val enclClassTp = ThisType(context.enclClass.owner)
+        val withinProxyTrait = enclClassTp.baseClasses.contains(ProxyControlsClass)
+
+        val ealts = silent(_.typed(Ident(extname).setPos(fun.pos), forFunMode(mode), WildcardType), false, tree) match {
+          case ext: Tree =>
+            ext.symbol.alternatives.filter { s => 
+              s.isMethod && 
+              s.owner != EmbeddedControlsClass &&  // meths in embeddings trait are sentinels added by a typedApply further up the stack
+              ((context.enclMethod.tree eq null) || s != context.enclMethod.tree.symbol) // do not make an external method accessible through the operator within its own body (HACK ?)
+            }
+          case _ => Nil
+        }
+
+        val hasExternalMethods = !ealts.isEmpty
+
+        if (!hasExternalMethods && !withinProxyTrait)
+          return if (isApply) typedApply1(fun,args) else EmptyTree
+          
+/* from typedApply:
+          silent(_.typed(fun, funMode(mode), funpt),  
+                 if ((mode & EXPRmode) != 0) false else context.reportAmbiguousErrors,  
+                 if ((mode & EXPRmode) != 0) tree else context.tree)
+   from typed case Select (before typedSelect)
+          checkDead(typedQualifier(qual, mode))
+*/          
+          
+          val qual1 = if (isApply) silent(t => checkDead(t.typedQualifier(qual, forFunMode(mode))), false, tree) match {
+            case qual1: Tree => qual1
+            case ex: TypeError => 
+              reportTypeError(fun.pos, ex)
+              return setError(tree)
+          } else qual    // <--- t0218.scala
+
+          def doDefault() = {
+            if (isApply) typedApply1(treeCopy.Select(fun, qual1, name), args) // do default
+            else EmptyTree
+          }
+
+          //if (!ealts.isEmpty) 
+          
+          //println("fun1.tpe: "+fun1.tpe)
+          //println("qual1.tpe: "+qual1.tpe)
+          //
+          //println("normalize: "+qual1.tpe.normalize)
+          //println("widen: "+qual1.tpe.widen)
+          //
+          //println("typeSymbol: "+qual1.tpe.widen.typeSymbol)
+          
+          val generateLiftedAlts = withinProxyTrait && !qual1.isInstanceOf[This]
+          //println("generateLiftedAlts: " + generateLiftedAlts)
+          
+          if (!hasExternalMethods && !generateLiftedAlts)
+            return doDefault() // might have declared methods but no external methods
+
+          // ------------------------------------------------------------------------------
+          
+          val proxytc = if (withinProxyTrait) enclClassTp.memberType(enclClassTp.member(tpnme.TransparentProxy)) else NoType
+          //println("proxy: " + proxytc) // careful, must not access enclClassTp if it's *not* our marker
+
+          val qual1tp = qual1.tpe.widen
+
+          val isReceiverActuallyLifted = withinProxyTrait && (qual1tp.typeArgs.length == 1) && 
+              (qual1tp <:< TypeRef(proxytc.prefix, proxytc.typeSymbol, List(AnyClass.tpe)))
+          //println("isReceiverActuallyLifted: " + isReceiverActuallyLifted)
+
+          val ms = if (isReceiverActuallyLifted)
+            qual1tp.typeArgs(0).nonLocalMember(name)
+          else
+            member(qual1, name)
+            //println("found member: " + ms)
+
+          val dalts = ms.alternatives.filter(_.isMethod)
+          if (infixDebug) println("found declared alternatives: " + dalts + "/" + dalts.map(_.tpe))
+
+          if (!dalts.isEmpty) {
+            // both declared and external methods: temporarily add declared methods
+            // to EmbeddedControls, if lookup selects any of those => do default
+          
+            val installed = EmbeddedControlsClass.tpe.member(extname).alternatives
+          
+            def createExternalMethod(msym: Symbol, ttrans: Type => Type) = {
+              val sentinel = EmbeddedControlsClass.newMethod(extname).setPos(msym.pos)
+
+              val params1 = msym.tpe.params
+              val resultType = msym.tpe.finalResultType
+
+              // note: msym.owner.tpe is actually a type ref --> need to take .info to access its type parameters
+              val receiverTypePoly = msym.owner.info
+              
+              val receiverTypeParams = receiverTypePoly.typeParams.map(p => sentinel.newTypeParameter(p.pos, p.asInstanceOf[TypeSymbol].name).setInfo(p.info))
+              val methodTypeParams = msym.info.typeParams.map(p => sentinel.newTypeParameter(p.pos, p.asInstanceOf[TypeSymbol].name).setInfo(p.info))
+              val typeParams = methodTypeParams ::: receiverTypeParams
+              val receiverType = typeRef(NoPrefix, msym.owner, receiverTypeParams.map(_.tpe))
+
+              // TODO: types of arguments may depend on original class or method type params. Need to substitute those??
+          
+              val params2 = sentinel.newSyntheticValueParam(ttrans(receiverType)) :: 
+                      sentinel.newSyntheticValueParams(params1.map(s=>ttrans(s.tpe)))
+              if (typeParams.isEmpty)
+                sentinel.setInfo(MethodType(params2, ttrans(resultType)))
+              else
+                sentinel.setInfo(PolyType(typeParams, MethodType(params2, ttrans(resultType))))
+
+              installed.find { x => 
+                val z = x.tpe == sentinel.tpe
+                val z1 = x.tpe.toString == sentinel.tpe.toString
+                //println(x.tpe + "==" + sentinel.tpe +"? " + z + ", " + z1)
+                z1 // TODO: don't base comparison on strings
+              } match {
+                case Some(s) => 
+                  //println("re-using sentinel from outside")
+                  s
+                case None => 
+                  EmbeddedControlsClass.info.decls.enter(sentinel)
+              }
+            }
+          
+            val sentinelsPlain = for (msym <- dalts) yield createExternalMethod(msym, tp => tp)
+            val sentinelsLifted = if (!generateLiftedAlts) Nil else for (msym <- dalts) yield 
+              createExternalMethod(msym, tp => typeRef(proxytc.prefix, proxytc.typeSymbol, List(tp)))
+      
+            // PROBLEM: nesting. if arguments add the same sentinels, we have duplicates -> ambiguous error!
+            // check for existence first ...
+            
+            if (infixDebug) {
+              println("found external methods: " + ealts + "/" + ealts.map(_.tpe))
+
+              println("found existing sentinels: " + installed + "/" + installed.map(_.tpe))
+      
+              println("created plain sentinel methods: " + sentinelsPlain + "/" + sentinelsPlain.map(_.tpe))
+              println("created lifted sentinel methods: " + sentinelsLifted + "/" + sentinelsLifted.map(_.tpe))
+
+              println("trying "+Apply(Ident(extname), qual1::args))
+            }
+
+            val r = silent(_.typed(Apply(Ident(extname).setPos(fun.pos), qual1::args).setPos(tree.pos), mode, /*pt*/WildcardType), true, tree) // ambiguity is an error
+            for (s <- sentinelsPlain ::: sentinelsLifted if !installed.contains(s)) { // TODO: use diff instead of contains?
+              EmbeddedControlsClass.info.decls.unlink(s)
+              s.setInfo(NoType)
+              s.updateInfo(NoType)
+            }
+            r match { // TODO: tree might have been transformed!
+              case res: Tree if sentinelsPlain.contains(res.symbol) =>
+                // picked declared one --> do default (could short-circuit, but better be safe for now)
+                //println("picked sentinel method: " + res + " (tpe: "+res.tpe+" pt: "+pt+")")
+                doDefault()
+              case res: Tree if sentinelsLifted.contains(res.symbol) =>
+                // picked lifted one --> forward
+                //println("picked lifted method: " + res + " (tpe: "+res.tpe+" pt: "+pt+")")
+                // PROBLEM: result type can be Proxy[Nothing]
+                // use result.tpe as expected type 
+                assert(res.tpe <:< pt)
+                typed(Apply(Ident("__forward").setPos(fun.pos), qual1::Literal(Constant(name.toString))::args).setPos(tree.pos),
+                  mode, res.tpe).setType(res.tpe)
+              case res: Tree if ealts.contains(res.symbol) =>
+                // picked external one
+                //println("picked external method: " + res)
+                res
+              case res: Tree =>
+                // FIXME
+                // can't determine whether sentinel or external: probably the tree was transformed (e.g. {res; ()})
+                unit.warning(res.pos, "EMBEDDING: cannot resolve target method (sym="+res.symbol+"): " + res)
+                doDefault()
+              case ex: TypeError =>
+                //println("te checking " + Apply(Ident(extname), qual1::args) + " ("+mode+","+pt+")")
+                if (generateLiftedAlts) {
+                  // prevent default for now. output the error we got.
+                  // otherwise we'd report 'method not found' instead of 'type doesn't match'
+                  reportTypeError(fun.pos, ex)
+                  return setError(tree)
+                } else {
+                  // neither declared nor external methods match --> do default, look for implicits
+                  //println("exception typing fun/xxx " + ": " + ex)
+                  doDefault()
+                }
+            }
+
+          } else {
+            // no declared methods but have external ones
+            silent(_.typed(Apply(Ident(extname).setPos(fun.pos), qual1::args), mode, pt), false, tree) match { // ambiguity is an error
+              case res: Tree =>
+                // picked external method
+                //println("picked external method: " + res)
+                res
+              case ex: TypeError =>
+                // no external method matches --> do default, look for implicits
+                //println("exception typing xxx " + ": " + ex)
+                doDefault()
+            }
+          }
+      }
+      
+      
+      def typedApply(fun: Tree, args: List[Tree]): Tree = fun match {
+        case fun@Select(qual, name) if ((mode & EXPRmode) != 0) && 
+              !treeInfo.isSelfOrSuperConstrCall(fun) &&  // [this|super].<init>(...) -- don't intercept
+              !qual.isInstanceOf[New] &&  // TODO: applyExternal does not intercept constructor calls, right?
+              fun.symbol == NoSymbol && // unresolved, so far
+              phase.id <= currentRun.typerPhase.id => //!phase.erasedTypes =>
+          typedApplyExternal(fun, args, true)
+        case _ =>
+          typedApply1(fun, args)
+      }
+      
+      def typedApply1(fun: Tree, args: List[Tree]): Tree = {
         val stableApplication = (fun.symbol ne null) && fun.symbol.isMethod && fun.symbol.isStable
         if (stableApplication && isPatternMode) {
           // treat stable function applications f() as expressions.
@@ -3424,42 +3866,83 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val appStart = startTimer(failedApplyNanos)
           val opeqStart = startTimer(failedOpEqNanos)
           silent(_.typed(fun, forFunMode(mode), funpt),  
-                 if ((mode & EXPRmode) != 0) false else context.reportAmbiguousErrors,  
+                 if ((mode & EXPRmode) != 0) false else context.reportAmbiguousErrors,
                  if ((mode & EXPRmode) != 0) tree else context.tree) match {
             case fun1: Tree =>
-              val fun2 = if (stableApplication) stabilizeFun(fun1, mode, pt) else fun1
-              incCounter(typedApplyCount)
+              def removeFunUndets() =
+                context.undetparams = context.undetparams filterNot (_.owner eq fun1.symbol)
+
               def isImplicitMethod(tpe: Type) = tpe match {
                 case mt: MethodType => mt.isImplicit
                 case _ => false
               }
-              val useTry = (
-                   !isPastTyper
-                && fun2.isInstanceOf[Select]
-                && !isImplicitMethod(fun2.tpe)
-                && ((fun2.symbol eq null) || !fun2.symbol.isConstructor)
-                && (mode & (EXPRmode | SNDTRYmode)) == EXPRmode
-              )
-              val res =
-                if (useTry) tryTypedApply(fun2, args)
-                else doTypedApply(tree, fun2, args, mode, pt)
-                
-            /*
-              if (fun2.hasSymbol && fun2.symbol.isConstructor && (mode & EXPRmode) != 0) {
-                res.tpe = res.tpe.notNull
+
+              incCounter(typedApplyCount)
+
+              // if we resolve to the methods in EmbeddedControls, undo rewrite (if we're not past typer yet)
+              val funUnVirt = if(phase.id > currentRun.typerPhase.id) fun1 else fun1.symbol match {
+                case EmbeddedControls_ifThenElse =>
+                  removeFunUndets()
+                  val List(cond, t, e) = args
+                  //TR FIXME
+                  // fail ---> new EmbeddedControls { def __ifThenElse[T](cond: Option[Boolean], thenp: Option[T], elsep: Option[T]): Option[T] = thenp; if (7 < 8) println("yo") }
+                  //println("-- calling typedIf with:")
+                  //println(cond.tpe + "//" + cond.getClass.getName + "//" + cond)
+                  typedIf(cond, t, e)
+                case EmbeddedControls_newVar =>
+                  removeFunUndets()
+                  val List(init) = args
+                  typed1(init, mode, pt)
+                case EmbeddedControls_return =>
+                  // TODO: methods called __return but not identical to the one in EmbeddedControls
+                  // also need to check conformance to enclosing method's result type.
+                  val List(expr) = args
+                  typedReturn(expr)
+                case EmbeddedControls_assign =>
+                  val List(lhs, rhs) = args
+                  typedAssign(lhs, rhs)
+                case EmbeddedControls_equal =>
+                  val lhs = args.head
+                  // a == (b, c) is legal too, ya know -- we don't tuple when building the tree, 
+                  // as we can't (easily) undo the tupling when it turns out there was a valid == method (see t3736 in pos/ and neg/)
+                  val rhs = args.tail
+                  // I once thought that without resetAllAttrs for lhs and rhs, the compiler fails in lambdalift for code like `(List(1) map {case x => x}) == null`
+                  // this however no longer seems to be the case, and instead the reset is causing pattern-matcher generated code to fail
+                  // resetting symbols of its temporary variables makes it impossible to resolve them afterwards
+                  atPos(tree.pos)(typed(Apply(Select(lhs, nme.EQ) setPos fun.pos, rhs)))
+                case _ => fun1
               }
-              */
-              // TODO: In theory we should be able to call:
-              //if (fun2.hasSymbol && fun2.symbol.name == nme.apply && fun2.symbol.owner == ArrayClass) {
-              // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
-              // by calling ArrayClass.info here (or some other place before specialize).
-              if (fun2.symbol == Array_apply) { 
-                val checked = gen.mkCheckInit(res)
-                // this check is needed to avoid infinite recursion in Duplicators
-                // (calling typed1 more than once for the same tree)
-                if (checked ne res) typed { atPos(tree.pos)(checked) }
-                else res
-              } else res
+
+              if (funUnVirt ne fun1) funUnVirt
+              else {
+                val stabilized = if (stableApplication) stabilizeFun(fun1, mode, pt) else fun1
+                val useTry = (
+                     !isPastTyper
+                  && stabilized.isInstanceOf[Select]
+                  && !isImplicitMethod(stabilized.tpe)
+                  && ((stabilized.symbol eq null) || !stabilized.symbol.isConstructor)
+                  && (mode & (EXPRmode | SNDTRYmode)) == EXPRmode
+                )
+                val res =
+                  if (useTry) tryTypedApply(stabilized, args)
+                  else doTypedApply(tree, stabilized, args, mode, pt)
+
+                // if (stabilized.hasSymbol && stabilized.symbol.isConstructor && (mode & EXPRmode) != 0) {
+                //   res.tpe = res.tpe.notNull
+                // }
+
+                // TODO: In theory we should be able to call:
+                //if (stabilized.hasSymbol && stabilized.symbol.name == nme.apply && stabilized.symbol.owner == ArrayClass) 
+                // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
+                // by calling ArrayClass.info here (or some other place before specialize).
+                if (stabilized.symbol == Array_apply) { 
+                  val checked = gen.mkCheckInit(res)
+                  // this check is needed to avoid infinite recursion in Duplicators
+                  // (calling typed1 more than once for the same tree)
+                  if (checked ne res) typed { atPos(tree.pos)(checked) }
+                  else res
+                } else res
+              }
             case ex: TypeError =>
               fun match {
                 case Select(qual, name) 
@@ -3604,6 +4087,74 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         }
       }
 
+      object dyna {
+        @inline private def boolOpt(c: Boolean) = if(c) Some(()) else None
+        @inline private def listOpt[T](xs: List[T]) = xs match { case x :: Nil => Some(x) case _ => None }
+        @inline private def symOpt[T](sym: Symbol) = if(sym == NoSymbol) None else Some(sym) // TODO: handle overloading?
+
+        def acceptsApplyDynamic(tp: Type) = settings.Xexperimental.value && (tp.typeSymbol isNonBottomSubClass DynamicClass)
+        def isApplyDynamic(tree: Tree) = treeInfo.methPart(tree) match {
+          case Select(qual, nme.applyDynamic) if acceptsApplyDynamic(qual.tpe.widen) => true
+          case _ => false
+        }
+
+        /** Translate selection that does not typecheck according to the normal rules into a selectDynamic/applyDynamic.
+         *
+         * foo.field           ~~> foo.selectDynamic("field")                  -- BYVALmode
+         * foo.method("blah")  ~~> foo.applyDynamic("method")("blah")          -- FUNmode
+         * foo.varia = 10      ~~> foo.applyDynamic("varia").update(10)        -- LHSmode
+         * foo.arr(10) = 13    ~~> foo.applyDynamic("method").update(10, 13)   -- QUALmode
+         *
+         * what if we want foo.field == foo.selectDynamic("field") == 1, but `foo.field = 10` == `foo.selectDynamic("field").update(10)` == ()
+         * what would the signature for selectDynamic be? (hint: it needs to depend on whether an update call is coming or not)
+         *
+         * need to distinguish selectDynamic and applyDynamic somehow: the former must return the selected value, the latter must accept an apply or an update
+         *  - could have only selectDynamic and pass it a boolean whether more is to come, 
+         *    so that it can either return the bare value or something that can handle the apply/update
+         *      HOWEVER that makes it hard to return unrelated values for the two cases
+         *      --> selectDynamic's return type is now dependent on the boolean flag whether more is to come
+         *  - simplest solution: have two method calls
+         *
+         */
+        def mkInvoke(qual: Tree, name: Name, onlySelect: Boolean): Option[Tree] = {
+          def invocation(tp: Type = null): Tree = {
+            val select  = if(onlySelect) Select(qual, nme.selectDynamic) else Select(qual, nme.applyDynamic)
+            val typeApp = if (tp == null) select else TypeApply(select, List(TypeTree(tp))) // tp != null ==> figured out the type this selection should have, so pass it on to selectDynamic/applyDynamic
+            val appliedSelect = Apply(typeApp, List(Literal(Constant(name.decode))))
+
+            atPos(qual.pos)(appliedSelect)
+          }
+
+          if ((name == nme.selectDynamic) || (name == nme.applyDynamic)) None // don't selectDynamic selectDynamic
+          else if (acceptsApplyDynamic(qual.tpe.widen)) Some(invocation())
+          else { // is the qualifier a staged row? (i.e., of type Rep[Row[Rep]{decls}])
+            debuglog("[DNR] dynatype on row for "+ qual +" : "+ qual.tpe +" <DOT> "+ name)
+            val rowPrefix = context.owner.ownerChain find (o => o.isClass && ThisType(o).baseClasses.contains(EmbeddedControlsClass)) map (ThisType(_)) getOrElse PredefModule.tpe
+            val rowTp = rowPrefix.memberType(EmbeddedControls_Row)
+            debuglog("[DNR] context, row prefix, tp "+ (context.owner.ownerChain, rowPrefix, rowTp))
+
+            val rep = NoSymbol.newTypeParameter(NoPosition, "Rep".toTypeName)
+            val repTpar = rep.newTypeParameter(NoPosition, "T".toTypeName).setFlag(COVARIANT).setInfo(TypeBounds.empty)
+            rep.setInfo(polyType(List(repTpar), TypeBounds.empty))
+            val repVar = TypeVar(rep)
+
+            for( 
+              _ <- boolOpt(qual.tpe <:< repVar.applyArgs(List(appliedType(rowTp, List(repVar))))); // qual.tpe <:< ?Rep[Row[?Rep]] -- not Row[Any], because that requires covariance of Rep!? 
+              repTp <- listOpt(solvedTypes(List(repVar), List(rep), List(COVARIANT), false, -3)); // search for minimal solution
+              // _ <- Some(println("mkInvoke repTp="+ repTp));
+              // if so, generate an invocation and give it type `Rep[T]`, where T is the type given to member `name` in `decls`
+              repSym = repTp.typeSymbolDirect;
+              qualRowTp <- qual.tpe.baseType(repSym).typeArgs.headOption; // this specifies `decls`
+              member <- symOpt(qualRowTp.member(name))
+            ) yield {
+              val memberTp = qualRowTp.memberType(member).finalResultType // this is `T` from the comment above
+              debuglog("[DNR] (repTp, qualRowTp, member, memberTp)= "+ (repTp, qualRowTp, member, memberTp))
+              invocation(memberTp)
+            }
+          }
+        }
+      }
+
       /** Attribute a selection where <code>tree</code> is <code>qual.name</code>.
        *  <code>qual</code> is already attributed.
        *
@@ -3630,6 +4181,12 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             member(qual, name)
           }
         if (sym == NoSymbol && name != nme.CONSTRUCTOR && (mode & EXPRmode) != 0) {
+          if ((mode & FUNmode) == 0) { // TODO: check phase
+            typedApplyExternal(treeCopy.Select(tree, qual, name), List(), false) match {
+              case EmptyTree => 
+              case tree1 => return tree1
+            }          
+          }
           val qual1 = 
             if (member(qual, name) != NoSymbol) qual
             else adaptToMemberWithArgs(tree, qual, name, mode)
@@ -3643,18 +4200,23 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           }
 
           // try to expand according to Dynamic rules.
-
-          if (settings.Xexperimental.value && (qual.tpe.widen.typeSymbol isNonBottomSubClass DynamicClass)) {
-            var dynInvoke = Apply(Select(qual, nme.applyDynamic), List(Literal(Constant(name.decode))))
-            context.tree match {
-              case Apply(tree1, args) if tree1 eq tree => 
-                ;
-              case _ => 
-                dynInvoke = Apply(dynInvoke, List())
-            }
-            return typed1(util.trace("dynatype: ")(dynInvoke), mode, pt)
+          // should we only emit selectDynamic?
+          val onlySelect = ((mode & LHSmode) == 0) && (
+            context.tree find {
+              case Select(`tree`, _) | Apply(`tree`, _) => true // TODO: PATMAT BUG?? tacking on the alternative | `tree` does not work, but the next case does...
+              case x => x == tree
+            } match {
+              case Some(Select(`tree`, name)) => (name ne nme.apply) && (name ne nme.update)
+              case Some(x) => x == tree
+              case _ => false
+            })
+          // println("dyna: "+ (qual, name, modeString(mode), onlySelect, context.tree))
+          dyna.mkInvoke(qual, name, onlySelect) match {
+            case Some(invocation) => 
+              return typed1(invocation, mode, pt)
+            case _ =>
           }
-                  
+
           if (settings.debug.value) {
             log(
               "qual = "+qual+":"+qual.tpe+
@@ -4183,6 +4745,9 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 new ApplyToImplicitArgs(Select(manif, if (level == 1) "newArray" else "newArray"+level), args)
               }
               typed(newArrayApp, mode, pt)
+            case tree1@Apply(Select(New(tpt), _), Nil) if tpt.tpe != null && willReifyNew(tpt.tpe) =>
+              // TODO: why is the refinement dropped from tpt.tpe when pt != WildcardType !??
+              typedReifiedNew(tpt)
             case tree1 =>
               tree1
           }
@@ -4442,9 +5007,21 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
              
     def typedHigherKindedType(tree: Tree): Tree = typedHigherKindedType(tree, NOmode)
 
+    private def willReifyNew(tp: Type): Boolean = (phase.id <= currentRun.typerPhase.id) && {
+      // don't run after typers
+      //  (see pos/t0586 for a scenario that makes us run during cleanup, where Row is no longer in EmbeddedControls)
+      //  also, haven't figured out yet how to deal with varargs after erasure
+
+      tp.typeSymbol != NoSymbol && !tp.typeSymbol.owner.isJavaDefined && // avoid illegal cyclic references during quick.lib (e.g., no need to reify new AnyRef etc)
+      tp.baseType(EmbeddedControls_Row) != NoType
+      //  && tp.typeSymbol.info.isInstanceOf[ClassInfoType] // TODO: ??
+    }
+
     /** Types a type constructor tree used in a new or supertype */
     def typedTypeConstructor(tree: Tree, mode: Int): Tree = {
       val result = typed(tree, forTypeMode(mode) | FUNmode, WildcardType)
+
+      if(willReifyNew(result.tpe)) return result
 
       val restpe = result.tpe.normalize // normalize to get rid of type aliases for the following check (#1241)
       if (!phase.erasedTypes && restpe.isInstanceOf[TypeRef] && !restpe.prefix.isStable && !context.unit.isJava) {

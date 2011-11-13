@@ -13,6 +13,7 @@ import scala.sys.process.Process
 import session._
 import scala.tools.util.{ Signallable, Javap }
 import scala.annotation.tailrec
+import scala.util.control.ControlThrowable
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.ops
 import util.{ ClassPath, Exceptional, stringFromWriter, stringFromStream }

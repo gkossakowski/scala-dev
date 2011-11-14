@@ -1,6 +1,7 @@
 import scala.tools.partest.ReplTest
 import scala.tools.util.Javap
 
+// This test blows up under -Yrepl-sync.
 object Test extends ReplTest {
   override def extraSettings = "-Yrich-exceptions"
   def code = """

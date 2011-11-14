@@ -18,9 +18,10 @@ import scala.collection.mutable.ListBuffer
 import scala.concurrent.ops
 import util.{ ClassPath, Exceptional, stringFromWriter, stringFromStream }
 import interpreter._
-import io.{ File, Sources }
+import io.{ File, Sources, Directory }
 import scala.reflect.NameTransformer._
-import util.ScalaClassLoader._
+import util.ScalaClassLoader
+import ScalaClassLoader._
 import scala.tools.util._
 
 /** The Scala interactive shell.  It provides a read-eval-print loop
@@ -107,24 +108,25 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
   
   class ILoopInterpreter extends IMain(settings, out) {
     outer =>
-
+    
+    private class ThreadStoppingLineManager extends Line.Manager(parentClassLoader) {
+      override def onRunaway(line: Line[_]): Unit = {
+        val template = """
+          |// She's gone rogue, captain! Have to take her out!
+          |// Calling Thread.stop on runaway %s with offending code:
+          |// scala> %s""".stripMargin
+      
+        echo(template.format(line.thread, line.code))
+        // XXX no way to suppress the deprecation warning
+        line.thread.stop()
+        in.redrawLine()
+      }
+    }
     override lazy val formatting = new Formatting {
       def prompt = ILoop.this.prompt
     }
     override protected def createLineManager(): Line.Manager =
-      if (ReplPropsKludge.noThreadCreation(settings)) null else new Line.Manager(parentClassLoader) {
-        override def onRunaway(line: Line[_]): Unit = {
-          val template = """
-            |// She's gone rogue, captain! Have to take her out!
-            |// Calling Thread.stop on runaway %s with offending code:
-            |// scala> %s""".stripMargin
-        
-          echo(template.format(line.thread, line.code))
-          // XXX no way to suppress the deprecation warning
-          line.thread.stop()
-          in.redrawLine()
-        }
-      }
+      new ThreadStoppingLineManager
 
     override protected def parentClassLoader =
       settings.explicitParentLoader.getOrElse( classOf[ILoop].getClassLoader )
@@ -374,7 +376,17 @@ class ILoop(in0: Option[BufferedReader], protected val out: JPrintWriter)
     }
   }
   
-  protected def newJavap() = new JavapClass(intp.classLoader, new IMain.ReplStrippingWriter(intp)) {
+  private def addToolsJarToLoader() = {
+    val javaHome = Directory(sys.env("JAVA_HOME"))
+    val tools    = javaHome / "lib" / "tools.jar"
+    if (tools.isFile) {
+      echo("Found tools.jar, adding for use by javap.")
+      ScalaClassLoader.fromURLs(Seq(tools.toURL), intp.classLoader)
+    }
+    else intp.classLoader
+  }
+
+  protected def newJavap() = new JavapClass(addToolsJarToLoader(), new IMain.ReplStrippingWriter(intp)) {
     override def tryClass(path: String): Array[Byte] = {
       val hd :: rest = path split '.' toList;
       // If there are dots in the name, the first segment is the

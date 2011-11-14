@@ -30,9 +30,6 @@ object Test extends App {
       res.asInstanceOf[Rep[T]]
     }
   }
-
-  // def __newVar[T](x: T): Rep[T] = Var(null, x)
-
   val foo: Rep[Row[Rep] { var xx: Int; val y: String }] = new Row[Rep] { var xx = 23; val y = "y" }
   foo.xx = 3 // this works because the row has a mutable member xx of the right type -- otherwise it'll fail to typecheck (see the neg/ case)
   println(foo.xx)

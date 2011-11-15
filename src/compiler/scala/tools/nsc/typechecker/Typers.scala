@@ -1874,6 +1874,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   && !matchesVisibleMember(member)
                 )
                 foreach { member =>
+                  assert(pt ne WildcardType) // do we ever get here when pt == WildcardType?? if not, better skip the whole `case Block(...`
                   member resetFlag (PROTECTED | LOCAL)
                   member   setFlag (PRIVATE | SYNTHETIC_PRIVATE)
                   syntheticPrivates += member
@@ -2299,8 +2300,10 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       (args1, argtpes.toList)
     }
 
-    // factored out so that un-virtualization can figure out which symbol will be picked by doTypedApply,
-    // without doing a full doTypedApply
+    // duplicated from doTypedApply (minus the side-effectings) so that un-virtualization can figure out
+    // which symbol will be picked by doTypedApply, without doing a full doTypedApply
+    // invariant: forall tree, fun, args, mode, pt. List(doTypedApply(tree, fun, args, mode, pt).symbol) == applicableOverloads(fun, args, mode, pt)
+    // (when doTypedApply throws, applicableOverloads returns a non-singleton list)
     private def applicableOverloads(fun: Tree, args: List[Tree], mode: Int, pt: Type): List[Symbol] =
       if (fun.hasSymbol && fun.symbol.isOverloaded) {
         val pre = fun.symbol.tpe.prefix

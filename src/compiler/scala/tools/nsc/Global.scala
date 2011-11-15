@@ -185,6 +185,7 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
   def informProgress(msg: String)          = if (opt.verbose) inform("[" + msg + "]")
   def inform[T](msg: String, value: T): T  = returning(value)(x => inform(msg + x))
   def informTime(msg: String, start: Long) = informProgress(elapsedMessage(msg, start))
+  def informTime0(msg: String, start: Long) = if (System.getProperty("scalacTimings") != null) inform("[" + elapsedMessage(msg, start) + "]")
 
   def logResult[T](msg: String)(result: T): T = {
     log(msg + ": " + result)
@@ -265,8 +266,6 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
           mkName(str take idx)
       }
     }
-
-    // behavior
 
     // debugging
     def checkPhase = wasActive(settings.check)
@@ -363,7 +362,8 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
     final def applyPhase(unit: CompilationUnit) {
       if (opt.echoFilenames)
         inform("[running phase " + name + " on " + unit + "]")
-          
+      
+      val startTime = currentTime
       val unit0 = currentRun.currentUnit
       try {
         currentRun.currentUnit = unit       
@@ -373,6 +373,7 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
         }
         currentRun.advanceUnit
       } finally {
+        informTime0("phase " + name + " on " + unit, startTime)
         //assert(currentRun.currentUnit == unit)
         currentRun.currentUnit = unit0
       }
@@ -1105,7 +1106,7 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
           profiler.advanceGeneration(globalPhase.name)
         
         // progress update
-        informTime(globalPhase.description, startTime)
+        informTime0(globalPhase.description, startTime)
         phaseTimings(globalPhase) = currentTime - startTime
 
         // write icode to *.icode files
@@ -1154,7 +1155,7 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
 
       reportCompileErrors()
       symSource.keys foreach (x => resetPackageClass(x.owner))
-      informTime("total", startTime)
+      informTime0("total", startTime)
       
       // save heap snapshot if requested
       if (opt.profileMem) {
@@ -1278,7 +1279,6 @@ class Global(var currentSettings: Settings, var reporter: Reporter) extends Symb
         else f.file.name match {
           case "ScalaObject.scala"            => 1
           case "LowPriorityImplicits.scala"   => 2
-          case "StandardEmbeddings.scala"     => 2
           case "EmbeddedControls.scala"       => 2
           case "Predef.scala"                 => 3 /* Predef.scala before Any.scala, etc. */
           case _                              => goLast 

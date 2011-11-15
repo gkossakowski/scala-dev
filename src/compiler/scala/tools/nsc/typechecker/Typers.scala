@@ -2458,9 +2458,13 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               // val foo = "foo"; def precise(x: String)(y: x.type): x.type = {...}; val bar : foo.type = precise(foo)(foo)
               // precise(foo) : foo.type => foo.type
               val restpe = mt.resultType(args1 map (arg => gen.stableTypeFor(arg) getOrElse arg.tpe))
-              def ifPatternSkipFormals(tp: Type) = tp match {
+              def transformResultType(tp: Type) = tp match {
+                // skip formal arguments if in pattern mode (the args are subpatterns)
                 case MethodType(_, rtp) if (inPatternMode(mode)) => rtp
-                case _ => tp
+                case _ if fun.symbol.isConstructor && willReifyNew(tp) =>
+                  reifiedNewType(tp)
+                case _ =>
+                  tp
               }
 
               // Replace the Delegate-Chainer methods += and -= with corresponding
@@ -2491,7 +2495,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               if (fun.symbol == List_apply && args.isEmpty && !forInteractive)
                 atPos(tree.pos)(gen.mkNil setType restpe)
               else
-                constfold(treeCopy.Apply(tree, fun, args1) setType ifPatternSkipFormals(restpe))
+                constfold(treeCopy.Apply(tree, fun, args1) setType transformResultType(restpe))
 
             } else if (needsInstantiation(tparams, formals, args)) {
               //println("needs inst "+fun+" "+tparams+"/"+(tparams map (_.info)))
@@ -2608,6 +2612,60 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         case _ =>
           errorTree(fun.tpe+" does not take parameters")
       }
+    }
+
+    private def toAccessed(sym: Symbol) = if(sym.isGetter || sym.isSetter) sym.accessed else sym
+
+    // if we filter out the getters but leave in the backing fields, member lookup breaks (e.g. when doing a selectDynamic)
+    // and we get strange type errors...
+    // found   : java.lang.Object with Row[Test.Rep]{val x: Int; val y: java.lang.String}
+    // required: Row[Test.Rep]{val x: Int; val y: String}
+    // to avoid duplicates, only retain methods
+    // the fields will only be used indirectly, since the corresponding ValDef holds the RHS with the information we're after
+    private def reifiedNewType(tp: Type) = {
+      val repTycon = if(phase.erasedTypes) AnyClass.tpe else tp.baseType(EmbeddedControls_Row).typeArgs(0) // TODO
+      val repSym = repTycon.typeSymbolDirect
+      val ClassInfoType(parents, defSyms, origClass) = tp.typeSymbol.info
+
+      def unrepAndUnVar(varSym: Symbol) = new TypeMap {
+        def apply(tp: Type) = mapOver(tp) match {
+          case TypeRef(pre, sym, List(tp)) if (sym == repSym) || (sym == varSym) => tp
+          case tp => tp
+        }
+      }
+      val unrep = unrepAndUnVar(repSym)
+
+      val structTp = {
+        val tp = refinedType(parents, origClass.owner)
+        val thistp = tp.typeSymbol.thisType
+        val oldsymbuf = new ListBuffer[Symbol]
+        val newsymbuf = new ListBuffer[Symbol]
+        for (sym <- defSyms) {
+          if (sym.isMethod && !sym.isConstructor) { // must keep only methods
+            oldsymbuf += sym
+            val sym1 = sym.cloneSymbol(tp.typeSymbol)
+            sym1.resetFlag(PRIVATE | PROTECTED) // TODO: why is this necessary? this is the getter, which is supposed to be public unless specified otherwise by the user, right?
+            sym1.privateWithin = NoSymbol
+
+            // GROSS HACK: derive the Variable type symbol from the symbol accessed by a getter/setter (or from the var's symbol itself)
+            // it's info will always be of the shape Variable[T]
+            val accSym = toAccessed(sym) // toAccessed(sym1) doesn't work since we only retain methods
+            // if(accSym.isMutable) println("var: "+(sym1, sym1.info, accSym.info.typeSymbol))
+            val unwrap = if(accSym.isMutable) unrepAndUnVar(accSym.info.typeSymbol) else unrep
+            sym1.setInfo(unwrap(sym1.info).substThis(origClass, thistp))
+            // println("sym1.info"+ sym1.info)
+
+            newsymbuf += sym1
+          }
+        }
+        val oldsyms = oldsymbuf.toList
+        val newsyms = newsymbuf.toList
+        for (sym <- newsyms) {
+          addMember(thistp, tp, sym.setInfo(sym.info.substSym(oldsyms, newsyms)))
+        }
+        tp
+      }
+      appliedType(repTycon, List(structTp))
     }
 
     /**
@@ -3315,9 +3373,9 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
 
       def typedNew(tpt: Tree): Tree = {
-        val (allowAbstract, tpt1) = {
+        val (willReify, tpt1) = {
           val tpt0 = typedTypeConstructor(tpt)
-          if(willReifyNew(tpt0.tpe)) (true, tpt0)
+          if (willReifyNew(tpt0.tpe)) (true, tpt0)
           else (false, {
             checkClassType(tpt0, false, true)
             if (tpt0.hasSymbol && !tpt0.symbol.typeParams.isEmpty) {
@@ -3343,7 +3401,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
 
         val tp = tpt1.tpe
         val sym = tp.typeSymbol.initialize
-        if (!allowAbstract && (sym.isAbstractType || sym.hasAbstractFlag))
+        if (!willReify && (sym.isAbstractType || sym.hasAbstractFlag))
           error(tree.pos, sym + " is abstract; cannot be instantiated")
         else if (!(  tp == sym.thisSym.tpe // when there's no explicit self type -- with (#3612) or without self variable
                      // sym.thisSym.tpe == tp.typeOfThis (except for objects)
@@ -3358,10 +3416,14 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       }
 
       def typedReifiedNew(tpt: Tree): Tree = {
-        val tp = tpt.tpe
-        val rowBaseTp = tp.baseType(EmbeddedControls_Row)
+        val rowBaseTp = tpt.tpe.baseType(EmbeddedControls_Row)
         val repTycon = if(phase.erasedTypes) AnyClass.tpe else rowBaseTp.typeArgs(0) // TODO
         val repSym = repTycon.typeSymbolDirect
+        val ClassInfoType(_, defSyms, origClass) = tpt.tpe.typeSymbol.info
+
+        debuglog("[TRN] origClass: " + (origClass.info.decls, origClass.ownerChain))
+
+        val repStructTp = reifiedNewType(tpt.tpe)
 
         // TODO: remove once r25161 from main repo has been merged
         def elimAnonymousClass(t: Type) = t match {
@@ -3370,9 +3432,6 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           case _ =>
             t
         }
-
-        val sym = tp.typeSymbol
-        val ClassInfoType(parents, defSyms, origClass) = sym.info
 
         // make args -- have to locate the original classdef tree and its template for that, this is reallllly ugly....
         val classDefTree = context.outer.tree
@@ -3387,63 +3446,10 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           }
         }
 
-        debuglog("[TRN] origClass: " + (origClass.info.decls, origClass.ownerChain))
         debuglog("[TRN] statsUntyped: "+ statsUntyped.map (d => d.symbol))
-
-
-        def toAccessed(sym: Symbol) = if(sym.isGetter || sym.isSetter) sym.accessed else sym
 
         val statSyms = statsUntyped map (_.symbol) toSet
         val selfName = "self".toTermName
-
-        // if we filter out the getters, and leave in the backing fields, member lookup breaks (e.g. when doing a selectDynamic)
-        // and we get strange type errors...
-        // found   : java.lang.Object with Row[Test.Rep]{val x: Int; val y: java.lang.String}
-        // required: Row[Test.Rep]{val x: Int; val y: String}
-        // to avoid duplicates, only retain methods
-        // the fields will only be used indirectly, since the corresponding ValDef holds the RHS with the information we're after
-        val repStructTp = {
-          def unrepAndUnVar(varSym: Symbol) = new TypeMap {
-            def apply(tp: Type) = mapOver(tp) match {
-              case TypeRef(pre, sym, List(tp)) if (sym == repSym) || (sym == varSym) => tp
-              case tp => tp
-            }
-          }
-          val unrep = unrepAndUnVar(repSym)
-
-          val structTp = {
-            val tp = refinedType(parents, origClass.owner)
-            val thistp = tp.typeSymbol.thisType
-            val oldsymbuf = new ListBuffer[Symbol]
-            val newsymbuf = new ListBuffer[Symbol]
-            for (sym <- defSyms) {
-              if (sym.isMethod && !sym.isConstructor) { // must keep only methods
-                oldsymbuf += sym
-                val sym1 = sym.cloneSymbol(tp.typeSymbol)
-                sym1.resetFlag(PRIVATE | PROTECTED) // TODO: why is this necessary? this is the getter, which is supposed to be public unless specified otherwise by the user, right?
-                sym1.privateWithin = NoSymbol
-
-                // GROSS HACK: derive the Variable type symbol from the symbol accessed by a getter/setter (or from the var's symbol itself)
-                // it's info will always be of the shape Variable[T]
-                val accSym = toAccessed(sym) // toAccessed(sym1) doesn't work since we only retain methods
-                // if(accSym.isMutable) println("var: "+(sym1, sym1.info, accSym.info.typeSymbol))
-                val unwrap = if(accSym.isMutable) unrepAndUnVar(accSym.info.typeSymbol) else unrep
-                sym1.setInfo(unwrap(sym1.info).substThis(origClass, thistp))
-                // println("sym1.info"+ sym1.info)
-
-                newsymbuf += sym1
-              }
-            }
-            val oldsyms = oldsymbuf.toList
-            val newsyms = newsymbuf.toList
-            for (sym <- newsyms) {
-              addMember(thistp, tp, sym.setInfo(sym.info.substSym(oldsyms, newsyms)))
-            }
-            tp
-          }
-          appliedType(repTycon, List(structTp))
-        }
-
 
         // setup the typer for the stats
         // the stats must be typed to detect the self reference, so that selections on the self-variable can be rewritten
@@ -3574,7 +3580,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               """|since %s <:< %s, reification was attempted,
                  |but the result, `%s`, did not type check.
                  |Probable cause: there is no suitable `__new` method in scope.
-                 |See the definition of `trait Row` in EmbeddedControls for details.""".stripMargin.format(tp, rowBaseTp, newCall))
+                 |See the definition of `trait Row` in EmbeddedControls for details.""".stripMargin.format(tpt.tpe, rowBaseTp, newCall))
         }
       }
 

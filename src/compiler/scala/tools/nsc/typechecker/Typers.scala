@@ -1884,10 +1884,16 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             case _ =>
           }
         }
-        val stats1 = typedStats(block.stats, context.owner)
-        val expr1 = typed(block.expr, mode & ~(FUNmode | QUALmode), pt)
+        var stats1 = typedStats(block.stats, context.owner)
+        var expr1 = typed(block.expr, mode & ~(FUNmode | QUALmode), pt)
+        (block.stats, expr1) match {
+          case (List(ClassDef(_, _, _, impl)), tree1@Apply(Select(New(tpt), _), Nil)) if tpt.tpe != null && willReifyNew(tpt.tpe) =>
+            stats1 = Nil // drop the anonymous class -- its instantiation has been virtualized anyway (that call is in expr1)
+            expr1 = typedReifiedNew(impl, tpt)
+          case _ =>
+        }
         treeCopy.Block(block, stats1, expr1)
-          .setType(if (treeInfo.isExprSafeToInline(block)) expr1.tpe else expr1.tpe.deconst)
+                .setType(if (treeInfo.isExprSafeToInline(block)) expr1.tpe else expr1.tpe.deconst)
       } finally {
         // enable escaping privates checking from the outside and recycle
         // transient flag
@@ -3415,182 +3421,6 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
         treeCopy.New(tree, tpt1).setType(tp)
       }
 
-      def typedReifiedNew(tpt: Tree): Tree = {
-        val rowBaseTp = tpt.tpe.baseType(EmbeddedControls_Row)
-        val repTycon = if(phase.erasedTypes) AnyClass.tpe else rowBaseTp.typeArgs(0) // TODO
-        val repSym = repTycon.typeSymbolDirect
-        val ClassInfoType(_, defSyms, origClass) = tpt.tpe.typeSymbol.info
-
-        debuglog("[TRN] origClass: " + (origClass.info.decls, origClass.ownerChain))
-
-        val repStructTp = reifiedNewType(tpt.tpe)
-
-        // TODO: remove once r25161 from main repo has been merged
-        def elimAnonymousClass(t: Type) = t match {
-          case TypeRef(pre, clazz, List()) if clazz.isAnonymousClass =>
-            clazz.classBound.asSeenFrom(pre, clazz.owner)
-          case _ =>
-            t
-        }
-
-        // make args -- have to locate the original classdef tree and its template for that, this is reallllly ugly....
-        val classDefTree = context.outer.tree
-        val templ = (classDefTree find { case x: Template => x.body.nonEmpty && (x.body.head.symbol ne NoSymbol) && x.body.head.symbol.owner == origClass case _ => false }).get.asInstanceOf[Template]
-
-        // untyped, but expected type (tpt) has been determined already
-        // for each symbol in the anonymous type's decls, find the corresponding definition in the template
-        // we're looking for the user-specified rhs, so can't disregard ValDef's and just look at DefDef's, as the rhs of the getter DefDef for a value x is just this.`x `
-        val statsUntyped = defSyms filter (!_.isConstructor) flatMap { sym =>
-          templ filter(_.symbol == sym) collect {
-            case d: ValOrDefDef if !d.symbol.isGetter => d
-          }
-        }
-
-        debuglog("[TRN] statsUntyped: "+ statsUntyped.map (d => d.symbol))
-
-        val statSyms = statsUntyped map (_.symbol) toSet
-        val selfName = "self".toTermName
-
-        // setup the typer for the stats
-        // the stats must be typed to detect the self reference, so that selections on the self-variable can be rewritten
-        val statTyper = newTyper(context.make(templ, origClass, new Scope)) //.typedStats(statsUntyped.toList, templ.symbol)
-        if (templ.symbol == NoSymbol) templ setSymbol origClass.newLocalDummy(templ.pos)
-        val self1 = templ.self match {
-          case vd @ ValDef(mods, name, tpt, EmptyTree) =>
-            val tpt1 = 
-              checkNoEscaping.privates(
-                origClass.thisSym, 
-                treeCopy.TypeTree(tpt).setOriginal(tpt) setType vd.symbol.tpe)
-            treeCopy.ValDef(vd, mods, name, tpt1, EmptyTree) setType NoType
-        }
-        if (self1.name != nme.WILDCARD) statTyper.context.scope enter self1.symbol
-        enterSyms(context.make(templ, origClass, origClass.info.decls), templ.body) // statTyper.context.outer eq context
-
-        // make tree for `(label, rhs)`
-        def mkArg(label: String, mutable: Boolean, rhs: Tree) = gen.mkTuple(List(Literal(Constant(label)), Literal(Constant(mutable)), rhs))
-
-        val args = statsUntyped map { origDef: ValOrDefDef =>
-          // println("mutable? "+ (origDef, origDef.symbol, origDef.symbol.isMutable))
-
-          val funSym = origClass.owner.newValue(tree.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
-          val selfSym = funSym.newValueParameter(origDef.pos, selfName) setInfo repStructTp
-          // println("selfSym "+ selfSym)
-          val selfRef = Ident(selfName) setSymbol selfSym setType repStructTp
-          def selNameOnSelf(n: Name): Tree = Select(selfRef, n)
-          def selOnSelf(d: Symbol): Tree = selNameOnSelf(nme.getterName(d.name))
-
-          // println("def: "+ origDef)
-
-          //// replace self
-          // partially type origDef, only setting symbols 
-          origDef foreach { 
-            case tree@(This(_) | Ident(_) | Select(_, _)) =>
-              statTyper.silent(_.typed(tree, EXPRmode | BYVALmode, WildcardType), false) match {
-                case typedTree: Tree if (typedTree.symbol == origClass)
-                                     || statSyms(toAccessed(typedTree.symbol)) =>
-                  tree setSymbol typedTree.symbol
-                case _ =>
-              }
-            case _ =>
-          }
-
-          // refer to selfSym.name instead of This(origClass).name
-          object substSelf extends Transformer {
-            def apply(tree: Tree): Tree = transform(tree)
-            override def transform(tree: Tree): Tree = tree match {
-              case This(_) if tree.symbol == origClass =>
-                selfRef
-              case t@(Ident(_) | Select(_, _)) if statSyms(toAccessed(tree.symbol)) =>
-                selOnSelf(toAccessed(tree.symbol))
-              case _ =>
-                super.transform(tree)
-            }
-          }
-
-          val origRhs =
-            if(origDef.symbol.isMutable) origDef.rhs match { case Apply(_, List(a)) => a } // unwrap the __newvar call
-            else origDef.rhs
-          val substedRhs = substSelf(origRhs)
-          // println("substed "+ substedRhs)
-
-          val rhsTyper = newTyper(statTyper.context.make(origDef, origDef.symbol))
-          rhsTyper.context.scope enter selfSym
-
-          //// splice in the Rep[_]'ed expected type
-          // val oldTpe = origRhs.tpe; val oldSym = origRhs.symbol
-          // can't always reuse types -- when var's come into play, types change
-          val tptTpeMaybeRep = rhsTyper.typed(substedRhs, EXPRmode | BYVALmode, WildcardType).tpe.widen
-          // assert(oldTpe == origRhs.tpe && oldSym == origRhs.symbol) // or do we need to duplicate before calling typed?
-          debuglog("[TRN] tpt for "+ origDef.symbol +" = "+ origRhs + " : "+ tptTpeMaybeRep)
-
-
-          val tptTpe = // done: baseType works when repSym.isAbstractType
-            if (tptTpeMaybeRep.baseType(repSym) == NoType) // no Rep wrapper yet, so add it
-              appliedType(repTycon, List(tptTpeMaybeRep))
-            else
-              tptTpeMaybeRep // was already in a Rep
-
-
-          val dupedRhs =
-            rhsTyper.typed(
-                substedRhs,
-                EXPRmode | BYVALmode,
-                tptTpe).duplicate // DUPLICATE -- don't update old RHS
-          debuglog("[TRN] dupedRhs: "+ dupedRhs)
-
-
-          // create new symbols for the duplicated tree, tree.duplicate does not do this
-          // (without new symbols, you get weird errors in lambdaLift, because markFree unwittingly updates all trees that share a symbol)
-          // TODO: generalize to all DefTrees that introduce new symbols (nested objects will still not work in a Row...)
-          object newSyms extends Transformer {
-            override def transform(t: Tree): Tree = {
-              t match {
-                case f@Function(args, body) =>
-                  val newFunSym = t.symbol.cloneSymbol
-                  val argSyms = args map (_.symbol)
-                  val newArgSyms = args map {a => a.symbol = a.symbol.cloneSymbol(newFunSym); a.symbol}
-                  treeCopy.Function(f, args, (new TreeSymSubstituter(argSyms, newArgSyms))(body)) setSymbol newFunSym
-                case _ =>
-                  super.transform(t)
-              }
-            }
-          }
-          val rerootedRhs = newSyms.transform(dupedRhs)
-
-
-          // println("before COT:"+(origDef.symbol, funSym))
-          // currentRun.trackerFactory.snapshot()
-          // treeBrowser browse dupedRhs
-
-          // the RHS is now owned by the symbol of the function we're wrapping around it in the arg
-          // update the owners of nested symbols
-          // if you mess up the owner structure, explicitouter blows up
-          // IMPORTANT: do this after the newSyms transform, otherwise we change the owners of the original functions (the ones in the anonymous class)
-          // here, we only want to change the functions that end up as an argument to the virtualized __new call
-          new ChangeOwnerTraverser(origDef.symbol, funSym).traverse(dupedRhs)
-
-          // println("after COT:")
-          // currentRun.trackerFactory.snapshot()
-          // treeBrowser browse dupedRhs
-
-          // TODO: eta-expand rhs of method definition
-          mkArg(origDef.name.toString, origDef.symbol.isMutable, Function(List(ValDef(selfSym)), rerootedRhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
-        }
-
-        debuglog("[TRN] (repStructTp, rep, args)= "+ (repStructTp, repTycon, args mkString("(", ", ", ")")))
-        val newCall = Apply(Ident(nme._new) setPos tpt.pos, args.toList) setPos tree.pos
-        silent(_.typed1(newCall, mode, repStructTp), false) match {
-          case res: Tree => res
-          case ex =>
-            debuglog("[TRN] typedReifiedNew failed: "+ ex)
-            errorTree(tpt,
-              """|since %s <:< %s, reification was attempted,
-                 |but the result, `%s`, did not type check.
-                 |Probable cause: there is no suitable `__new` method in scope.
-                 |See the definition of `trait Row` in EmbeddedControls for details.""".stripMargin.format(tpt.tpe, rowBaseTp, newCall))
-        }
-      }
-
       def typedEta(expr1: Tree): Tree = expr1.tpe match {
         case TypeRef(_, ByNameParamClass, _) =>
           val expr2 = Function(List(), expr1) setPos expr1.pos
@@ -4888,9 +4718,6 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 new ApplyToImplicitArgs(Select(manif, if (level == 1) "newArray" else "newArray"+level), args)
               }
               typed(newArrayApp, mode, pt)
-            case tree1@Apply(Select(New(tpt), _), Nil) if tpt.tpe != null && willReifyNew(tpt.tpe) =>
-              // TODO: why is the refinement dropped from tpt.tpe when pt != WildcardType !??
-              typedReifiedNew(tpt)
             case tree1 =>
               tree1
           }
@@ -5158,6 +4985,178 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
       tp.typeSymbol != NoSymbol && !tp.typeSymbol.owner.isJavaDefined && // avoid illegal cyclic references during quick.lib (e.g., no need to reify new AnyRef etc)
       tp.baseType(EmbeddedControls_Row) != NoType
       //  && tp.typeSymbol.info.isInstanceOf[ClassInfoType] // TODO: ??
+    }
+
+    private def typedReifiedNew(templ: Template, tpt: Tree): Tree = {
+      val rowBaseTp = tpt.tpe.baseType(EmbeddedControls_Row)
+      val repTycon = if(phase.erasedTypes) AnyClass.tpe else rowBaseTp.typeArgs(0) // TODO
+      val repSym = repTycon.typeSymbolDirect
+      val ClassInfoType(_, defSyms, origClass) = tpt.tpe.typeSymbol.info
+
+      debuglog("[TRN] origClass: " + (origClass.info.decls, origClass.ownerChain))
+
+      val repStructTp = reifiedNewType(tpt.tpe)
+
+      // TODO: remove once r25161 from main repo has been merged
+      def elimAnonymousClass(t: Type) = t match {
+        case TypeRef(pre, clazz, List()) if clazz.isAnonymousClass =>
+          clazz.classBound.asSeenFrom(pre, clazz.owner)
+        case _ =>
+          t
+      }
+
+      // untyped, but expected type (tpt) has been determined already
+      // for each symbol in the anonymous type's decls, find the corresponding definition in the template
+      // we're looking for the user-specified rhs, so can't disregard ValDef's and just look at DefDef's, as the rhs of the getter DefDef for a value x is just this.`x `
+      val statsUntyped = defSyms filter (!_.isConstructor) flatMap { sym =>
+        templ filter(_.symbol == sym) collect {
+          case d: ValOrDefDef if !d.symbol.isGetter => d
+        }
+      }
+
+      debuglog("[TRN] statsUntyped: "+ statsUntyped.map (d => d.symbol))
+
+      val statSyms = statsUntyped map (_.symbol) toSet
+      val selfName = "self".toTermName
+
+      // setup the typer for the stats
+      // the stats must be typed to detect the self reference, so that selections on the self-variable can be rewritten
+      val statTyper = newTyper(context.make(templ, origClass, new Scope)) //.typedStats(statsUntyped.toList, templ.symbol)
+      if (templ.symbol == NoSymbol) templ setSymbol origClass.newLocalDummy(templ.pos)
+      val self1 = templ.self match {
+        case vd @ ValDef(mods, name, tpt, EmptyTree) =>
+          val tpt1 =
+            checkNoEscaping.privates(
+              origClass.thisSym,
+              treeCopy.TypeTree(tpt).setOriginal(tpt) setType vd.symbol.tpe)
+          treeCopy.ValDef(vd, mods, name, tpt1, EmptyTree) setType NoType
+      }
+      if (self1.name != nme.WILDCARD) statTyper.context.scope enter self1.symbol
+      enterSyms(context.make(templ, origClass, origClass.info.decls), templ.body) // statTyper.context.outer eq context
+
+      // make tree for `(label, rhs)`
+      def mkArg(label: String, mutable: Boolean, rhs: Tree) = gen.mkTuple(List(Literal(Constant(label)), Literal(Constant(mutable)), rhs))
+
+      val args = statsUntyped map { origDef: ValOrDefDef =>
+        // println("mutable? "+ (origDef, origDef.symbol, origDef.symbol.isMutable))
+
+        val funSym = origClass.owner.newValue(templ.pos, nme.ANON_FUN_NAME).setFlag(SYNTHETIC).setInfo(NoType)
+        val selfSym = funSym.newValueParameter(origDef.pos, selfName) setInfo repStructTp
+        // println("selfSym "+ selfSym)
+        val selfRef = Ident(selfName) setSymbol selfSym setType repStructTp
+        def selNameOnSelf(n: Name): Tree = Select(selfRef, n)
+        def selOnSelf(d: Symbol): Tree = selNameOnSelf(nme.getterName(d.name))
+
+        // println("def: "+ origDef)
+
+        //// replace self
+        // partially type origDef, only setting symbols
+        origDef foreach {
+          case tree@(This(_) | Ident(_) | Select(_, _)) =>
+            statTyper.silent(_.typed(tree, EXPRmode | BYVALmode, WildcardType), false) match {
+              case typedTree: Tree if (typedTree.symbol == origClass)
+                                   || statSyms(toAccessed(typedTree.symbol)) =>
+                tree setSymbol typedTree.symbol
+              case _ =>
+            }
+          case _ =>
+        }
+
+        // refer to selfSym.name instead of This(origClass).name
+        object substSelf extends Transformer {
+          def apply(tree: Tree): Tree = transform(tree)
+          override def transform(tree: Tree): Tree = tree match {
+            case This(_) if tree.symbol == origClass =>
+              selfRef
+            case t@(Ident(_) | Select(_, _)) if statSyms(toAccessed(tree.symbol)) =>
+              selOnSelf(toAccessed(tree.symbol))
+            case _ =>
+              super.transform(tree)
+          }
+        }
+
+        val origRhs =
+          if(origDef.symbol.isMutable) origDef.rhs match { case Apply(_, List(a)) => a } // unwrap the __newvar call
+          else origDef.rhs
+        val substedRhs = substSelf(origRhs)
+        // println("substed "+ substedRhs)
+
+        val rhsTyper = newTyper(statTyper.context.make(origDef, origDef.symbol))
+        rhsTyper.context.scope enter selfSym
+
+        //// splice in the Rep[_]'ed expected type
+        // val oldTpe = origRhs.tpe; val oldSym = origRhs.symbol
+        // can't always reuse types -- when var's come into play, types change
+        val tptTpeMaybeRep = rhsTyper.typed(substedRhs, EXPRmode | BYVALmode, WildcardType).tpe.widen
+        // assert(oldTpe == origRhs.tpe && oldSym == origRhs.symbol) // or do we need to duplicate before calling typed?
+        debuglog("[TRN] tpt for "+ origDef.symbol +" = "+ origRhs + " : "+ tptTpeMaybeRep)
+
+
+        val tptTpe = // done: baseType works when repSym.isAbstractType
+          if (tptTpeMaybeRep.baseType(repSym) == NoType) // no Rep wrapper yet, so add it
+            appliedType(repTycon, List(tptTpeMaybeRep))
+          else
+            tptTpeMaybeRep // was already in a Rep
+
+
+        val dupedRhs =
+          rhsTyper.typed(
+              substedRhs,
+              EXPRmode | BYVALmode,
+              tptTpe).duplicate // DUPLICATE -- don't update old RHS
+        debuglog("[TRN] dupedRhs: "+ dupedRhs)
+
+
+        // create new symbols for the duplicated tree, tree.duplicate does not do this
+        // (without new symbols, you get weird errors in lambdaLift, because markFree unwittingly updates all trees that share a symbol)
+        // TODO: generalize to all DefTrees that introduce new symbols (nested objects will still not work in a Row...)
+        object newSyms extends Transformer {
+          override def transform(t: Tree): Tree = {
+            t match {
+              case f@Function(args, body) =>
+                val newFunSym = t.symbol.cloneSymbol
+                val argSyms = args map (_.symbol)
+                val newArgSyms = args map {a => a.symbol = a.symbol.cloneSymbol(newFunSym); a.symbol}
+                treeCopy.Function(f, args, (new TreeSymSubstituter(argSyms, newArgSyms))(body)) setSymbol newFunSym
+              case _ =>
+                super.transform(t)
+            }
+          }
+        }
+        val rerootedRhs = newSyms.transform(dupedRhs)
+
+
+        // println("before COT:"+(origDef.symbol, funSym))
+        // currentRun.trackerFactory.snapshot()
+        // treeBrowser browse dupedRhs
+
+        // the RHS is now owned by the symbol of the function we're wrapping around it in the arg
+        // update the owners of nested symbols
+        // if you mess up the owner structure, explicitouter blows up
+        // IMPORTANT: do this after the newSyms transform, otherwise we change the owners of the original functions (the ones in the anonymous class)
+        // here, we only want to change the functions that end up as an argument to the virtualized __new call
+        new ChangeOwnerTraverser(origDef.symbol, funSym).traverse(dupedRhs)
+
+        // println("after COT:")
+        // currentRun.trackerFactory.snapshot()
+        // treeBrowser browse dupedRhs
+
+        // TODO: eta-expand rhs of method definition
+        mkArg(origDef.name.toString, origDef.symbol.isMutable, Function(List(ValDef(selfSym)), rerootedRhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
+      }
+
+      debuglog("[TRN] (repStructTp, rep, args)= "+ (repStructTp, repTycon, args mkString("(", ", ", ")")))
+      val newCall = Apply(Ident(nme._new) setPos tpt.pos, args.toList) setPos templ.pos
+      silent(_.typed1(newCall, EXPRmode, repStructTp), false) match {
+        case res: Tree => res
+        case ex =>
+          debuglog("[TRN] typedReifiedNew failed: "+ ex)
+          errorTree(tpt,
+            """|since %s <:< %s, reification was attempted,
+               |but the result, `%s`, did not type check.
+               |Probable cause: there is no suitable `__new` method in scope.
+               |See the definition of `trait Row` in EmbeddedControls for details.""".stripMargin.format(tpt.tpe, rowBaseTp, newCall))
+      }
     }
 
     /** Types a type constructor tree used in a new or supertype */

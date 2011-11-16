@@ -3513,15 +3513,16 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           val substedRhs = substSelf(origRhs)
           // println("substed "+ substedRhs)
 
-          //// splice in the Rep[_]'ed expected type
-          // does tpt need to be typed? (if it was inferred, the .tpe has been set already, but if it was specified by the user, it may not have been typed yet)
-          // note that we change the rhs for mutable variables, so always need to retype
+          val rhsTyper = newTyper(statTyper.context.make(origDef, origDef.symbol))
+          rhsTyper.context.scope enter selfSym
 
-          val tptTpeMaybeRep = elimAnonymousClass(
-            if(origDef.tpt.tpe == null || origDef.symbol.isMutable)
-              statTyper.typed(origRhs.duplicate, EXPRmode | BYVALmode, WildcardType).tpe.widen
-            else
-              origDef.tpt.tpe) // TODO: subst self the resulting type
+          //// splice in the Rep[_]'ed expected type
+          // val oldTpe = origRhs.tpe; val oldSym = origRhs.symbol
+          // can't always reuse types -- when var's come into play, types change
+          val tptTpeMaybeRep = rhsTyper.typed(substedRhs, EXPRmode | BYVALmode, WildcardType).tpe.widen
+          // assert(oldTpe == origRhs.tpe && oldSym == origRhs.symbol) // or do we need to duplicate before calling typed?
+          //println("[TRN] tpt for "+ origDef.symbol +" = "+ origRhs + " : "+ tptTpeMaybeRep)
+
 
           val tptTpe = // done: baseType works when repSym.isAbstractType
             if (tptTpeMaybeRep.baseType(repSym) == NoType) // no Rep wrapper yet, so add it
@@ -3529,9 +3530,6 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
             else
               tptTpeMaybeRep // was already in a Rep
 
-
-          val rhsTyper = newTyper(statTyper.context.make(origDef, origDef.symbol))
-          rhsTyper.context.scope enter selfSym
 
           val dupedRhs =
             rhsTyper.typed(

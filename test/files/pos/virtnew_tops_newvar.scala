@@ -41,7 +41,7 @@ object Test extends App {
 
   val bar = new Row[Rep] { 
       val xx = 2
-      // TODO: var yy = Const(() => xx * 2)
+      var yy = Const(() => xx * 2)
     }
   
   // println(bar.xx)

@@ -3521,7 +3521,7 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
           // can't always reuse types -- when var's come into play, types change
           val tptTpeMaybeRep = rhsTyper.typed(substedRhs, EXPRmode | BYVALmode, WildcardType).tpe.widen
           // assert(oldTpe == origRhs.tpe && oldSym == origRhs.symbol) // or do we need to duplicate before calling typed?
-          //println("[TRN] tpt for "+ origDef.symbol +" = "+ origRhs + " : "+ tptTpeMaybeRep)
+          debuglog("[TRN] tpt for "+ origDef.symbol +" = "+ origRhs + " : "+ tptTpeMaybeRep)
 
 
           val tptTpe = // done: baseType works when repSym.isAbstractType
@@ -3538,10 +3538,6 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                 tptTpe).duplicate // DUPLICATE -- don't update old RHS
           debuglog("[TRN] dupedRhs: "+ dupedRhs)
 
-          // the RHS is now owned by the symbol of the function we're wrapping around it in the arg
-          // update the owners of nested symbols
-          // if you mess up the owner structure, explicitouter blows up
-          new ChangeOwnerTraverser(origDef.symbol, funSym).traverse(dupedRhs)
 
           // create new symbols for the duplicated tree, tree.duplicate does not do this
           // (without new symbols, you get weird errors in lambdaLift, because markFree unwittingly updates all trees that share a symbol)
@@ -3559,11 +3555,24 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
               }
             }
           }
-          // println("before newSyms:")
-          // currentRun.trackerFactory.snapshot()
           val rerootedRhs = newSyms.transform(dupedRhs)
-          // println("after newSyms:")
+
+
+          // println("before COT:"+(origDef.symbol, funSym))
           // currentRun.trackerFactory.snapshot()
+          // treeBrowser browse dupedRhs
+
+          // the RHS is now owned by the symbol of the function we're wrapping around it in the arg
+          // update the owners of nested symbols
+          // if you mess up the owner structure, explicitouter blows up
+          // IMPORTANT: do this after the newSyms transform, otherwise we change the owners of the original functions (the ones in the anonymous class)
+          // here, we only want to change the functions that end up as an argument to the virtualized __new call
+          new ChangeOwnerTraverser(origDef.symbol, funSym).traverse(dupedRhs)
+
+          // println("after COT:")
+          // currentRun.trackerFactory.snapshot()
+          // treeBrowser browse dupedRhs
+
           // TODO: eta-expand rhs of method definition
           mkArg(origDef.name.toString, origDef.symbol.isMutable, Function(List(ValDef(selfSym)), rerootedRhs) setSymbol funSym) // when typing the function, its symbol will be set --> change owner for selfSym?
         }

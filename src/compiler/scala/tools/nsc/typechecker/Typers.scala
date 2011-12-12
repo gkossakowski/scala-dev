@@ -3817,14 +3817,10 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   // (calling typed1 more than once for the same tree)
                   if (checked ne res) typed { atPos(tree.pos)(checked) }
                   else res
-                } else if ((mode & FUNmode) == 0 && fun2.hasSymbol && fun2.symbol.isMacro) 
+                } else if ((mode & FUNmode) == 0 && stabilized.hasSymbol && stabilized.symbol.isMacro)
                   typed1(macroExpand(res), mode, pt)
                 else res
               }
-
-              // if (stabilized.hasSymbol && stabilized.symbol.isConstructor && (mode & EXPRmode) != 0) {
-              //   res.tpe = res.tpe.notNull
-              // }
             case ex: TypeError =>
               fun match {
                 case Select(qual, name) 

@@ -3792,7 +3792,8 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                   if (useTry) tryTypedApply(stabilized, args)
                   else doTypedApply(tree, stabilized, args, mode, pt)
 
-                assert(!(mayUnVirtualizeOverloaded && syms.nonEmpty) || res0.symbol == syms.head, "overload resolution changed"+ (syms map(_.fullLocationString), res0.symbol.fullLocationString))
+                if (mayUnVirtualizeOverloaded && syms.nonEmpty && res0.symbol != syms.head)
+                  println("BUG: overload resolution changed"+ (syms map(_.fullLocationString), res0.symbol.fullLocationString))
 
                 res0 match {
                   case dyna.DynamicApplication(_, _) if isImplicitMethod(res0.tpe) =>
@@ -3802,25 +3803,25 @@ trait Typers extends Modes with Adaptations with PatMatVirtualiser {
                     adapt(res0, EXPRmode, pt)
                   case _ => res0
                 }
-
-                // if (stabilized.hasSymbol && stabilized.symbol.isConstructor && (mode & EXPRmode) != 0) {
-                //   res.tpe = res.tpe.notNull
-                // }
-
-                // TODO: In theory we should be able to call:
-                //if (stabilized.hasSymbol && stabilized.symbol.name == nme.apply && stabilized.symbol.owner == ArrayClass) 
-                // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
-                // by calling ArrayClass.info here (or some other place before specialize).
-                if (stabilized.symbol == Array_apply) { 
-                  val checked = gen.mkCheckInit(res)
-                  // this check is needed to avoid infinite recursion in Duplicators
-                  // (calling typed1 more than once for the same tree)
-                  if (checked ne res) typed { atPos(tree.pos)(checked) }
-                  else res
-                } else if ((mode & FUNmode) == 0 && stabilized.hasSymbol && stabilized.symbol.isMacro)
-                  typed1(macroExpand(res), mode, pt)
-                else res
               }
+
+              // if (stabilized.hasSymbol && stabilized.symbol.isConstructor && (mode & EXPRmode) != 0) {
+              //   res.tpe = res.tpe.notNull
+              // }
+
+              // TODO: In theory we should be able to call:
+              //if (stabilized.hasSymbol && stabilized.symbol.name == nme.apply && stabilized.symbol.owner == ArrayClass) 
+              // But this causes cyclic reference for Array class in Cleanup. It is easy to overcome this
+              // by calling ArrayClass.info here (or some other place before specialize).
+              if (stabilized.symbol == Array_apply) { 
+                val checked = gen.mkCheckInit(res)
+                // this check is needed to avoid infinite recursion in Duplicators
+                // (calling typed1 more than once for the same tree)
+                if (checked ne res) typed { atPos(tree.pos)(checked) }
+                else res
+              } else if ((mode & FUNmode) == 0 && stabilized.hasSymbol && stabilized.symbol.isMacro)
+                typed1(macroExpand(res), mode, pt)
+              else res
             case ex: TypeError =>
               fun match {
                 case Select(qual, name) 
